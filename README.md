@@ -1,32 +1,29 @@
-# Discourse Custom Profile Link (CSV Lookup)
+# Discourse Profile Links
 
-Displays custom "user fields" as links on a user's profile and user card, as directed by [this tutorial](https://meta.discourse.org/t/link-custom-user-field-to-external-website/41218).
+Turns a user's Custom User Field values into labelled hyperlinks — Profile Links — shown on their user card, their user profile, and their posts. Based on [this tutorial](https://meta.discourse.org/t/link-custom-user-field-to-external-website/41218).
 
-Instead of defining a label and URL prefix per field, this component uses a CSV lookup table per field: the user's field value is matched against the `value` column, and the corresponding URL is used as the link. This is designed for dropdown-type user fields where the set of options is predefined.
+Rather than defining a label and URL prefix per field, this component maps each field value to its own URL. It is designed for dropdown-type Custom User Fields, where the set of options is predefined.
 
 ## Settings
 
-**`custom_profile_link_user_field_ids`**
-A pipe-separated list of custom user field **names**, exactly as they appear in `/admin/customize/user_fields`. Supports up to 10 fields.
+**`profile_link_fields`**
+The Field Mappings, edited in Discourse's structured settings editor. Each Field Mapping names one Custom User Field and nests the Mappings that turn its values into Profile Links:
 
-**`custom_profile_link_csv_1` through `custom_profile_link_csv_10`**
-One CSV textarea per field slot, in the same order as `custom_profile_link_user_field_ids`. Each textarea accepts one entry per line in `value,https://url` format:
+- **`user_field_name`** — the Custom User Field's name, exactly as it appears in `/admin/customize/user_fields`. Matching is case-sensitive.
+- **`mappings`** — one or more value/URL pairs.
+  - **`value`** — must exactly match the user's field value.
+  - **`url`** — where the Profile Link points. Discourse validates this is a URL as you type.
 
-```
-Option A,https://example.com/a
-Option B,https://example.com/b
-Option C,https://example.com/c
-```
+A user whose field value matches a Mapping gets a Profile Link to that URL. A value matching no Mapping renders nothing. There is no limit on the number of Field Mappings, and an empty configuration is valid — it simply renders nothing.
 
-The `value` must exactly match the user's field value. If no match is found, the field is silently hidden. Leave unused CSV slots blank.
+Configuration problems — a Field Mapping naming a Custom User Field that does not exist, one with no Mappings, or a value mapped twice — are reported once to the browser console on page load, whether or not debug mode is on.
 
-**`custom_profile_link_debug_mode`**
-Enables debug logging in the browser console. Useful for troubleshooting field IDs and CSV matches.
+**`profile_link_debug_mode`**
+Logs field values that matched no Mapping to the browser console. Useful when a Profile Link you expect is not appearing.
 
-## Notes
+## Upgrading from the CSV version
 
-- Field names must match exactly (case-sensitive) what is shown in `/admin/customize/user_fields`.
-- Only CSV slots up to the number of fields configured are used; the rest are ignored.
+There is no migration. The previous version configured Field Mappings through a pipe-separated field list and ten positional CSV textareas; those eleven settings have been removed and replaced by `profile_link_fields`. **Uninstall the component and re-add it**, then re-enter the Field Mappings in the structured editor. See `docs/adr/0001-structured-objects-setting-replaces-csv-strings.md`.
 
 ## Development
 

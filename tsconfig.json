@@ -3,6 +3,7 @@
   "include": [
     "javascripts/**/*",
     "migrations/**/*",
+    "types/**/*",
     "test/**/*",
     "spec/unit/**/*",
     "node_modules/discourse/declarations/**/*"
