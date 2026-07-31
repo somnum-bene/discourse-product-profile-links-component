@@ -35,7 +35,10 @@ export default class CustomProfileLinkPost extends Component {
       if (!this.isDestroying && !this.isDestroyed) {
         this._userFields = fields;
         if (settings.custom_profile_link_debug_mode) {
-          console.debug(`[Custom Profile Link] Loaded user_fields for ${username}:`, fields);
+          console.debug(
+            `[Custom Profile Link] Loaded user_fields for ${username}:`,
+            fields
+          );
         }
       }
     });
@@ -75,7 +78,9 @@ export default class CustomProfileLinkPost extends Component {
       const siteField = siteUserFields.find((f) => f.name === fieldNames[i]);
       if (!siteField) {
         if (settings.custom_profile_link_debug_mode) {
-          console.debug(`[Custom Profile Link] No site field found for "${fieldNames[i]}"`);
+          console.debug(
+            `[Custom Profile Link] No site field found for "${fieldNames[i]}"`
+          );
         }
         continue;
       }
@@ -83,7 +88,9 @@ export default class CustomProfileLinkPost extends Component {
       const fieldValue = userFields[siteField.id];
       if (!fieldValue) {
         if (settings.custom_profile_link_debug_mode) {
-          console.debug(`[Custom Profile Link] No value for field "${fieldNames[i]}" (id: ${siteField.id})`);
+          console.debug(
+            `[Custom Profile Link] No value for field "${fieldNames[i]}" (id: ${siteField.id})`
+          );
         }
         continue;
       }
@@ -109,7 +116,9 @@ export default class CustomProfileLinkPost extends Component {
       if (matched) {
         links.push([fieldNames[i], matched[0], matched[1]]);
       } else if (settings.custom_profile_link_debug_mode) {
-        console.debug(`[Custom Profile Link] No CSV match for "${fieldNames[i]}" value "${fieldValue}"`);
+        console.debug(
+          `[Custom Profile Link] No CSV match for "${fieldNames[i]}" value "${fieldValue}"`
+        );
       }
     }
 
@@ -125,7 +134,11 @@ export default class CustomProfileLinkPost extends Component {
         {{#each this.links as |link|}}
           <div class="custom-profile-link-post-item">
             <span class="profile-link-field-name">{{link.[0]}}:</span>
-            <a href="{{link.[2]}}" target="_blank" rel="noopener noreferrer">{{link.[1]}}</a>
+            <a
+              href="{{link.[2]}}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >{{link.[1]}}</a>
           </div>
         {{/each}}
       </div>

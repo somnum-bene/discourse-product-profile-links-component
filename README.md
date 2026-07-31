@@ -28,6 +28,20 @@ Enables debug logging in the browser console. Useful for troubleshooting field I
 - Field names must match exactly (case-sensitive) what is shown in `/admin/customize/user_fields`.
 - Only CSV slots up to the number of fields configured are used; the rest are ignored.
 
+## Development
+
+Requires Node 22 or later and pnpm 10. The `engines` block rejects npm and yarn.
+
+```
+pnpm install
+pnpm lint        # stylelint, eslint, prettier and type-checking
+pnpm lint:fix    # auto-fix what can be auto-fixed
+pnpm lint:types  # Glint type-checking on its own
+pnpm test        # standalone unit tests
+```
+
+Unit tests live in `spec/unit/` and run under Node with vitest — they never touch a Discourse instance. The top-level `test/` directory is reserved for theme QUnit tests served at `/theme-qunit`, which need a running Discourse; Discourse ingests anything placed there, so unit tests must not go in it. See `docs/adr/0003-unit-tests-live-in-spec-not-test.md`.
+
 ## Credits
 
 Based on [discourse-custom-profile-link](https://github.com/Firepup6500/discourse-custom-profile-link) by Firepup6500.
