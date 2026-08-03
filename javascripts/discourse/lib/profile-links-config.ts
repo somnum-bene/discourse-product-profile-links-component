@@ -22,20 +22,28 @@ export interface SiteLike {
 let cachedConfig: LinkConfig | null = null;
 
 /**
- * Derives the configuration once per page load and reports any Config Problems
- * with it once. A topic page renders one post Link Surface per post, so this
- * must not be recomputed per surface — see ADR-0002.
+ * Derives the configuration once per page load. A topic page renders one post
+ * Link Surface per post, so this must not be recomputed per surface — see
+ * ADR-0002.
  */
 function linkConfig(site: SiteLike): LinkConfig {
   if (!cachedConfig) {
     cachedConfig = readLinkConfig(settings, site?.user_fields ?? []);
-
-    for (const problem of cachedConfig.problems) {
-      console.warn(`[Profile Links] ${describeConfigProblem(problem)}`);
-    }
   }
 
   return cachedConfig;
+}
+
+/**
+ * Reports every Config Problem once, at boot. This is deliberately driven by an
+ * initializer rather than by a Link Surface: an administrator editing the
+ * setting is never looking at a user card, a user profile or a post, so a
+ * report that waits for one to render is a report they never see.
+ */
+export function reportConfigProblems(site: SiteLike): void {
+  for (const problem of linkConfig(site).problems) {
+    console.warn(`[Profile Links] ${describeConfigProblem(problem)}`);
+  }
 }
 
 /**
