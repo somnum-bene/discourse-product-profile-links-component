@@ -9,8 +9,8 @@ import { createUserFieldSource } from "./user-field-source";
 //
 // One source is shared by every post on the page, which is what turns a long
 // topic by one author into a single lookup. Deliberately no error handling
-// here: a rejection is meaningful to the source, which retries on the next
-// lookup rather than caching the failure.
+// here: a rejection is meaningful to the source, which retries it and declines
+// to cache the failure if the retries run out.
 
 interface UserCardResponse {
   user?: { user_fields?: UserFieldValues };
