@@ -11,12 +11,23 @@ import type { UserFieldValues } from "./profile-links";
 /** Fetches one user's Custom User Field values, rejecting if it cannot. */
 export type UserFieldsFetch = (username: string) => Promise<UserFieldValues>;
 
+/**
+ * What one lookup came back with. A user who holds no Custom User Field values
+ * and a lookup that never reached the server both have no values to show, but
+ * only the second is worth trying again — so the two are distinguishable here
+ * rather than collapsed into a bare null. A caller that stores the null of a
+ * failed lookup turns a network blip into a permanent absence.
+ */
+export type UserFieldLookup =
+  | { ok: true; userFields: UserFieldValues }
+  | { ok: false };
+
 export interface UserFieldSource {
   /**
-   * One user's Custom User Field values, or null when they have none or the
-   * lookup failed. Never rejects — a theme component must not break the page.
+   * One user's Custom User Field values, or the fact that the lookup failed.
+   * Never rejects — a theme component must not break the page.
    */
-  lookup(username: string): Promise<UserFieldValues>;
+  lookup(username: string): Promise<UserFieldLookup>;
 }
 
 /**
@@ -27,13 +38,16 @@ export interface UserFieldSource {
 export function createUserFieldSource(
   fetchUserFields: UserFieldsFetch
 ): UserFieldSource {
-  const inFlight = new Map<string, Promise<UserFieldValues>>();
+  const inFlight = new Map<string, Promise<UserFieldLookup>>();
   const fetched = new Map<string, UserFieldValues>();
 
   return {
-    lookup(username: string): Promise<UserFieldValues> {
+    lookup(username: string): Promise<UserFieldLookup> {
       if (fetched.has(username)) {
-        return Promise.resolve(fetched.get(username) ?? null);
+        return Promise.resolve({
+          ok: true,
+          userFields: fetched.get(username) ?? null,
+        });
       }
 
       const existing = inFlight.get(username);
@@ -52,19 +66,19 @@ export function createUserFieldSource(
         started = Promise.reject(error);
       }
 
-      const request = started.then(
+      const request: Promise<UserFieldLookup> = started.then(
         (userFields) => {
           const value = userFields ?? null;
           inFlight.delete(username);
           fetched.set(username, value);
-          return value;
+          return { ok: true, userFields: value };
         },
         () => {
           // A failure is deliberately not cached. Caching it is the bug this
           // module exists to fix: one blip while a topic loaded used to hide a
           // member's Profile Links for the rest of the session.
           inFlight.delete(username);
-          return null;
+          return { ok: false };
         }
       );
 

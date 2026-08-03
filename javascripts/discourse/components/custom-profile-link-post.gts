@@ -2,9 +2,8 @@ import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
 import { service } from "@ember/service";
 import { postUserFieldSource } from "../lib/post-user-field-source";
-import { profileLinksFor } from "../lib/profile-links-config";
-import type { SiteLike } from "../lib/profile-links-config";
 import type { UserFieldValues } from "../lib/profile-links";
+import { profileLinksFor, type SiteLike } from "../lib/profile-links-config";
 import ProfileLinkRow from "./profile-link-row";
 
 interface Signature {
@@ -20,7 +19,8 @@ export default class CustomProfileLinkPost extends Component<Signature> {
   // makes a recycled component correct: when the post underneath changes to a
   // different author, this no longer matches and the previous author's Profile
   // Links stop rendering immediately, rather than waiting for the new lookup.
-  @tracked completedLookup: {
+  @tracked
+  completedLookup: {
     username: string;
     userFields: UserFieldValues;
   } | null = null;
@@ -55,7 +55,7 @@ export default class CustomProfileLinkPost extends Component<Signature> {
     }
     this.requestedUsername = username;
 
-    const userFields = await postUserFieldSource.lookup(username);
+    const outcome = await postUserFieldSource.lookup(username);
 
     if (this.isDestroying || this.isDestroyed) {
       return;
@@ -64,11 +64,20 @@ export default class CustomProfileLinkPost extends Component<Signature> {
     // The post may have changed under this component while the lookup was in
     // flight. Its result belongs to the author it was requested for, so drop it
     // unless that is still who this post is by.
-    if (this.args.post?.username !== username) {
+    //
+    // A failed lookup is dropped too. The source does not cache one, so storing
+    // its empty result here would be the only thing making a network blip
+    // permanent — the author's Profile Links would stay hidden until reload.
+    if (this.args.post?.username !== username || !outcome.ok) {
+      // Nothing was stored for this author, so the guard above must not keep
+      // refusing to look them up. Clearing it is what lets the next render try
+      // again — including when the post cycles back to an author whose result
+      // was dropped for arriving late.
+      this.requestedUsername = null;
       return;
     }
 
-    this.completedLookup = { username, userFields };
+    this.completedLookup = { username, userFields: outcome.userFields };
   }
 
   get links() {
