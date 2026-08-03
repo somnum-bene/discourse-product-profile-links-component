@@ -1,6 +1,9 @@
 import { modifier } from "ember-modifier";
 import { dasherize } from "@ember/string";
-import { coreRowsToHide } from "../lib/core-field-rows";
+import {
+  coreRowsToHide,
+  unambiguousDasherizedNames,
+} from "../lib/core-field-rows";
 
 // The seam between the row-matching rule and the page. This is the only place
 // that reaches outside the component's own DOM, so a Discourse change that
@@ -23,10 +26,29 @@ import { coreRowsToHide } from "../lib/core-field-rows";
 /** Hides one of core's rows. `common/common.scss` gives it `display: none`. */
 const HIDDEN_CLASS = "custom-profile-link-replaced";
 
+/** Names already reported as ambiguous, so the warning is not repeated. */
+const reportedAmbiguous = new Set<string>();
+
+function reportAmbiguous(fieldName: string) {
+  if (reportedAmbiguous.has(fieldName)) {
+    return;
+  }
+  reportedAmbiguous.add(fieldName);
+
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[Profile Links] More than one Custom User Field is named "${fieldName}" once dasherized, so Discourse tags their rows identically. The Profile Link is shown, but the plain-text row is left in place rather than risk hiding the wrong field's value.`
+  );
+}
+
 export default modifier(
   (
     element: HTMLElement,
-    [scopeSelector, fieldNames]: [string, readonly string[]]
+    [scopeSelector, fieldNames, siteFieldNames]: [
+      string,
+      readonly string[],
+      readonly string[],
+    ]
   ) => {
     const scope = element.closest(scopeSelector);
     if (!scope) {
@@ -39,7 +61,21 @@ export default modifier(
       .filter((row) => !element.contains(row))
       .map((row) => ({ row, classNames: Array.from(row.classList) }));
 
-    const hidden = coreRowsToHide(rows, fieldNames.map(dasherize));
+    // Dasherizing here, with the same function core uses, is what keeps the two
+    // in step. It is also lossy, so anything it makes ambiguous is dropped
+    // before it can hide a row belonging to a different Custom User Field.
+    const safeNames = unambiguousDasherizedNames(
+      fieldNames.map(dasherize),
+      siteFieldNames.map(dasherize)
+    );
+
+    for (const fieldName of fieldNames) {
+      if (!safeNames.includes(dasherize(fieldName))) {
+        reportAmbiguous(fieldName);
+      }
+    }
+
+    const hidden = coreRowsToHide(rows, safeNames);
 
     for (const { row } of hidden) {
       row.classList.add(HIDDEN_CLASS);

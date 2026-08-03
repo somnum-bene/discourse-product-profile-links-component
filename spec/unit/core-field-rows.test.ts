@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { coreRowsToHide } from "../../javascripts/discourse/lib/core-field-rows";
+import {
+  coreRowsToHide,
+  unambiguousDasherizedNames,
+} from "../../javascripts/discourse/lib/core-field-rows";
 
 /** A row as core renders it on the user profile: the bare dasherized name. */
 function profileRow(dasherizedName: string) {
@@ -72,5 +75,59 @@ describe("coreRowsToHide", () => {
     // bug, and it must fail visibly as "nothing hidden" rather than by chance.
     expect(coreRowsToHide(rows, ["Sleep Apnea Machine"])).toEqual([]);
     expect(coreRowsToHide(rows, ["sleep-apnea-machine"])).toEqual(rows);
+  });
+});
+
+describe("unambiguousDasherizedNames", () => {
+  it("keeps a name that identifies one Custom User Field", () => {
+    expect(
+      unambiguousDasherizedNames(["machine"], ["machine", "mask"])
+    ).toEqual(["machine"]);
+  });
+
+  it("drops a name two Custom User Fields dasherize onto", () => {
+    // "Sleep Apnea" and "sleep-apnea" are two fields core tags identically.
+    expect(
+      unambiguousDasherizedNames(
+        ["sleep-apnea"],
+        ["sleep-apnea", "sleep-apnea", "mask"]
+      )
+    ).toEqual([]);
+  });
+
+  it("drops only the ambiguous name, not the rest", () => {
+    expect(
+      unambiguousDasherizedNames(
+        ["machine", "sleep-apnea"],
+        ["machine", "sleep-apnea", "sleep-apnea"]
+      )
+    ).toEqual(["machine"]);
+  });
+
+  it("keeps everything when the site has no colliding field names", () => {
+    expect(
+      unambiguousDasherizedNames(
+        ["machine", "mask"],
+        ["machine", "mask", "tubing"]
+      )
+    ).toEqual(["machine", "mask"]);
+  });
+
+  it("leaves a name alone when the site list is empty", () => {
+    // Nothing is known to collide with it, so there is nothing to protect.
+    expect(unambiguousDasherizedNames(["machine"], [])).toEqual(["machine"]);
+  });
+
+  it("hides nothing once an ambiguous name reaches coreRowsToHide", () => {
+    const rows = [
+      { classNames: ["public-user-field", "sleep-apnea"] },
+      { classNames: ["public-user-field", "mask"] },
+    ];
+    const safe = unambiguousDasherizedNames(
+      ["sleep-apnea"],
+      ["sleep-apnea", "sleep-apnea"]
+    );
+
+    expect(coreRowsToHide(rows, safe)).toEqual([]);
   });
 });

@@ -8,6 +8,8 @@ Both conditions are known in JavaScript, at the point where a Link Surface has a
 
 Generating a stylesheet from the settings at boot was the alternative. It was rejected because it can only hide by field name, which would have required this component to take over rendering the unmatched values core would no longer show.
 
+Dasherizing is lossy, and core exposes no field id in the markup to fall back on. Two differently-named Custom User Fields — "Sleep Apnea" and "sleep-apnea" — collapse onto one token, and core tags both their rows with it. Hiding on that token would take the plain text of a field that has no Profile Link off the profile along with the one that does. So a name that does not identify exactly one field on the site is dropped before any row is hidden, and the duplicate is left on screen: showing a value twice is a blemish, silently deleting one is data loss. The drop is warned about once per field name, in the same `[Profile Links]` console channel as the other configuration problems.
+
 ## Consequences
 
 Three dependencies on core markup exist, all in `hide-core-field-rows.ts` and commented there: the scope selectors `.primary-textual` and `.card-content`, the `.public-user-field` row class, and Ember's `dasherize` (imported rather than reimplemented, so it cannot drift from core's). If core changes any of them the duplicate returns and nothing else breaks — the Profile Links still render, they just sit under core's plain text again.

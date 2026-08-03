@@ -16,6 +16,37 @@ export interface CoreFieldRow {
 }
 
 /**
+ * The names among `dasherizedFieldNames` that identify exactly one Custom User
+ * Field on this site, given the dasherized name of every field core knows about
+ * in `allDasherizedSiteNames`.
+ *
+ * Dasherizing is lossy: "Sleep Apnea" and "sleep-apnea" are two different
+ * Custom User Fields that core tags with the same class. A row carrying that
+ * class could belong to either, so if one of them has a Profile Link and the
+ * other does not, hiding on the class alone would take the other field's plain
+ * text off the profile with it. Core exposes no field id in the markup, so an
+ * ambiguous name cannot be resolved — it is dropped instead, and the duplicate
+ * stays visible. Showing a value twice is a blemish; silently deleting one is
+ * data loss.
+ */
+export function unambiguousDasherizedNames(
+  dasherizedFieldNames: readonly string[],
+  allDasherizedSiteNames: readonly string[]
+): string[] {
+  const seen = new Set<string>();
+  const ambiguous = new Set<string>();
+
+  for (const name of allDasherizedSiteNames) {
+    if (seen.has(name)) {
+      ambiguous.add(name);
+    }
+    seen.add(name);
+  }
+
+  return dasherizedFieldNames.filter((name) => !ambiguous.has(name));
+}
+
+/**
  * The rows among `rows` that belong to one of `dasherizedFieldNames`.
  *
  * Core tags a row with the field's dasherized name, but the two Link Surfaces

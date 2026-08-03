@@ -31,11 +31,21 @@ export default class CustomProfileLink extends Component<Signature> {
     return this.links.map((link) => link.fieldName);
   }
 
+  // Every Custom User Field on the site, so the modifier can tell whether a
+  // name still identifies one field after core has dasherized it.
+  get siteFieldNames() {
+    return (this.site.user_fields ?? []).map((field) => field.name);
+  }
+
   <template>
     {{#if this.links.length}}
       <div
         class="user-card-metadata-outlet custom-profile-links-links"
-        {{hideCoreFieldRows ".card-content" this.replacedFieldNames}}
+        {{hideCoreFieldRows
+          ".card-content"
+          this.replacedFieldNames
+          this.siteFieldNames
+        }}
       >
         {{#each this.links as |link|}}
           <ProfileLinkRow @link={{link}} class="profile-link" />
