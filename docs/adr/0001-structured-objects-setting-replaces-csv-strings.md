@@ -10,3 +10,5 @@ Field Mappings were configured through eleven flat settings: a pipe-separated li
 ## Consequences
 
 At the time of this change the component was installed on a test site only, so no migration was written; the install is removed and re-added instead. Any *later* change to the setting schema will need a real migration under `migrations/`, because that assumption expires the moment this ships anywhere real.
+
+**Superseded before release.** That assumption did expire, and a migration was written after all — see `0006-a-settings-migration-replaces-uninstall-and-re-add.md`. The rest of this ADR stands.
