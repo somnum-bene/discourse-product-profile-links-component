@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 // A settings migration is plain JS: Discourse runs it in its own sandbox at
 // install and update time, not as part of the component's bundle.
-import migrate from "../../migrations/settings/0001-convert-flat-settings-to-field-mappings.js";
+import rawMigrate from "../../migrations/settings/0001-convert-flat-settings-to-field-mappings.js";
 
 /** The overridden settings Discourse hands a migration. */
 function flatSettings(overrides: Record<string, unknown>) {
@@ -19,6 +19,20 @@ const HELPERS = {
     url.startsWith("http://") ||
     url.startsWith("/"),
 };
+
+/** Discourse always supplies the helpers, so the tests default to having them. */
+function migrate(
+  settings: Map<string, unknown>,
+  helpers: unknown = HELPERS
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  return rawMigrate(settings, helpers);
+}
+
+/** What a Discourse that stopped supplying them would do. */
+function migrateWithoutHelpers(settings: Map<string, unknown>) {
+  return rawMigrate(settings, undefined);
+}
 
 describe("0001 convert flat settings to Field Mappings", () => {
   it("turns a name and its CSV slot into one Field Mapping", () => {
@@ -241,19 +255,30 @@ describe("0001 convert flat settings to Field Mappings", () => {
     ]);
   });
 
-  it("keeps every Mapping when Discourse hands over no helpers", () => {
-    // Dropping them all would be a worse failure than writing one the schema
-    // rejects, which at least fails loudly.
-    const settings = migrate(
-      flatSettings({
-        custom_profile_link_user_field_ids: "Machine",
-        custom_profile_link_csv_1: "AirSense 11,not a url",
-      })
+  it("refuses to convert at all when Discourse hands over no helpers", () => {
+    // Without the helper the URLs cannot be checked, and converting anyway
+    // would delete the flat settings after possibly writing a value the schema
+    // refuses. Throwing aborts the update with the old settings still in place,
+    // which a corrected version of this migration can convert later.
+    const settings = flatSettings({
+      custom_profile_link_user_field_ids: "Machine",
+      custom_profile_link_csv_1: "AirSense 11,https://cpap.com/a",
+    });
+
+    expect(() => migrateWithoutHelpers(settings)).toThrow(
+      /Cannot convert Profile Links settings/
+    );
+    expect(settings.get("custom_profile_link_user_field_ids")).toBe("Machine");
+    expect(settings.has("profile_link_fields")).toBe(false);
+  });
+
+  it("still converts a debug-mode-only override with no helpers", () => {
+    // There are no URLs to check, so there is nothing to refuse over.
+    const settings = migrateWithoutHelpers(
+      flatSettings({ custom_profile_link_debug_mode: true })
     );
 
-    expect(settings.get("profile_link_fields")[0].mappings).toEqual([
-      { value: "AirSense 11", url: "not a url" },
-    ]);
+    expect(settings.get("profile_link_debug_mode")).toBe(true);
   });
 
   it("returns the Map, which Discourse requires", () => {

@@ -57,7 +57,8 @@ function fieldNames(settings) {
  * the whole conversion, and every other Field Mapping with it, over one bad
  * line. `isValidUrl` is the same check the schema will apply, handed to
  * migrations by Discourse for exactly this, so the judgement here and the
- * judgement there cannot disagree.
+ * judgement there cannot disagree. `migrate` refuses to run at all without it,
+ * so it is a function by the time this is reached.
  *
  * A Mapping with a blank URL goes the same way. The old parser rendered it as
  * an empty link; the new schema marks `url` required, so it cannot be carried
@@ -82,7 +83,7 @@ function mappings(csv, isValidUrl) {
       continue;
     }
 
-    if (isValidUrl && !isValidUrl(url)) {
+    if (!isValidUrl(url)) {
       continue;
     }
 
@@ -95,13 +96,19 @@ function mappings(csv, isValidUrl) {
 export default function migrate(settings, helpers) {
   const names = fieldNames(settings);
 
-  // Guarded rather than assumed: if a future Discourse stops handing this over,
-  // dropping every Mapping would be a far worse outcome than writing one the
-  // schema then rejects, which at least fails loudly.
-  const isValidUrl =
-    typeof helpers?.isValidUrl === "function"
-      ? (url) => helpers.isValidUrl(url)
-      : null;
+  // Refusing to run is the safe failure here, and the only recoverable one.
+  // Discourse aborts the update when a migration throws and does not record it
+  // as having run, so the flat settings survive untouched and a corrected
+  // version of this file will migrate them later. Converting without the check
+  // has no way back: it could write a URL the schema refuses, invalidating the
+  // whole setting, after the settings it was converting from are already gone.
+  if (names.length && typeof helpers?.isValidUrl !== "function") {
+    throw new Error(
+      "Cannot convert Profile Links settings: Discourse did not provide the isValidUrl migration helper, so the URLs in the old CSV settings cannot be checked against the new setting's schema. The old settings have been left as they are."
+    );
+  }
+
+  const isValidUrl = (url) => helpers.isValidUrl(url);
 
   if (names.length) {
     // Every configured name is carried over, including one past the tenth slot
