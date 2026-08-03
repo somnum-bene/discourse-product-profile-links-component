@@ -16,34 +16,37 @@ export interface CoreFieldRow {
 }
 
 /**
- * The names among `dasherizedFieldNames` that identify exactly one Custom User
- * Field on this site, given the dasherized name of every field core knows about
- * in `allDasherizedSiteNames`.
+ * The names among `dasherizedFieldNames` that pick out exactly one Custom User
+ * Field in core's markup, given the dasherized name of every field core knows
+ * about in `allDasherizedSiteNames`. A name that does not is dropped, and its
+ * caller leaves core's row alone.
  *
- * Dasherizing is lossy: "Sleep Apnea" and "sleep-apnea" are two different
- * Custom User Fields that core tags with the same class. A row carrying that
- * class could belong to either, so if one of them has a Profile Link and the
- * other does not, hiding on the class alone would take the other field's plain
- * text off the profile with it. Core exposes no field id in the markup, so an
- * ambiguous name cannot be resolved — it is dropped instead, and the duplicate
- * stays visible. Showing a value twice is a blemish; silently deleting one is
- * data loss.
+ * Dasherizing is lossy in two ways, and both end here. "Sleep Apnea" and
+ * "sleep-apnea" are two different Custom User Fields that core tags with the
+ * same class, so a row carrying it could belong to either. And a field named
+ * "Public User Field" dasherizes onto the class core puts on *every* row.
+ *
+ * In both cases, hiding on the class would take the plain text of a field with
+ * no Profile Link off the profile along with the one that has it. Core exposes
+ * no field id in the markup, so neither can be resolved — the name is dropped
+ * and the duplicate stays visible. Showing a value twice is a blemish; silently
+ * deleting one is data loss.
  */
-export function unambiguousDasherizedNames(
+export function usableDasherizedNames(
   dasherizedFieldNames: readonly string[],
   allDasherizedSiteNames: readonly string[]
 ): string[] {
   const seen = new Set<string>();
-  const ambiguous = new Set<string>();
+  const unusable = new Set<string>([ROW_CLASS]);
 
   for (const name of allDasherizedSiteNames) {
     if (seen.has(name)) {
-      ambiguous.add(name);
+      unusable.add(name);
     }
     seen.add(name);
   }
 
-  return dasherizedFieldNames.filter((name) => !ambiguous.has(name));
+  return dasherizedFieldNames.filter((name) => name && !unusable.has(name));
 }
 
 /**

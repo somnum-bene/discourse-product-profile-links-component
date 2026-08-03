@@ -1,9 +1,6 @@
 import { modifier } from "ember-modifier";
 import { dasherize } from "@ember/string";
-import {
-  coreRowsToHide,
-  unambiguousDasherizedNames,
-} from "../lib/core-field-rows";
+import { coreRowsToHide, usableDasherizedNames } from "../lib/core-field-rows";
 
 // The seam between the row-matching rule and the page. This is the only place
 // that reaches outside the component's own DOM, so a Discourse change that
@@ -26,18 +23,18 @@ import {
 /** Hides one of core's rows. `common/common.scss` gives it `display: none`. */
 const HIDDEN_CLASS = "custom-profile-link-replaced";
 
-/** Names already reported as ambiguous, so the warning is not repeated. */
-const reportedAmbiguous = new Set<string>();
+/** Names already reported, so the warning is not repeated on every render. */
+const reportedUnusable = new Set<string>();
 
-function reportAmbiguous(fieldName: string) {
-  if (reportedAmbiguous.has(fieldName)) {
+function reportUnusable(fieldName: string) {
+  if (reportedUnusable.has(fieldName)) {
     return;
   }
-  reportedAmbiguous.add(fieldName);
+  reportedUnusable.add(fieldName);
 
   // eslint-disable-next-line no-console
   console.warn(
-    `[Profile Links] More than one Custom User Field is named "${fieldName}" once dasherized, so Discourse tags their rows identically. The Profile Link is shown, but the plain-text row is left in place rather than risk hiding the wrong field's value.`
+    `[Profile Links] The Custom User Field "${fieldName}" cannot be told apart from another field in Discourse's markup, because both dasherize to the same class name. The Profile Link is shown, but Discourse's plain-text row is left in place rather than risk hiding the wrong field's value. Renaming one of the fields resolves this.`
   );
 }
 
@@ -64,14 +61,17 @@ export default modifier(
     // Dasherizing here, with the same function core uses, is what keeps the two
     // in step. It is also lossy, so anything it makes ambiguous is dropped
     // before it can hide a row belonging to a different Custom User Field.
-    const safeNames = unambiguousDasherizedNames(
+    const safeNames = usableDasherizedNames(
       fieldNames.map(dasherize),
       siteFieldNames.map(dasherize)
     );
 
+    // A dropped name means a duplicate the admin can see but not explain, so it
+    // is worth a word in the console. Warning per field name rather than per
+    // dropped row keeps it to once, however many profiles are visited.
     for (const fieldName of fieldNames) {
       if (!safeNames.includes(dasherize(fieldName))) {
-        reportAmbiguous(fieldName);
+        reportUnusable(fieldName);
       }
     }
 

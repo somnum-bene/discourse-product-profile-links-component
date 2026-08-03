@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coreRowsToHide,
-  unambiguousDasherizedNames,
+  usableDasherizedNames,
 } from "../../javascripts/discourse/lib/core-field-rows";
 
 /** A row as core renders it on the user profile: the bare dasherized name. */
@@ -78,17 +78,17 @@ describe("coreRowsToHide", () => {
   });
 });
 
-describe("unambiguousDasherizedNames", () => {
+describe("usableDasherizedNames", () => {
   it("keeps a name that identifies one Custom User Field", () => {
-    expect(
-      unambiguousDasherizedNames(["machine"], ["machine", "mask"])
-    ).toEqual(["machine"]);
+    expect(usableDasherizedNames(["machine"], ["machine", "mask"])).toEqual([
+      "machine",
+    ]);
   });
 
   it("drops a name two Custom User Fields dasherize onto", () => {
     // "Sleep Apnea" and "sleep-apnea" are two fields core tags identically.
     expect(
-      unambiguousDasherizedNames(
+      usableDasherizedNames(
         ["sleep-apnea"],
         ["sleep-apnea", "sleep-apnea", "mask"]
       )
@@ -97,7 +97,7 @@ describe("unambiguousDasherizedNames", () => {
 
   it("drops only the ambiguous name, not the rest", () => {
     expect(
-      unambiguousDasherizedNames(
+      usableDasherizedNames(
         ["machine", "sleep-apnea"],
         ["machine", "sleep-apnea", "sleep-apnea"]
       )
@@ -106,16 +106,28 @@ describe("unambiguousDasherizedNames", () => {
 
   it("keeps everything when the site has no colliding field names", () => {
     expect(
-      unambiguousDasherizedNames(
-        ["machine", "mask"],
-        ["machine", "mask", "tubing"]
-      )
+      usableDasherizedNames(["machine", "mask"], ["machine", "mask", "tubing"])
     ).toEqual(["machine", "mask"]);
+  });
+
+  it("drops a name that dasherizes onto the class core puts on every row", () => {
+    // A Custom User Field named "Public User Field". Absurd, but it would match
+    // every row on the page, so it is refused even though nothing collides.
+    expect(
+      usableDasherizedNames(
+        ["public-user-field"],
+        ["public-user-field", "mask"]
+      )
+    ).toEqual([]);
+  });
+
+  it("drops a blank name, which identifies no field at all", () => {
+    expect(usableDasherizedNames([""], ["machine"])).toEqual([]);
   });
 
   it("leaves a name alone when the site list is empty", () => {
     // Nothing is known to collide with it, so there is nothing to protect.
-    expect(unambiguousDasherizedNames(["machine"], [])).toEqual(["machine"]);
+    expect(usableDasherizedNames(["machine"], [])).toEqual(["machine"]);
   });
 
   it("hides nothing once an ambiguous name reaches coreRowsToHide", () => {
@@ -123,7 +135,7 @@ describe("unambiguousDasherizedNames", () => {
       { classNames: ["public-user-field", "sleep-apnea"] },
       { classNames: ["public-user-field", "mask"] },
     ];
-    const safe = unambiguousDasherizedNames(
+    const safe = usableDasherizedNames(
       ["sleep-apnea"],
       ["sleep-apnea", "sleep-apnea"]
     );
