@@ -1,70 +1,30 @@
-custom_profile_link_user_field_ids:
-  type: list
-  default: ""
-  description: "The name(s) of your custom user field(s), exactly as they appear in /admin/customize/user_fields"
+profile_link_fields:
+  type: objects
+  default: []
+  description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/customize/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value."
+  schema:
+    name: field
+    identifier: user_field_name
+    properties:
+      user_field_name:
+        type: string
+        required: true
+      mappings:
+        type: objects
+        schema:
+          name: mapping
+          identifier: value
+          properties:
+            value:
+              type: string
+              required: true
+            url:
+              type: string
+              required: true
+              validations:
+                url: true
 
-custom_profile_link_csv_1:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 1 (first entry in field IDs list). One entry per line in 'value,https://url' format. The value must exactly match the user's dropdown selection."
-
-custom_profile_link_csv_2:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 2 (second entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_3:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 3 (third entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_4:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 4 (fourth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_5:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 5 (fifth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_6:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 6 (sixth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_7:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 7 (seventh entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_8:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 8 (eighth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_9:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 9 (ninth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-custom_profile_link_csv_10:
-  type: string
-  textarea: true
-  default: ""
-  description: "CSV mapping for field ID 10 (tenth entry in field IDs list). One entry per line in 'value,https://url' format."
-
-
-custom_profile_link_debug_mode:
+profile_link_debug_mode:
   type: bool
   default: false
-  description: Enables logging debug information, e.g. "Script Loaded", User fields, etc
+  description: "Logs field values that matched no Mapping to the browser console. Configuration problems are always reported, regardless of this setting."
