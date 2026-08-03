@@ -27,6 +27,8 @@ Logs field values that matched no Mapping to the browser console. Useful when a 
 
 Nothing to do. The previous version configured Field Mappings through a pipe-separated field list and ten positional CSV textareas; those eleven settings have been replaced by `profile_link_fields`, and a settings migration converts an existing configuration to the new shape when the component updates. `custom_profile_link_debug_mode` is carried over to `profile_link_debug_mode` at the same time.
 
+A Mapping whose URL Discourse's own validator refuses is dropped — the flat settings validated nothing, so they could hold one, and carrying it over would invalidate the whole setting rather than just that Mapping.
+
 Check the console for Config Problems after the update. A Custom User Field name that was configured but never had any CSV mappings — including one past the tenth slot, which had nowhere to put them — is carried over as a Field Mapping with no Mappings, and reported. It resolved no Profile Links before the update either; it is preserved rather than dropped so the configuration is not silently thinned out.
 
 See `docs/adr/0006-a-settings-migration-replaces-uninstall-and-re-add.md`.

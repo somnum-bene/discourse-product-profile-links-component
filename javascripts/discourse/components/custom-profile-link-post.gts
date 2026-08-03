@@ -65,12 +65,13 @@ export default class CustomProfileLinkPost extends Component<Signature> {
     // flight. Its result belongs to the author it was requested for, so drop it
     // unless that is still who this post is by.
     //
-    // A failed lookup is dropped too. The source does not cache one, so storing
-    // its empty result here would be the only thing making a network blip
-    // permanent — the author's Profile Links would stay hidden until reload.
+    // A failed lookup is dropped too. It has already exhausted the source's
+    // retries by the time it gets here, so there is nothing left to wait for —
+    // but storing its empty result would make the failure permanent, which is
+    // the one thing this surface must not do.
     if (this.args.post?.username !== username || !outcome.ok) {
       // Nothing was stored for this author, so the guard above must not keep
-      // refusing to look them up. Clearing it is what lets the next render try
+      // refusing to look them up. Clearing it is what lets a later render ask
       // again — including when the post cycles back to an author whose result
       // was dropped for arriving late.
       this.requestedUsername = null;

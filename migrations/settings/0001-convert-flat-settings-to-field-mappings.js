@@ -48,8 +48,22 @@ function fieldNames(settings) {
  * first comma so that a value containing one survives — which is how the old
  * code read them, so a migrated site resolves the same Profile Links it did
  * before. A line with no comma configured nothing and is dropped.
+ *
+ * The flat settings were plain strings and validated nothing, so they could
+ * hold a `url` that the new setting's schema refuses — it declares
+ * `validations: url: true`, which Discourse checks with `UrlHelper.is_valid_url?`.
+ * A refused Mapping is dropped rather than written, because the alternative is
+ * an entire `profile_link_fields` value that fails validation: that would sink
+ * the whole conversion, and every other Field Mapping with it, over one bad
+ * line. `isValidUrl` is the same check the schema will apply, handed to
+ * migrations by Discourse for exactly this, so the judgement here and the
+ * judgement there cannot disagree.
+ *
+ * A Mapping with a blank URL goes the same way. The old parser rendered it as
+ * an empty link; the new schema marks `url` required, so it cannot be carried
+ * over in any form.
  */
-function mappings(csv) {
+function mappings(csv, isValidUrl) {
   if (typeof csv !== "string") {
     return [];
   }
@@ -68,14 +82,26 @@ function mappings(csv) {
       continue;
     }
 
+    if (isValidUrl && !isValidUrl(url)) {
+      continue;
+    }
+
     parsed.push({ value, url });
   }
 
   return parsed;
 }
 
-export default function migrate(settings) {
+export default function migrate(settings, helpers) {
   const names = fieldNames(settings);
+
+  // Guarded rather than assumed: if a future Discourse stops handing this over,
+  // dropping every Mapping would be a far worse outcome than writing one the
+  // schema then rejects, which at least fails loudly.
+  const isValidUrl =
+    typeof helpers?.isValidUrl === "function"
+      ? (url) => helpers.isValidUrl(url)
+      : null;
 
   if (names.length) {
     // Every configured name is carried over, including one past the tenth slot
@@ -88,7 +114,9 @@ export default function migrate(settings) {
       names.map((name, index) => ({
         user_field_name: name,
         mappings:
-          index < CSV_SLOTS ? mappings(settings.get(csvSetting(index))) : [],
+          index < CSV_SLOTS
+            ? mappings(settings.get(csvSetting(index)), isValidUrl)
+            : [],
       }))
     );
   }

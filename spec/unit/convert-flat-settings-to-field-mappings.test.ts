@@ -8,6 +8,18 @@ function flatSettings(overrides: Record<string, unknown>) {
   return new Map<string, unknown>(Object.entries(overrides));
 }
 
+/**
+ * The helpers Discourse hands a migration. `isValidUrl` is backed by
+ * `UrlHelper.is_valid_url?`, the same check the setting schema applies, so a
+ * stand-in only has to agree with it on the cases under test.
+ */
+const HELPERS = {
+  isValidUrl: (url: string) =>
+    url.startsWith("https://") ||
+    url.startsWith("http://") ||
+    url.startsWith("/"),
+};
+
 describe("0001 convert flat settings to Field Mappings", () => {
   it("turns a name and its CSV slot into one Field Mapping", () => {
     const settings = migrate(
@@ -179,6 +191,69 @@ describe("0001 convert flat settings to Field Mappings", () => {
     );
 
     expect(settings.has("profile_link_fields")).toBe(false);
+  });
+
+  it("drops a Mapping whose URL the new schema would refuse", () => {
+    // The flat settings validated nothing, so they could hold this. Writing it
+    // would make the whole `profile_link_fields` value invalid and sink every
+    // other Field Mapping with it.
+    const settings = migrate(
+      flatSettings({
+        custom_profile_link_user_field_ids: "Machine",
+        custom_profile_link_csv_1:
+          "AirSense 11,not a url\nAirFit F20,https://cpap.com/b",
+      }),
+      HELPERS
+    );
+
+    expect(settings.get("profile_link_fields")[0].mappings).toEqual([
+      { value: "AirFit F20", url: "https://cpap.com/b" },
+    ]);
+  });
+
+  it("keeps a relative URL, which the schema accepts", () => {
+    const settings = migrate(
+      flatSettings({
+        custom_profile_link_user_field_ids: "Machine",
+        custom_profile_link_csv_1: "AirSense 11,/products/airsense-11",
+      }),
+      HELPERS
+    );
+
+    expect(settings.get("profile_link_fields")[0].mappings).toEqual([
+      { value: "AirSense 11", url: "/products/airsense-11" },
+    ]);
+  });
+
+  it("keeps the Field Mapping when every one of its Mappings was refused", () => {
+    // Emptied rather than removed, so it is reported as a Config Problem the
+    // administrator can act on instead of vanishing.
+    const settings = migrate(
+      flatSettings({
+        custom_profile_link_user_field_ids: "Machine",
+        custom_profile_link_csv_1: "AirSense 11,not a url",
+      }),
+      HELPERS
+    );
+
+    expect(settings.get("profile_link_fields")).toEqual([
+      { user_field_name: "Machine", mappings: [] },
+    ]);
+  });
+
+  it("keeps every Mapping when Discourse hands over no helpers", () => {
+    // Dropping them all would be a worse failure than writing one the schema
+    // rejects, which at least fails loudly.
+    const settings = migrate(
+      flatSettings({
+        custom_profile_link_user_field_ids: "Machine",
+        custom_profile_link_csv_1: "AirSense 11,not a url",
+      })
+    );
+
+    expect(settings.get("profile_link_fields")[0].mappings).toEqual([
+      { value: "AirSense 11", url: "not a url" },
+    ]);
   });
 
   it("returns the Map, which Discourse requires", () => {

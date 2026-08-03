@@ -30,16 +30,71 @@ export interface UserFieldSource {
   lookup(username: string): Promise<UserFieldLookup>;
 }
 
+/** How many times one lookup tries before it reports failure. */
+const DEFAULT_ATTEMPTS = 3;
+
+/** How long to wait before the nth retry, in milliseconds. */
+function defaultBackoff(attempt: number): number {
+  return 250 * 2 ** (attempt - 1);
+}
+
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface UserFieldSourceOptions {
+  /** Total tries per lookup, the first included. One disables retrying. */
+  attempts?: number;
+  /** Sleeps. Injected so a test exercises the retries without waiting. */
+  wait?: (ms: number) => Promise<void>;
+  /** How long to wait before the nth retry. */
+  backoff?: (attempt: number) => number;
+}
+
 /**
  * A User Field Source over the given fetch. Each source owns its own cache, so
  * a test starts from a known state rather than inheriting module state from
  * whatever ran before it.
  */
 export function createUserFieldSource(
-  fetchUserFields: UserFieldsFetch
+  fetchUserFields: UserFieldsFetch,
+  options: UserFieldSourceOptions = {}
 ): UserFieldSource {
+  const attempts = options.attempts ?? DEFAULT_ATTEMPTS;
+  const wait = options.wait ?? defaultWait;
+  const backoff = options.backoff ?? defaultBackoff;
+
   const inFlight = new Map<string, Promise<UserFieldLookup>>();
   const fetched = new Map<string, UserFieldValues>();
+
+  /**
+   * Tries the fetch until it succeeds or the attempts run out.
+   *
+   * Retrying belongs here rather than in the Link Surface that renders the
+   * result. A post sitting on screen has no reason to re-render, so a component
+   * that merely allowed a retry would be waiting for something that may never
+   * come, and the blip would outlast itself after all. Here the recovery is the
+   * lookup's own business and needs nothing from the page.
+   *
+   * The first fetch is issued before this function awaits anything, so a second
+   * lookup in the same tick still finds this one in flight rather than starting
+   * a competing one. A fetch that throws synchronously takes the same path as
+   * one that rejects.
+   */
+  async function fetchWithRetries(username: string): Promise<UserFieldLookup> {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const userFields = await fetchUserFields(username);
+        return { ok: true, userFields: userFields ?? null };
+      } catch {
+        if (attempt < attempts) {
+          await wait(backoff(attempt));
+        }
+      }
+    }
+
+    return { ok: false };
+  }
 
   return {
     lookup(username: string): Promise<UserFieldLookup> {
@@ -50,37 +105,26 @@ export function createUserFieldSource(
         });
       }
 
+      // Every caller arriving while the retries play out joins this one, so a
+      // topic full of posts by one author still makes a single lookup's worth
+      // of requests however many times it has to be retried.
       const existing = inFlight.get(username);
       if (existing) {
         return existing;
       }
 
-      // The fetch starts now rather than on a later microtask, so a second
-      // lookup in the same tick already finds this one in flight. A fetch that
-      // throws synchronously is turned into a rejection here, so it takes the
-      // same failure path as one that rejects on its own.
-      let started: Promise<UserFieldValues>;
-      try {
-        started = fetchUserFields(username);
-      } catch (error) {
-        started = Promise.reject(error);
-      }
+      const request = fetchWithRetries(username).then((outcome) => {
+        inFlight.delete(username);
 
-      const request: Promise<UserFieldLookup> = started.then(
-        (userFields) => {
-          const value = userFields ?? null;
-          inFlight.delete(username);
-          fetched.set(username, value);
-          return { ok: true, userFields: value };
-        },
-        () => {
-          // A failure is deliberately not cached. Caching it is the bug this
-          // module exists to fix: one blip while a topic loaded used to hide a
-          // member's Profile Links for the rest of the session.
-          inFlight.delete(username);
-          return { ok: false };
+        // Only a success is cached. Caching a failure is the bug this module
+        // exists to fix: one blip while a topic loaded used to hide a member's
+        // Profile Links for the rest of the session.
+        if (outcome.ok) {
+          fetched.set(username, outcome.userFields ?? null);
         }
-      );
+
+        return outcome;
+      });
 
       inFlight.set(username, request);
       return request;
