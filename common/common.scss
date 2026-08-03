@@ -1,13 +1,14 @@
-.d-user-card__custom-field-group
-  .user-card-metadata-outlet.custom-profile-links-orgs
-  .desc {
-  font-weight: bold;
+// Depends on Discourse core markup: core renders every Custom User Field
+// marked "show on profile" / "show on user card" as a `.public-user-field` row
+// of plain text. Where a Profile Link shows the same value as a link, the
+// modifier in javascripts/discourse/modifiers/hide-core-field-rows.ts adds this
+// class to core's row so the value is not read twice. Rows we do not replace
+// are never given the class and keep rendering exactly as core renders them.
+.public-user-field.custom-profile-link-replaced {
+  display: none;
 }
 
-.d-user-card__custom-field-group
-  .user-card-metadata-outlet.custom-profile-links-orgs,
-.d-user-card__custom-field-group
-  .user-card-metadata-outlet.custom-profile-links-links {
+.user-card-metadata-outlet.custom-profile-links-links {
   padding: 3px 5px;
   display: flex;
   border-radius: var(--d-border-radius);

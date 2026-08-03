@@ -1,6 +1,7 @@
 import Component from "@glimmer/component";
 import { service } from "@ember/service";
 import ProfileLinkRow from "../../components/profile-link-row";
+import hideCoreFieldRows from "../../modifiers/hide-core-field-rows";
 import { profileLinksFor } from "../../lib/profile-links-config";
 import type { SiteLike } from "../../lib/profile-links-config";
 import type { UserFieldValues } from "../../lib/profile-links";
@@ -24,9 +25,18 @@ export default class CustomProfileLink extends Component<Signature> {
     return profileLinksFor(this.site, userFields);
   }
 
+  // The fields whose plain-text row core should stop rendering, because a
+  // Profile Link on this surface now shows the same value as a link.
+  get replacedFieldNames() {
+    return this.links.map((link) => link.fieldName);
+  }
+
   <template>
     {{#if this.links.length}}
-      <div class="public-user-fields">
+      <div
+        class="public-user-fields"
+        {{hideCoreFieldRows ".primary-textual" this.replacedFieldNames}}
+      >
         <div class="public-user-field">
           {{#each this.links as |link|}}
             <ProfileLinkRow @link={{link}} class="user-field-value" />

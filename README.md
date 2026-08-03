@@ -16,6 +16,8 @@ The Field Mappings, edited in Discourse's structured settings editor. Each Field
 
 A user whose field value matches a Mapping gets a Profile Link to that URL. A value matching no Mapping renders nothing. There is no limit on the number of Field Mappings, and an empty configuration is valid — it simply renders nothing.
 
+Where a Profile Link replaces a value, Discourse's own plain-text row for that Custom User Field is hidden on the user card and the user profile, so the value is shown once rather than twice. Only rows that a Profile Link actually replaces are hidden: a field with no Field Mapping, and a value matching no Mapping, keep rendering exactly as Discourse renders them. See `docs/adr/0005-core-duplicate-rows-are-hidden-by-a-modifier-not-static-css.md`.
+
 Configuration problems — a Field Mapping naming a Custom User Field that does not exist, one with no Mappings, or a value mapped twice — are reported once to the browser console on page load, whether or not debug mode is on.
 
 **`profile_link_debug_mode`**
