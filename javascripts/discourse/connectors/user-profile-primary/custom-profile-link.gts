@@ -1,10 +1,9 @@
 import Component from "@glimmer/component";
 import { service } from "@ember/service";
 import ProfileLinkRow from "../../components/profile-link-row";
-import hideCoreFieldRows from "../../modifiers/hide-core-field-rows";
-import { profileLinksFor } from "../../lib/profile-links-config";
-import type { SiteLike } from "../../lib/profile-links-config";
 import type { UserFieldValues } from "../../lib/profile-links";
+import { profileLinksFor, type SiteLike } from "../../lib/profile-links-config";
+import hideCoreFieldRows from "../../modifiers/hide-core-field-rows";
 
 interface Signature {
   Args: {

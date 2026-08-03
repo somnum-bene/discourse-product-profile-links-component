@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  type ConfigProblem,
   describeConfigProblem,
   readLinkConfig,
   resolveProfileLinks,
-} from "../../javascripts/discourse/lib/profile-links";
-import type {
-  ConfigProblem,
-  SiteUserField,
-  ThemeSettings,
+  type SiteUserField,
+  type ThemeSettings,
 } from "../../javascripts/discourse/lib/profile-links";
 
 const SITE_USER_FIELDS: SiteUserField[] = [
@@ -43,6 +41,18 @@ describe("readLinkConfig", () => {
     expect(config.fieldMappings[0].urlsByValue.get("AirSense 11")).toBe(
       "https://example.com/airsense-11"
     );
+  });
+
+  it("takes the first Custom User Field when the site has two of a name", () => {
+    // The join is indexed rather than searched per Field Mapping. An index
+    // keeps the last of a repeated key by default, so first-wins is pinned
+    // here: it is what the search it replaced did.
+    const config = readLinkConfig(settingsWith([MACHINE_FIELD]), [
+      { id: 1, name: "Machine" },
+      { id: 9, name: "Machine" },
+    ]);
+
+    expect(config.fieldMappings[0].fieldId).toBe(1);
   });
 
   it("treats an empty configuration as valid", () => {

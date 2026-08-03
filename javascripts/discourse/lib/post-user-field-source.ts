@@ -1,6 +1,6 @@
 import { ajax } from "discourse/lib/ajax";
-import { createUserFieldSource } from "./user-field-source";
 import type { UserFieldValues } from "./profile-links";
+import { createUserFieldSource } from "./user-field-source";
 
 // The seam between the User Field Source and Discourse's network layer. This is
 // the only place that knows a user's Custom User Field values come from their

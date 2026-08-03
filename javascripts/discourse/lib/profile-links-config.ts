@@ -1,13 +1,11 @@
 import {
   describeConfigProblem,
+  type LinkConfig,
+  type ProfileLink,
   readLinkConfig,
   resolveProfileLinks,
-} from "./profile-links";
-import type {
-  LinkConfig,
-  ProfileLink,
-  SiteUserField,
-  UserFieldValues,
+  type SiteUserField,
+  type UserFieldValues,
 } from "./profile-links";
 
 // The seam between the pure resolution module and Discourse's ambient inputs:
@@ -42,6 +40,7 @@ function linkConfig(site: SiteLike): LinkConfig {
  */
 export function reportConfigProblems(site: SiteLike): void {
   for (const problem of linkConfig(site).problems) {
+    // eslint-disable-next-line no-console
     console.warn(`[Profile Links] ${describeConfigProblem(problem)}`);
   }
 }
@@ -60,6 +59,7 @@ export function profileLinksFor(
   );
 
   if (settings.profile_link_debug_mode && unmatched.length) {
+    // eslint-disable-next-line no-console
     console.debug(
       "[Profile Links] Field values matching no Mapping:",
       unmatched

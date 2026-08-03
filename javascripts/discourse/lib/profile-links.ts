@@ -89,6 +89,15 @@ export function readLinkConfig(
   const fieldMappings: FieldMapping[] = [];
   const problems: ConfigProblem[] = [];
 
+  // Indexed once rather than searched per Field Mapping: a site may define many
+  // Custom User Fields, and this runs on every page load.
+  const siteUserFieldsByName = new Map<string, SiteUserField>();
+  for (const field of siteUserFields ?? []) {
+    if (field?.name && !siteUserFieldsByName.has(field.name)) {
+      siteUserFieldsByName.set(field.name, field);
+    }
+  }
+
   for (const rawField of settings?.profile_link_fields ?? []) {
     const fieldName = trimmed(rawField?.user_field_name);
     if (!fieldName) {
@@ -96,9 +105,7 @@ export function readLinkConfig(
       continue;
     }
 
-    const siteUserField = (siteUserFields ?? []).find(
-      (field) => field?.name === fieldName
-    );
+    const siteUserField = siteUserFieldsByName.get(fieldName);
     if (!siteUserField) {
       problems.push({ kind: "unknown-user-field", fieldName });
       continue;

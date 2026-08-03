@@ -1,5 +1,5 @@
-import { modifier } from "ember-modifier";
 import { dasherize } from "@ember/string";
+import { modifier } from "ember-modifier";
 import { coreRowsToHide, usableDasherizedNames } from "../lib/core-field-rows";
 
 // The seam between the row-matching rule and the page. This is the only place
