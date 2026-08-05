@@ -25,6 +25,8 @@ import {
   declaredDigest,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh";
+import { refusedUrls } from "../../scripts/lib/settings-schema";
+import { SHEET_TABS } from "../../scripts/lib/sheet-export";
 
 const DIGEST =
   "c3c3c7d9c7c25e7f16fe08ea83dca4ff367510b7b09cc0c647de8670e9df31b6";
@@ -376,26 +378,53 @@ describe("the settings.yml this repository ships", () => {
     expect(parsed.profile_link_debug_mode.default).toBe(false);
   });
 
-  it("produces no Config Problems on a site defining its fields", () => {
-    // Through the component's own reader, on the real shipped value. Ids are
-    // invented here because readLinkConfig only joins on the name — what the
-    // real instance numbers them is a fact about the instance, not about this
-    // file.
-    const site: SiteUserField[] = shipped.map((field, index) => ({
-      id: index + 1,
-      name: field.user_field_name,
-    }));
+  // The Managed Fields, as the Sheet Export allowlist names them, standing in
+  // for the site. Deriving these from the shipped file instead would make the
+  // gate below self-fulfilling: a Field Mapping renamed to something no instance
+  // defines would rename its own stub along with it and still pass. Ids are
+  // invented because readLinkConfig joins on the name — what a real instance
+  // numbers them is a fact about the instance, not about this file.
+  const site: SiteUserField[] = SHEET_TABS.map((tab, index) => ({
+    id: index + 1,
+    name: tab.userFieldName,
+  }));
 
+  it("produces no Config Problems on a site defining its fields", () => {
+    // Through the component's own reader, on the real shipped value. This is the
+    // Config Problem class in full: a Field Mapping naming a Custom User Field
+    // that does not exist, one with no Mappings, an incomplete Mapping, a value
+    // mapped twice.
     expect(
       readLinkConfig({ profile_link_fields: shipped }, site).problems
     ).toEqual([]);
   });
 
+  it("would report a Field Mapping naming a field no instance defines", () => {
+    // What the gate above is worth, stated as the fault it catches. Without
+    // this, a stub that agreed with the file by construction would look exactly
+    // like a stub that agreed with the site.
+    expect(
+      readLinkConfig(
+        {
+          profile_link_fields: [
+            { user_field_name: "Machin", mappings: shipped[0].mappings },
+          ],
+        },
+        site
+      ).problems
+    ).toEqual([{ kind: "unknown-user-field", fieldName: "Machin" }]);
+  });
+
+  it("ships no URL Discourse's own schema would refuse", () => {
+    // readLinkConfig is not schema validation — it checks that a URL is present,
+    // not that it is a URL. `validations: url: true` is enforced server-side on
+    // an administrator's input and never sees this default, and one refusal
+    // invalidates the whole `profile_link_fields` value rather than the one
+    // Mapping (ADR-0006). So the shipped URLs are checked here or nowhere.
+    expect(refusedUrls(shipped)).toEqual([]);
+  });
+
   it("resolves a Profile Link for a user holding a shipped value", () => {
-    const site: SiteUserField[] = shipped.map((field, index) => ({
-      id: index + 1,
-      name: field.user_field_name,
-    }));
     const config = readLinkConfig({ profile_link_fields: shipped }, site);
     const first = shipped[0].mappings[0];
 
@@ -412,10 +441,11 @@ describe("the settings.yml this repository ships", () => {
   });
 
   it("links only to https cpap.com product pages", () => {
-    // readLinkConfig is not schema validation — it checks that a URL is present,
-    // not that it is a URL. Discourse's own `validations: url: true` runs
-    // server-side on an administrator's input and never sees this default, so
-    // the shipped URLs are checked here or nowhere.
+    // Narrower than the schema gate above and for a different reason: Discourse
+    // would accept `http://`, a path, or somebody else's host quite happily.
+    // Pinning the host here is also what puts the one thing the schema mirror
+    // cannot settle — Ruby's two URI parsers disagree over an underscore in a
+    // host — out of reach.
     for (const field of shipped) {
       for (const mapping of field.mappings) {
         const url = new URL(mapping.url);

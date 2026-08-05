@@ -126,6 +126,45 @@ so one message covers both: regenerate. The same comparison is also a unit test
 against the real files, which is why a stale `settings.yml` fails `pnpm test`
 too.
 
+## The gates that stand in front of a bad regeneration
+
+The drift gate answers "is this file what the build would write". It does not
+answer "will Discourse accept it", and two separate things could go wrong there,
+so two more assertions run against the real `settings.yml` rather than against a
+copy of it.
+
+The first feeds the shipped `default:` through the component's own
+`readLinkConfig` with the three Managed Fields standing in for the site, and
+requires no Config Problems. Those stubs are named from the Sheet Export
+allowlist rather than derived from the file, and that is the whole point: a stub
+list built from the shipped Field Mappings would rename itself along with a
+renamed field and pass a value no instance could use.
+
+The second is `refusedUrls`, and it exists because `readLinkConfig` checks that a
+Mapping has a URL, not that the URL is one. URL syntax is the schema's
+`validations: url: true`, enforced server-side by Ruby, on an administrator's
+input — a generated `default:` never passes through it during development. And a
+single refusal invalidates the entire `profile_link_fields` value rather than the
+one offending Mapping (ADR-0006), so one bad URL takes all 55 Profile Links down
+with it.
+
+So `settings-schema.ts` mirrors `UrlHelper.is_valid_url?`, which is the method
+that validation reaches. The Ruby is quoted in the module, the expectations were
+settled by running it rather than by reading it, and two of its behaviours are
+worth knowing before you debug a rejected setting:
+
+- **An uppercase scheme is refused.** `uri.scheme` comes back downcased and is
+  interpolated into a match against the raw string, so `HTTPS://example.com` can
+  never satisfy it.
+- **A URL the Ruby parser refuses outright never reaches the scheme check.** A
+  space, a `™`, an unfinished `%` escape: the parser raises and the raise is
+  rescued into `false`.
+
+The mirror is deliberately narrower than Discourse in three places, all listed in
+the module. Narrowing can only raise a false alarm about a URL shape this
+pipeline does not generate; accepting one Discourse refuses is the failure a gate
+exists to prevent, and narrowing cannot cause it.
+
 Nothing in the build re-decides anything. Which titles ship, what they link to
 and the order they appear in are settled by `buildCatalogue` and recorded in the
 catalogue file, and the build lays out the order it was given. A catalogue edited
@@ -256,7 +295,7 @@ a parse error.
 
 ## Where the logic lives
 
-`buildCatalogue`, `settingsWithCatalogue`, `planApply` and the apply transport's
+`buildCatalogue`, `settingsWithCatalogue`, `isValidUrl`, `planApply` and the apply transport's
 own judgements — which URL, what payload, whether the instance did what it was
 asked — hold every decision worth testing, and they are pure: no network, no
 filesystem, no clock. The commands around them are thin shells: fetch, read,

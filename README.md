@@ -16,7 +16,7 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 | 🚫 **No duplicate rows** | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
 | ♾️ **No ceiling** | Map as many Custom User Fields as you like. The old ten-slot limit is gone. |
-| 🧪 **Actually tested** | 82 unit tests over the pure modules, runnable in a second with no Discourse instance. |
+| 🧪 **Actually tested** | 386 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance. |
 
 ---
 
@@ -26,12 +26,20 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 
 The Field Mappings, edited in Discourse's structured settings editor. Each **Field Mapping** names one Custom User Field and nests the **Mappings** that turn its values into Profile Links:
 
-- **`user_field_name`** — the field's name, exactly as it appears in `/admin/customize/user_fields`. **Case-sensitive.**
+- **`user_field_name`** — the field's name, exactly as it appears in `/admin/config/user_fields`. **Case-sensitive.**
 - **`mappings`** — one or more value/URL pairs:
   - **`value`** — must match the member's field value exactly.
   - **`url`** — where the Profile Link points. Discourse validates it as you type.
 
 A value that matches no Mapping renders nothing. An empty configuration is valid — it just renders nothing at all.
+
+> ### ⚠️ Don't edit this setting on a live site
+>
+> The cpap.com Field Mappings ship as this setting's **default**, generated from the product catalogue and committed ([ADR-0008](docs/adr/0008-the-catalogue-ships-as-the-settings-default.md)). Discourse stores an administrator's edit as a **Setting Override**, and once a site has one, **a shipped default never reaches that setting again — silently, and for good.**
+>
+> So editing Mappings through the theme settings UI freezes that site's catalogue at the moment you click save. Nothing breaks and nothing is logged; the site simply stops receiving product changes while every other site carries on getting them. There is no undo beyond resetting the setting to its default, and by then you will have lost whatever you typed.
+>
+> Change `data/resolved-products.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run.
 
 ### `profile_link_debug_mode`
 
@@ -51,6 +59,28 @@ Two things worth knowing afterwards:
 - A field name that never had any CSV mappings (including one past the tenth slot, which had nowhere to put them) is **carried over empty and reported**. It resolved no Profile Links before either; keeping it means your configuration isn't silently thinned out.
 
 So: check the console once after updating. See [ADR-0006](docs/adr/0006-a-settings-migration-replaces-uninstall-and-re-add.md).
+
+---
+
+## 🗂 The cpap.com product catalogue
+
+The Mappings and the Custom User Fields' **Dropdown Options** are generated from one committed file, `data/resolved-products.csv`, because a Dropdown Option with no matching Mapping value resolves nothing and logs nothing ([ADR-0011](docs/adr/0011-dropdown-options-are-a-second-sink-applied-per-site.md)). They land in **two different places**, though: Mappings ship in `settings.yml`, and Dropdown Options are Discourse site data that no commit can reach — so the last step runs once per instance.
+
+| Command | What it does | Credentials it needs |
+|---|---|---|
+| `pnpm export:sheet` | re-exports the three allowlisted migration-spreadsheet tabs to `data/user_*.csv` | `SHEET_WORKBOOK_ID` |
+| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from those exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
+| `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
+| `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree | **none** |
+| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
+
+All of them read an ignored `.env`. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
+
+Two facts about the Discourse admin API that cost time to rediscover:
+
+- On Discourse 2026.8 the field definitions live at **`/admin/config/user_fields.json`**, and they are written with `PUT /admin/config/user_fields/:id.json`. The older `/admin/customize/user_fields` path returns **404** — for the JSON *and* for the admin page, so a bookmark or an older tutorial will send you to a dead URL.
+- **A `200` from the write route does not mean the write landed.** An empty option list is discarded, duplicates are silently merged, and the response is a cheerful copy of the field either way. The readback is the only thing that reports whether an apply happened — [ADR-0014](docs/adr/0014-a-write-is-confirmed-by-reading-it-back.md).
 
 ---
 
@@ -106,10 +136,8 @@ pre-commit install   # 👈 don't skip this
 | `pnpm lint:types` | Glint/TypeScript on its own |
 | `pnpm test` | unit tests, once |
 | `pnpm test:watch` | unit tests, on change |
-| `pnpm build:settings` | regenerates the `profile_link_fields` default from the product catalogue |
-| `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree — needs no credentials |
-| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to the instance in `.env`, writing nothing |
-| `pnpm apply:catalogue` | pushes the catalogue's Dropdown Options to that instance and reads them back |
+
+The catalogue commands — `export:sheet`, `refresh:catalogue`, `build:settings`, `apply:catalogue` — are in [their own section above](#-the-cpapcom-product-catalogue), with the credentials each one needs.
 
 ### 🪝 Git hooks
 
@@ -143,7 +171,7 @@ There are no rendering tests yet, which is the main reason `lib/` carries as muc
 ## 📚 Going deeper
 
 - **[`CONTEXT.md`](CONTEXT.md)** — the domain glossary. Start here.
-- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong — and how the catalogue pipeline decides what ships, what it may overwrite, and what it refuses to touch.
+- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong — and how the catalogue pipeline decides what ships, what it may overwrite, what it refuses to touch, and how a generated value is checked against a rule that only Discourse enforces.
 - **[`AGENTS.md`](AGENTS.md)** — issue tracker, triage labels and domain-doc conventions for agent workflows.
 
 ---

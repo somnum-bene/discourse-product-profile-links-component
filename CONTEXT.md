@@ -17,7 +17,7 @@ The person who configures Field Mappings on the theme component and Custom User 
 _Avoid_: admin user, site owner, operator
 
 **Custom User Field**:
-A field defined at `/admin/customize/user_fields` that Users fill in on their profile. Identified by name in configuration, but keyed by integer ID in a User's stored values.
+A field defined at `/admin/config/user_fields` that Users fill in on their profile. Identified by name in configuration, but keyed by integer ID in a User's stored values.
 _Avoid_: user field, profile field, custom field
 
 **Dropdown Option**:
@@ -87,6 +87,14 @@ _Avoid_: diff, changeset, dry run
 **Managed Field**:
 One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all.
 _Avoid_: known field, our field, target field
+
+**Refused URL**:
+A Mapping URL Discourse's schema will not accept, judged by the `validations: url: true` it declares. Not a Config Problem and not a broken link: it is a syntax verdict, it invalidates the whole `profile_link_fields` value rather than the one Mapping, and a URL that works in a browser can still be one (ADR-0016).
+_Avoid_: invalid URL, bad link, validation error
+
+**Setting Override**:
+A setting value stored against one site because an Administrator edited it there. Discourse then stops delivering that setting's shipped default to that site — silently, permanently, and invisibly from the outside, since the site keeps working. An override on `profile_link_fields` freezes that site's Field Mappings at the moment of the edit (ADR-0008), which is why the ownership warning is in the setting's own `description`. A Catalogue Apply detects one by comparing the live value against the default.
+_Avoid_: local change, customisation, site setting
 
 **Readback**:
 Rereading a Discourse instance's Dropdown Options after a Catalogue Apply has written them, and comparing them against the checked-out catalogue. Not a precaution: the update route answers `200 OK` to a write it discards, so the Readback is the only thing that reports whether an apply happened (ADR-0014).

@@ -121,7 +121,7 @@ profile_link_fields:
         - value: TAP PAP Nasal Pillow CPAP Mask
           url: https://www.cpap.com/products/tap-pap-nasal-pillow-cpap-mask-with-improved-stability-mouthpiece
   # END GENERATED profile_link_fields default
-  description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/customize/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value."
+  description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/config/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value. WARNING: editing this setting here overrides it for this site, and an overridden setting never receives a shipped default again — this site's catalogue would freeze at the moment you save, silently and permanently, while the component carried on updating everywhere else. Change the product catalogue in the component's repository instead."
   schema:
     name: field
     identifier: user_field_name
