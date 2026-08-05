@@ -76,6 +76,22 @@ _Avoid_: missing product, failed product, dead link
 Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.
 _Avoid_: sync, update, regenerate
 
+**Catalogue Verify**:
+Asking cpap.com whether every URL in the Resolved Product Catalogue serves a page. Sequential and paced because the storefront rate-limits, and a deliberate command rather than a gate — it is absent from every build script and pre-commit hook on purpose (ADR-0018). Needs no credentials.
+_Avoid_: link check, smoke test, health check
+
+**Verified**:
+Said of one catalogue entry, and it means two things at once: Shopify admits the product, **and** a request to its URL returns 2XX from a page that is still that product. Nothing is verified by half of that (ADR-0017).
+_Avoid_: valid, working, live
+
+**Unresolved URL**:
+A URL the Catalogue Verify never got an answer about — the storefront answered 429 or 503 on every attempt, or nothing answered at all. Not a pass and not a failure: there is no evidence either way, so it blocks shipping and the pass is run again.
+_Avoid_: flaky, timeout, error
+
+**Soft 404**:
+A URL that answers 2XX from somewhere that is not the product — cpap.com serves a handle it no longer has by redirecting to its homepage. Reported as failed despite its success status, because the Profile Link would open the front page (ADR-0017).
+_Avoid_: redirect, bad link, 404
+
 **Catalogue Apply**:
 Pushing Dropdown Options from the Resolved Product Catalogue to one Discourse instance. Runs once per instance; the base URL is the only difference between test and production.
 _Avoid_: deploy, push, migration

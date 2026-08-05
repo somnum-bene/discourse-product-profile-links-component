@@ -16,7 +16,7 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 | 🚫 **No duplicate rows** | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
 | ♾️ **No ceiling** | Map as many Custom User Fields as you like. The old ten-slot limit is gone. |
-| 🧪 **Actually tested** | 386 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance. |
+| 🧪 **Actually tested** | 457 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance. |
 
 ---
 
@@ -72,10 +72,20 @@ The Mappings and the Custom User Fields' **Dropdown Options** are generated from
 | `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from those exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
 | `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree | **none** |
+| `pnpm verify:catalogue` | asks cpap.com whether all 55 URLs serve a page, one request at a time | **none** — it only asks for public product pages |
 | `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 | `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
 
-All of them read an ignored `.env`. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
+The two that need credentials read them from an ignored `.env`; the three that need none cannot read it at all, which is what lets them run in CI and on a shared machine. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
+
+`pnpm verify:catalogue` is the one check here that is **not** a hook and not a CI step, and that is deliberate — it sends 55 requests to a storefront that rate-limits, and a commit that cannot be made while cpap.com is busy would be a gate failing for reasons nobody here controls ([ADR-0018](docs/adr/0018-reachability-is-a-deliberate-command-and-never-a-gate.md)). Run it before an apply. It exits non-zero on anything unshippable, and it reports four outcomes rather than pass/fail:
+
+- **verified** — Shopify admits the product *and* the URL answers 2XX from a page that is still that product.
+- **failed** — Shopify admits it and cpap.com did not serve it.
+- **unresolved** — nothing ever answered (429, 503, or no response). Not a pass and not a failure; it blocks, and you run the pass again.
+- **excluded** — Shopify does not admit it, so it was never requested. The catalogue should not contain one at all.
+
+> ⚠️ **A 2XX is not proof the page exists.** cpap.com serves a product handle it no longer has by redirecting to its **homepage**, with a 200 — so `/products/airsense-11-autoset` "succeeds" while a member clicking it lands on the front page. The pass looks at where the response came from, not only at the status code, and reports that as failed. See [ADR-0017](docs/adr/0017-a-2xx-is-not-proof-that-a-product-page-exists.md).
 
 Two facts about the Discourse admin API that cost time to rediscover:
 
@@ -137,7 +147,7 @@ pre-commit install   # 👈 don't skip this
 | `pnpm test` | unit tests, once |
 | `pnpm test:watch` | unit tests, on change |
 
-The catalogue commands — `export:sheet`, `refresh:catalogue`, `build:settings`, `apply:catalogue` — are in [their own section above](#-the-cpapcom-product-catalogue), with the credentials each one needs.
+The catalogue commands — `export:sheet`, `refresh:catalogue`, `build:settings`, `verify:catalogue`, `apply:catalogue` — are in [their own section above](#-the-cpapcom-product-catalogue), with the credentials each one needs.
 
 ### 🪝 Git hooks
 

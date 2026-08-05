@@ -11,11 +11,14 @@ The commands and what each one is allowed to touch:
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
+| `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
 | `pnpm apply:catalogue`   | `data/resolved-products.csv`, `settings.yml` | one Discourse instance                             | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
-never committed.
+never committed. The two commands that need nothing omit that flag on purpose: a
+command that *could* read `.env` is one that might come to depend on it, and then
+it could no longer run in CI.
 
 ## The Sheet Export refuses more than it accepts
 
@@ -257,6 +260,45 @@ update route takes a field object rather than a patch and there is no reason to
 depend on that. An interrupted run is repeated rather than repaired: the next run
 replans against whatever the instance now holds.
 
+## The reachability pass is the one check that is not a gate
+
+`pnpm verify:catalogue` asks cpap.com whether each of the 55 catalogue URLs
+serves a page. It is in no pre-commit hook and no CI step, unlike every other
+check here, and unit tests read `package.json`, `.pre-commit-config.yaml` and
+`.github/workflows/ci.yml` to keep it that way — including inside another npm
+script, because anything `pnpm build:settings` called would gate CI just as
+surely (ADR-0018). The reason is the storefront's rate limiter: eight concurrent
+requests produced 429 on 68 of 86 URLs during planning, so the pass is sequential
+with a pause between requests, and a commit that cannot be made while cpap.com is
+busy is a gate failing for reasons nobody here controls.
+
+Three things about it are worth knowing before changing it.
+
+**A 2XX is not proof the page exists.** cpap.com serves a product handle it no
+longer has by redirecting to its homepage, with a 200 — measured, not
+hypothesised: `/products/airsense-11-autoset` answers 200 from
+`https://www.cpap.com/#erid51316016`. So the landing URL is part of the verdict.
+A redirect that stays on `/products/<handle>` is a moved product and still
+verified, with a correction proposed; a redirect off it is a Soft 404 and fails
+with its 200 intact (ADR-0017). This is why the pass follows redirects rather
+than handling them itself, and why it uses `GET` rather than `HEAD`.
+
+**Unresolved is a third outcome, not a flaky failure.** A URL that answered 429
+or 503 on every attempt, or that nothing answered at all, produces no evidence
+either way — so it is neither a pass nor a failure, it blocks shipping, and the
+pass is run again. Folding it into either of the other two is exactly the mistake
+the outcome exists to prevent: cpap.com throttling reads as a broken product page
+otherwise. A 500 or a 502, by contrast, *is* an answer and is reported as a
+failure with its status, because retrying past it would substitute a guess for
+the human judgement it needs.
+
+**The command decides nothing.** What a status code means, how long to wait, when
+to stop asking, what to propose and whether the catalogue is shippable are all in
+`lib/catalogue-verify.ts`, including the refusal to accept any command-line
+argument — every flag the pass could plausibly have is a way of declaring the
+catalogue verified without having verified it, and a refusal in an untested shell
+is one a mistake can quietly remove.
+
 ## Three things about the toolchain that will surprise you
 
 **Import Node builtins explicitly, with the `node:` prefix.** The shared
@@ -295,7 +337,8 @@ a parse error.
 
 ## Where the logic lives
 
-`buildCatalogue`, `settingsWithCatalogue`, `isValidUrl`, `planApply` and the apply transport's
+`buildCatalogue`, `settingsWithCatalogue`, `isValidUrl`, `planApply`, the verify
+pass's `resultFrom` / `shippability`, and the apply transport's
 own judgements — which URL, what payload, whether the instance did what it was
 asked — hold every decision worth testing, and they are pure: no network, no
 filesystem, no clock. The commands around them are thin shells: fetch, read,
