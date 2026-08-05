@@ -3,6 +3,7 @@
   "include": [
     "javascripts/**/*",
     "migrations/**/*",
+    "scripts/**/*",
     "types/**/*",
     "test/**/*",
     "spec/unit/**/*",

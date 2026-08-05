@@ -1,6 +1,12 @@
 # Runs the same gates CI would, before a commit exists rather than after.
 # Install once per clone: `pre-commit install`.
 #
+# The local hooks below shell out to `pnpm`, so it has to be on PATH or they
+# fail — and a hook that fails to start is indistinguishable from one that has
+# nothing to check. Node 25 dropped corepack, so on a current Node there is no
+# pnpm unless it was installed deliberately: `brew install pnpm`, or
+# `npm i -g pnpm@10.28.0` to match the pinned packageManager.
+#
 # The whole suite takes a couple of seconds — the type-check is incremental and
 # the unit tests never touch a network — so everything runs on every commit
 # rather than being split into a fast and a slow tier.
@@ -11,10 +17,20 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # The three fixers below rewrite the files they inspect, so they stay away
+      # from data/. The Sheet Exports there are committed as verbatim
+      # provenance: whatever the spreadsheet returned is what the diff should
+      # show. A hook that strips a trailing space or normalises a line ending
+      # makes the committed export disagree with its source — and since a
+      # Catalogue Refresh writes the file back exactly as fetched, the hook and
+      # the refresh would then undo each other on every commit.
       - id: trailing-whitespace
+        exclude: ^data/
       - id: end-of-file-fixer
+        exclude: ^data/
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: ^data/
       - id: check-yaml # settings.yml decides whether the component installs
       - id: check-json # about.json likewise
       - id: check-merge-conflict
@@ -31,13 +47,13 @@ repos:
         name: eslint
         entry: pnpm exec eslint --no-error-on-unmatched-pattern
         language: system
-        files: ^(javascripts|migrations|test|spec)/.*\.(js|gjs|mjs|cjs|ts|gts|mts|cts)$
+        files: ^(javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|mjs|cjs|ts|gts|mts|cts)$
 
       - id: prettier
         name: prettier
         entry: pnpm exec prettier --check --no-error-on-unmatched-pattern
         language: system
-        files: ^((javascripts|migrations|test|spec)/.*\.(js|gjs|ts|gts|mts|cts)|(javascripts|desktop|mobile|common|scss|stylesheets)/.*\.scss)$
+        files: ^((javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|ts|gts|mts|cts)|(javascripts|desktop|mobile|common|scss|stylesheets)/.*\.scss)$
 
       - id: stylelint
         name: stylelint
@@ -52,11 +68,15 @@ repos:
         entry: pnpm lint:types
         language: system
         pass_filenames: false
-        files: ^(javascripts|spec|types)/.*\.(ts|gts|d\.ts)$|^tsconfig\.json$
+        files: ^(javascripts|scripts|spec|types)/.*\.(ts|gts|d\.ts)$|^tsconfig\.json$
 
+      # settings.yml and data/ are triggers because tests read them: the shipped
+      # profile_link_fields default is fed through readLinkConfig, and the
+      # Resolved Product Catalogue is what both sinks are generated from. A
+      # change to either can break a test with no source file touched.
       - id: vitest
         name: unit tests
         entry: pnpm test
         language: system
         pass_filenames: false
-        files: ^(javascripts|migrations|spec)/|^(package\.json|vitest\.config\.mjs)$
+        files: ^(javascripts|migrations|scripts|spec|data)/|^(package\.json|vitest\.config\.mjs|settings\.yml)$
