@@ -80,6 +80,14 @@ _Avoid_: sync, update, regenerate
 Pushing Dropdown Options from the Resolved Product Catalogue to one Discourse instance. Runs once per instance; the base URL is the only difference between test and production.
 _Avoid_: deploy, push, migration
 
+**Apply Plan**:
+What a Catalogue Apply would do to one instance, decided as data before any request exists — the writes, the refusals that stop all of them, the warnings that do not, and the fields already correct. Produced by one pure function so the destructive decisions are argued with a fixture rather than a live site.
+_Avoid_: diff, changeset, dry run
+
+**Managed Field**:
+One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all.
+_Avoid_: known field, our field, target field
+
 **Flat Settings**:
 The eleven pre-refactor settings — a pipe-delimited field-name list plus ten positional CSV textareas — that the structured `profile_link_fields` setting replaced. A Settings Migration converts them on update.
 _Avoid_: old settings, CSV settings, legacy config

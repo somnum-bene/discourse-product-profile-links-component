@@ -141,7 +141,7 @@ There are no rendering tests yet, which is the main reason `lib/` carries as muc
 ## 📚 Going deeper
 
 - **[`CONTEXT.md`](CONTEXT.md)** — the domain glossary. Start here.
-- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong.
+- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong — and how the catalogue pipeline decides what ships, what it may overwrite, and what it refuses to touch.
 - **[`AGENTS.md`](AGENTS.md)** — issue tracker, triage labels and domain-doc conventions for agent workflows.
 
 ---

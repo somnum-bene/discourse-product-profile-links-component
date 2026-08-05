@@ -132,6 +132,37 @@ catalogue file, and the build lays out the order it was given. A catalogue edite
 by hand after it was approved is refused before any of that: it is read through
 `readResolvedProducts`, which recomputes the digest on its first line.
 
+## The apply step decides before it writes, and refuses by default
+
+`planApply` is the whole decision, and it is a function rather than a command:
+give it one instance's Custom User Field definitions as data and the Resolved
+Product Catalogue, and it returns an Apply Plan — the writes, the refusals, the
+warnings, and the fields already holding exactly the right options. It touches
+no network, and the command that will carry the plan out is not built yet.
+
+That split is not tidiness. Writing Dropdown Options destroys site data no commit
+can restore, and a User holding a removed value silently stops getting a Profile
+Link, with nothing logged unless Debug Mode is on. Discovering this behaviour by
+running it against a live instance is how that data gets lost, so every question
+worth arguing about is answered against a fixture — and the fixture is the test
+instance's own three fields, because every hard case is already in them.
+
+**Refusal is about removal, not authorship** (ADR-0013). There is nowhere in
+Discourse to record that this pipeline wrote an option, so an option we wrote
+last month and one an administrator typed are the same bytes. An option the
+catalogue still carries is kept; anything else is something the write would take
+away, and that needs `replace`. The refusal names every option it would remove,
+and annotates each with the target option it is probably a respelling of —
+`AirCurve™ 11 VAuto with HumidAir™` against `AirCurve 11 VAuto with HumidAir` is
+the real case, and no amount of reading the two lists side by side reveals it.
+That annotation never decides anything: matching stays exact, because Discourse
+stores what the User picked.
+
+A refusal on one field empties the write list for all of them. A field already
+correct produces no writes and is named rather than passed over, which is what
+makes a second run safe. And `Humidifier` is emptied only when it is named
+explicitly, never as a side effect of populating `Machine` and `Mask` (ADR-0012).
+
 ## Three things about the toolchain that will surprise you
 
 **Import Node builtins explicitly, with the `node:` prefix.** The shared
