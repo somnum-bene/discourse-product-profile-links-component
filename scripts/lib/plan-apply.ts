@@ -478,7 +478,8 @@ export function planApply(
         `${before.length === 1 ? "" : "s"} and the catalogue has no Mappings ` +
         `for it, so every User who picks one gets no Profile Link and nothing ` +
         `is logged unless Debug Mode is on: ${quoted(before)}. This run leaves ` +
-        `the field alone. Name it in clear to empty it.`,
+        `the field alone, and Discourse offers no way to empty a dropdown ` +
+        `(ADR-0015), so they stay until someone deletes the field.`,
     });
   }
 

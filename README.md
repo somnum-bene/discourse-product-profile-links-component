@@ -108,6 +108,8 @@ pre-commit install   # 👈 don't skip this
 | `pnpm test:watch` | unit tests, on change |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default from the product catalogue |
 | `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree — needs no credentials |
+| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to the instance in `.env`, writing nothing |
+| `pnpm apply:catalogue` | pushes the catalogue's Dropdown Options to that instance and reads them back |
 
 ### 🪝 Git hooks
 

@@ -13,3 +13,7 @@ The script must be able to replace an option list, not only extend one. The `Mac
 ## Consequences
 
 A Custom User Field with no Mappings behind it is worse than an empty one, because it offers the user a choice that leads nowhere. `Humidifier` is in that state on the test instance and its Mappings are deferred (ADR-0012), so the apply step clears its options and leaves the field in place, unmapped, rather than leaving four selectable values that resolve to nothing.
+
+> **Amended by [ADR-0015](0015-a-dropdown-cannot-be-emptied-so-humidifier-keeps-its-options.md).** Implementing that paragraph proved it impossible: Discourse offers no way to reduce a dropdown to zero options, and the two operations that get there destroy every value Users have stored. `Humidifier` keeps its four hand-entered options and the apply step reports them on every run.
+
+> **Also see [ADR-0014](0014-a-write-is-confirmed-by-reading-it-back.md)** on the readback promised above. It is load-bearing rather than precautionary: the update route answers 200 to a write it discarded, so a run can be green and have changed nothing. The catalogue digest the apply step was to compare against the instance does not exist there — comments do not ship — so it compares the Mappings themselves.

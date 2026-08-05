@@ -88,6 +88,10 @@ _Avoid_: diff, changeset, dry run
 One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all.
 _Avoid_: known field, our field, target field
 
+**Readback**:
+Rereading a Discourse instance's Dropdown Options after a Catalogue Apply has written them, and comparing them against the checked-out catalogue. Not a precaution: the update route answers `200 OK` to a write it discards, so the Readback is the only thing that reports whether an apply happened (ADR-0014).
+_Avoid_: verification, confirmation, sanity check
+
 **Flat Settings**:
 The eleven pre-refactor settings — a pipe-delimited field-name list plus ten positional CSV textareas — that the structured `profile_link_fields` setting replaced. A Settings Migration converts them on update.
 _Avoid_: old settings, CSV settings, legacy config

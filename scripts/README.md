@@ -11,7 +11,7 @@ The commands and what each one is allowed to touch:
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
-| _apply_                  | `data/resolved-products.csv`             | one Discourse instance                                 | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `settings.yml` | one Discourse instance                             | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
@@ -160,8 +160,63 @@ stores what the User picked.
 
 A refusal on one field empties the write list for all of them. A field already
 correct produces no writes and is named rather than passed over, which is what
-makes a second run safe. And `Humidifier` is emptied only when it is named
-explicitly, never as a side effect of populating `Machine` and `Mask` (ADR-0012).
+makes a second run safe. And `Humidifier` is never touched as a side effect of
+populating `Machine` and `Mask` (ADR-0012).
+
+## The apply step believes the reread, not the response code
+
+`apply:catalogue` carries a plan out against the instance named by
+`DISCOURSE_BASE_URL`, which is the only thing that differs between the test and
+production sites. It writes each field with one `PUT` to
+`/admin/config/user_fields/:id.json` — the `/admin/customize/` path the admin UI
+shows in its own address bar answers 404 for JSON and will convince you the API
+does not exist.
+
+```bash
+pnpm apply:catalogue --plan               # decide and print, write nothing
+pnpm apply:catalogue                      # apply, refusing any removal
+pnpm apply:catalogue --replace            # authorise removals, having read them
+pnpm apply:catalogue --clear "Humidifier" # refused: see below
+```
+
+**The route answers `200 OK` to a write it discards** (ADR-0014). An empty
+`options` array is ignored, because Rails turns an empty array parameter into
+`nil` before the controller sees it, and a repeated option is silently
+deduplicated. The response body echoes the server's version, so it is no help
+either. That is why the command rereads the field definitions afterwards and
+compares them against the catalogue, and why a run can otherwise be green from
+end to end and have changed nothing.
+
+The same probing established that **a dropdown cannot be emptied at all**
+(ADR-0015), which contradicts a promise ADR-0011 made. Five payload shapes were
+tried; the ones that are not ignored leave the field offering one blank choice.
+The only operations that reach zero destroy every value Users have stored, so
+`--clear` is refused before the first request rather than doing the nearest thing
+that appears to work. `Humidifier` keeps its four hand-entered options and the
+run says so every time.
+
+Three more things it does before writing anything, in this order:
+
+- **Compares the two digests.** `settings.yml` records the catalogue its Mappings
+  were built from; the catalogue declares its own. A difference means the two
+  sinks would come from different catalogues, so it refuses — the fix is one
+  command.
+- **Asks the instance what Mappings its component actually has.** The digest
+  cannot be compared against a site: it is a comment in `settings.yml` and
+  comments do not ship. So the Mappings themselves are compared, and a component
+  that is not installed, or is behind, or has been overridden through the theme
+  settings UI, is reported as a warning. Not a refusal — the two sinks land at
+  different times by different mechanisms, and an undeployed theme is an ordinary
+  state of the world.
+- **Finds the component by the setting it defines**, not by a theme id in `.env`.
+  A second per-instance variable is a second thing that can go stale and report
+  the wrong site's configuration confidently.
+
+Each write is one whole field, and every key the instance reported comes back
+unchanged except `options` — omitted keys were observed to survive, but the
+update route takes a field object rather than a patch and there is no reason to
+depend on that. An interrupted run is repeated rather than repaired: the next run
+replans against whatever the instance now holds.
 
 ## Three things about the toolchain that will surprise you
 
@@ -201,10 +256,14 @@ a parse error.
 
 ## Where the logic lives
 
-`buildCatalogue`, `settingsWithCatalogue` and `planApply` hold every decision
-worth testing, and they are pure — no network, no filesystem, no clock. The
-commands around them are thin shells: fetch, read, write, execute a plan. If a bug can hide in a shell, logic
-has leaked out of a transform and belongs back inside it.
+`buildCatalogue`, `settingsWithCatalogue`, `planApply` and the apply transport's
+own judgements — which URL, what payload, whether the instance did what it was
+asked — hold every decision worth testing, and they are pure: no network, no
+filesystem, no clock. The commands around them are thin shells: fetch, read,
+write, execute a plan. If a bug can hide in a shell, logic has leaked out of a
+transform and belongs back inside it. The one thing the apply command decides for
+itself is *when* to consult the plan, and a test pins that order, because it is
+the only mistake a shell can make on its own.
 
 Tests live in `spec/unit/`, never in `test/` — Discourse serves a theme's
 `test/` directory at `/theme-qunit`. See `docs/adr/0003`.
