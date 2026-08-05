@@ -45,3 +45,12 @@ jobs:
       - run: pnpm lint
 
       - run: pnpm test
+
+      # The drift gate. `settings.yml` ships the catalogue as the setting's
+      # default (ADR-0008), so the committed file and
+      # data/resolved-products.csv have to agree — a hand edit to the generated
+      # region is exactly how they stop agreeing, and it looks like ordinary
+      # configuration in a diff. The build needs no credentials, which is what
+      # lets this run here at all.
+      - name: settings.yml matches the catalogue
+        run: pnpm build:settings --check

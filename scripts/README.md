@@ -10,7 +10,7 @@ The commands and what each one is allowed to touch:
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
-| _build_                  | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
+| `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
 | _apply_                  | `data/resolved-products.csv`             | one Discourse instance                                 | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
@@ -83,6 +83,55 @@ two different ways on purpose — "expected, the tab curates none" for
 resolved none of them. Printing one message for both would make the broken case
 look like the intended one.
 
+## The build generates part of a hand-written file, and a gate keeps it honest
+
+`build:settings` turns the Resolved Product Catalogue into the `default:` of
+`profile_link_fields`, which is how the catalogue reaches an instance (ADR-0008).
+It is the one command that needs no configuration at all — the catalogue is
+committed — and the npm script deliberately omits the `--env-file-if-exists` flag
+the other two carry, because a build that _could_ read `.env` is a build that
+might one day depend on it. That is what lets the gate run in CI.
+
+`settings.yml` is mostly hand-written: the schema the Mappings are validated
+against, the descriptions an administrator reads, and a second setting that has
+nothing to do with the catalogue. So the generated part is fenced, and only that
+part is rewritten:
+
+```yaml
+  # BEGIN GENERATED profile_link_fields default
+  # Catalogue digest (sha256): c3c3c7d9…
+  default: …
+  # END GENERATED profile_link_fields default
+```
+
+Reserialising the whole document would reformat and comment-strip parts nobody
+edited, and a diff full of incidental reformatting is a diff nobody reads. The
+fences are found by exact line match; one that has been edited, moved or deleted
+stops the run rather than being guessed at, because they are the only statement
+of which part of a hand-written file is not hand-written.
+
+**The digest is recorded because two sinks are generated from one catalogue**
+(ADR-0011). The Mappings ship in this file; the Dropdown Options are pushed to a
+site separately. Recording which catalogue the shipped Mappings were built from is
+what lets the apply step notice it is working from a different one — a site whose
+dropdown offers titles the shipped Mappings do not cover produces an Unmatched
+Value for every user who picks one, and nothing is logged unless Debug Mode is on.
+
+**`pnpm build:settings --check` is the drift gate**, and it runs in CI and as a
+pre-commit hook. It rebuilds the file in memory, compares bytes, and writes
+nothing whatever it finds — a gate that repaired what it was inspecting would
+report success on a repository nobody had fixed. A hand edit and a catalogue that
+moved on without a rebuild look identical in the file and have the same remedy,
+so one message covers both: regenerate. The same comparison is also a unit test
+against the real files, which is why a stale `settings.yml` fails `pnpm test`
+too.
+
+Nothing in the build re-decides anything. Which titles ship, what they link to
+and the order they appear in are settled by `buildCatalogue` and recorded in the
+catalogue file, and the build lays out the order it was given. A catalogue edited
+by hand after it was approved is refused before any of that: it is read through
+`readResolvedProducts`, which recomputes the digest on its first line.
+
 ## Three things about the toolchain that will surprise you
 
 **Import Node builtins explicitly, with the `node:` prefix.** The shared
@@ -121,9 +170,9 @@ a parse error.
 
 ## Where the logic lives
 
-`buildCatalogue` and `planApply` hold every decision worth testing, and they are
-pure — no network, no filesystem, no clock. The commands around them are thin
-shells: fetch, read, write, execute a plan. If a bug can hide in a shell, logic
+`buildCatalogue`, `settingsWithCatalogue` and `planApply` hold every decision
+worth testing, and they are pure — no network, no filesystem, no clock. The
+commands around them are thin shells: fetch, read, write, execute a plan. If a bug can hide in a shell, logic
 has leaked out of a transform and belongs back inside it.
 
 Tests live in `spec/unit/`, never in `test/` — Discourse serves a theme's

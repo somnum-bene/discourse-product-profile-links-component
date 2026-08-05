@@ -106,6 +106,8 @@ pre-commit install   # 👈 don't skip this
 | `pnpm lint:types` | Glint/TypeScript on its own |
 | `pnpm test` | unit tests, once |
 | `pnpm test:watch` | unit tests, on change |
+| `pnpm build:settings` | regenerates the `profile_link_fields` default from the product catalogue |
+| `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree — needs no credentials |
 
 ### 🪝 Git hooks
 
@@ -116,6 +118,7 @@ pre-commit install   # 👈 don't skip this
 - 🚧 refuses a commit directly to `main`
 - 🎨 eslint, prettier, stylelint on the staged files
 - 🧠 Glint type-check and the full unit suite on the project
+- 🧾 `settings.yml`'s generated `profile_link_fields` default still matches the product catalogue it was built from
 
 > ⚠️ Note the hook runs eslint **without `--cache`**, unlike the `lint:js` script. A cached run once reported this branch clean while it held nineteen real errors. A gate that can do that is worse than no gate.
 

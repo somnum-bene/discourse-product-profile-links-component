@@ -1,6 +1,126 @@
 profile_link_fields:
   type: objects
-  default: []
+  # BEGIN GENERATED profile_link_fields default
+  # Written by `pnpm build:settings` from the Resolved Product Catalogue.
+  # Catalogue digest (sha256): c3c3c7d9c7c25e7f16fe08ea83dca4ff367510b7b09cc0c647de8670e9df31b6
+  # Do not edit between these fences: `pnpm build:settings --check`
+  # runs in CI and fails when this region disagrees with the catalogue.
+  default:
+    - user_field_name: Machine
+      mappings:
+        - value: AirCurve 10 VAuto BiLevel Machine
+          url: https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine
+        - value: AirCurve 11 VAuto with HumidAir
+          url: https://www.cpap.com/products/resmed-aircurve-11-vauto-bilevel-machine-with-humidair
+        - value: AirMini AutoSet Travel CPAP Machine
+          url: https://www.cpap.com/products/resmed-airmini-autoset-travel-cpap-machine
+        - value: AirSense 10 AutoSet with HumidAir
+          url: https://www.cpap.com/products/resmed-airsense-10-autoset-cpap-machine-with-humidair-heated-humidifier-and-climateline
+        - value: AirSense 11 AutoSet
+          url: https://www.cpap.com/products/resmed-airsense-11-autoset
+        - value: Luna G3 BPAP 25A Bi-Level CPAP Machine
+          url: https://www.cpap.com/products/luna-g3-bpap-25a-bi-level-cpap-machine
+        - value: Luna G3 BPAP 30VT Bi-Level CPAP Machine
+          url: https://www.cpap.com/products/luna-g3-bpap-30vt-bi-level-cpap-machine
+        - value: Transcend Micro Auto Travel CPAP Machine
+          url: https://www.cpap.com/products/transcend-micro-auto-travel-cpap-machine
+    - user_field_name: Mask
+      mappings:
+        - value: AirFit F10 Full Face Mask
+          url: https://www.cpap.com/products/resmed-airfit-f10-full-face-cpap-mask
+        - value: AirFit F20 Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-f20-full-face-cpap-mask
+        - value: AirFit F30 + AirMini Mask Setup Pack Bundle
+          url: https://www.cpap.com/products/resmed-airfit-f30-complete-mask-airmini-mask-setup-pack-bundle
+        - value: AirFit F30 Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-f30-full-face-cpap-mask
+        - value: AirFit F30i Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-f30i-full-face-cpap-mask
+        - value: AirFit F40 Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-f40-full-face-cpap-mask
+        - value: AirFit N20 Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-n20-nasal-cpap-mask
+        - value: AirFit N30 Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-n30-nasal-cpap-mask-with-headgear
+        - value: AirFit N30i Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-n30i-nasal-cpap-mask
+        - value: AirFit P10 Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-p10-nasal-pillow-cpap-mask
+        - value: AirFit P30i Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-p30i-nasal-pillow-cpap-mask
+        - value: AirFit X30i Oral Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airfit-x30i-oral-nasal-cpap-mask
+        - value: AirMini Mask Setup Pack
+          url: https://www.cpap.com/products/resmed-airmini-mask-setup-pack
+        - value: AirMini Mask Setup Pack with N30
+          url: https://www.cpap.com/products/airmini-mask-setup-pack-n30-nasal-mask
+        - value: AirTouch F20 + AirMini Setup Pack Bundle
+          url: https://www.cpap.com/products/resmed-airtouch-f20-complete-mask-airmini-mask-setup-pack-bundle
+        - value: AirTouch F20 Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airtouch-f20-full-face-cpap-mask
+        - value: AirTouch F30i Clear Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-airtouch-f30i-clear-full-face-cpap-mask
+        - value: AirTouch N20 Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airtouch-n20-nasal-cpap-mask
+        - value: AirTouch N30i Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-airtouch-n30i-nasal-cpap-mask
+        - value: Amara View Full Face CPAP Mask
+          url: https://www.cpap.com/products/amara-view-full-face-cpap-mask-with-headgear
+        - value: Bleep DreamPort CPAP Mask
+          url: https://www.cpap.com/products/bleep-dreamport-cpap-mask
+        - value: Bleep Eclipse Starter Kit
+          url: https://www.cpap.com/products/bleep-eclipse-starter-kit-cpap-mask
+        - value: Brevida Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/brevida-nasal-pillow-cpap-mask
+        - value: ComfortGel Blue Nasal CPAP Mask
+          url: https://www.cpap.com/products/comfortgel-blue-nasal-cpap-mask
+        - value: DreamWear Full Face CPAP Mask
+          url: https://www.cpap.com/products/dreamwear-full-face-cpap-mask-with-headgear
+        - value: DreamWear Nasal CPAP Mask
+          url: https://www.cpap.com/products/dreamwear-nasal-cpap-mask
+        - value: DreamWear Silicone Nasal Pillow Mask
+          url: https://www.cpap.com/products/dreamwear-silicone-nasal-pillow-cpap-mask
+        - value: Eson 2 Nasal CPAP Mask
+          url: https://www.cpap.com/products/eson-2-nasal-cpap-mask
+        - value: Evora Full Face Mask
+          url: https://www.cpap.com/products/evora-full-face-mask-with-headgear
+        - value: Fisher & Paykel Evora Nasal CPAP Mask
+          url: https://www.cpap.com/products/fisher-paykel-evora-nasal-cpap-mask-with-headgear
+        - value: Fisher & Paykel Opus 360 Nasal Pillow Mask
+          url: https://www.cpap.com/products/fisher-paykel-opus-360-nasal-pillow-cpap-mask
+        - value: Fisher & Paykel Solo Nasal Mask
+          url: https://www.cpap.com/products/fisher-paykel-solo-nasal-cpap-mask
+        - value: Fisher & Paykel Solo Nasal Pillow Mask
+          url: https://www.cpap.com/products/fisher-paykel-solo-nasal-pillow-cpap-mask
+        - value: Fisher & Paykel Vitera Full Face Mask
+          url: https://www.cpap.com/products/fisher-paykel-vitera-full-face-mask
+        - value: FitLife Total Face CPAP Mask
+          url: https://www.cpap.com/products/respironics-fitlife-total-full-face-cpap-mask-headgear
+        - value: Mirage Activa LT Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-mirage-activa-lt-nasal-cpap-mask
+        - value: Mirage FX Nasal CPAP Mask
+          url: https://www.cpap.com/products/resmed-mirage-fx-nasal-cpap-mask
+        - value: Mirage Quattro Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-mirage-quattro-full-face-cpap-mask
+        - value: Nova Micro Nasal Pillow Mask
+          url: https://www.cpap.com/products/nova-micro-nasal-pillow-cpap-mask
+        - value: Nuance Pro Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/nuance-pro-nasal-cpap-mask-respironics
+        - value: Pixi Pediatric CPAP Mask
+          url: https://www.cpap.com/products/pixi-pediatric-cpap-mask
+        - value: Quattro Air Full Face Mask
+          url: https://www.cpap.com/products/resmed-quattro-air-full-face-mask
+        - value: Quattro FX Full Face CPAP Mask
+          url: https://www.cpap.com/products/resmed-quattro-fx-full-face-cpap-mask
+        - value: Simplus Full Face CPAP Mask
+          url: https://www.cpap.com/products/fisher-paykel-simplus-full-face-cpap-mask
+        - value: Swift FX Bella Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/resmed-swift-fx-bella-nasal-pillow-cpap-mask
+        - value: Swift FX Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/resmed-swift-fx-nasal-pillow-cpap-mask-with-headgear
+        - value: TAP PAP Nasal Pillow CPAP Mask
+          url: https://www.cpap.com/products/tap-pap-nasal-pillow-cpap-mask-with-improved-stability-mouthpiece
+  # END GENERATED profile_link_fields default
   description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/customize/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value."
   schema:
     name: field
