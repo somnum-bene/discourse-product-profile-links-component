@@ -6,12 +6,12 @@ send the catalogue pipeline to every forum visitor.
 
 The commands and what each one is allowed to touch:
 
-| Command             | Reads                                    | Writes                       | Configuration                                                       |
-| ------------------- | ---------------------------------------- | ---------------------------- | ------------------------------------------------------------------- |
-| `pnpm export:sheet` | three allowlisted spreadsheet tabs       | `data/user_*.csv`            | `SHEET_WORKBOOK_ID`                                                 |
-| _refresh_           | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
-| _build_             | `data/resolved-products.csv`             | `settings.yml`               | none, so it runs in CI                                              |
-| _apply_             | `data/resolved-products.csv`             | one Discourse instance       | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
+| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
+| `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| _build_                  | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
+| _apply_                  | `data/resolved-products.csv`             | one Discourse instance                                 | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
@@ -46,6 +46,42 @@ no final newline — which is why `data/` is exempt from the whitespace-fixing
 pre-commit hooks. The endpoint is addressed by tab _name_ (`gviz/tq`) rather
 than by the numeric gid `export?format=csv` requires, because the allowlist is
 written in names and a workbook is free to reassign a gid.
+
+## The Catalogue Refresh writes one file to ship and one file to read
+
+`refresh:catalogue` is the only command that touches Shopify, and the only one
+that turns a curated title into a link. It writes two things, and they are not
+the same kind of thing:
+
+- **`data/resolved-products.csv` is the record.** It is committed, it is the only
+  input to `build` and `apply`, and it holds nothing but the Mappings that
+  resolved. Its first line is a `# sha256 …` digest of the rest, so a later
+  command can say which catalogue it is working from, and a file edited by hand
+  after it was generated is refused rather than used.
+- **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
+  ignored, because it is regenerated on every refresh: every Mapping per field,
+  every excluded Suggested Title under the reason it was excluded, and both
+  directions of the disagreement between the spreadsheet and the live catalogue.
+  There is no timestamp in it, so a refresh that changes nothing changes nothing,
+  and a diff in it is worth reading.
+
+Two queries go to Shopify. Products the spreadsheet names are fetched **by
+handle** — the same handle the transform's join will look for, so the command
+cannot fetch a product the transform never consults. Each of the three divisions
+is then surveyed for what it currently sells, which is the only way to answer
+"what does cpap.com sell that the spreadsheet never mentions". A refused query
+arrives as HTTP 200 with an `errors` array, so the body is checked rather than
+the status code.
+
+Everything it decides is in `lib/catalogue-refresh.ts` and reached by tests. The
+access token is never passed into that file at all: the command reads it and puts
+it in a header, so no function that could log something has it.
+
+`Humidifier` produces no Mappings and the run says so. An empty field is reported
+two different ways on purpose — "expected, the tab curates none" for
+`Humidifier`, and "that is a problem" for a field that curates titles and
+resolved none of them. Printing one message for both would make the broken case
+look like the intended one.
 
 ## Three things about the toolchain that will surprise you
 

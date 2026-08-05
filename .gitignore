@@ -3,3 +3,8 @@ node_modules
 .eslintcache
 .DS_Store
 .env
+
+# Working documents: notes, ticket scratch, and the catalogue review document
+# the Catalogue Refresh regenerates. The committed catalogue file is the record
+# of what shipped; these are for reading, not for keeping.
+.ig.*
