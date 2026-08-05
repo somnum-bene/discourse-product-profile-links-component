@@ -10,6 +10,7 @@
     "node_modules/discourse/declarations/**/*"
   ],
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "paths": {
       "admin/*": ["./node_modules/discourse/declarations/admin/*"],
       "float-kit/*": ["./node_modules/discourse/declarations/float-kit/*"],

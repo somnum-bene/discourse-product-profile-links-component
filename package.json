@@ -16,6 +16,7 @@
     "yaml": "^2"
   },
   "scripts": {
+    "export:sheet": "node --env-file-if-exists=.env --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/export-sheet.ts",
     "lint": "concurrently \"pnpm:lint:*(!fix)\" --names \"lint:\"",
     "lint:fix": "concurrently \"pnpm:lint:*:fix\" --names \"fix:\"",
     "lint:css": "pnpm stylelint '{javascripts,desktop,mobile,common,scss,stylesheets}/**/*.scss' --allow-empty-input",
