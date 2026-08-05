@@ -1,0 +1,13 @@
+# The sheet defines membership, Shopify defines validity
+
+Two sources could supply the list of products a Dropdown Option offers, and they disagree in both directions. The spreadsheet names seventeen Machines and sixty-nine Masks. cpap.com currently carries thirty-seven Machines and fifty-seven Masks that are `ACTIVE`, published, and not tagged `Discontinued`. So the sheet omits around twenty current machines, and its Mask list overshoots the live catalogue — which is the same fact as the twelve Mask URLs that 404.
+
+Membership comes from the sheet. It is a curated list of popular products, and a dropdown is a UI element before it is a data structure: several hundred options is a worse experience than a short list of the equipment most users actually own, and it is what a new user picking their current machine will be scrolling through. Deriving membership from Shopify would also pull in low-volume and edge-case SKUs that nobody wants to see in a signature line.
+
+Validity comes from Shopify, applied on top. A title the sheet names is admitted only if its product is still live and linkable (ADR-0009). The sheet therefore decides what is *eligible*; Shopify decides what is *shippable*. Neither source is trusted for the other question, which is the part that would be easy to get wrong in either direction — trusting the sheet alone ships dead links, trusting Shopify alone ships an unusable dropdown.
+
+The displayed value is the sheet's `Suggested Title`, verbatim, not the Shopify product title. Shopify calls one machine `ResMed AirSense 11 AutoSet CPAP Machine`; the sheet calls it `AirSense 11 AutoSet`. The latter is the better label in a user card or a signature, and curation is the one thing the Admin API cannot supply. The pre-existing Machine options on the test instance illustrate the cost of skipping this: they were copied from the sheet's legacy `Text` column and carry `™` glyphs, so `AirCurve™ 11 VAuto with HumidAir™` would never have matched the Mapping value `AirCurve 11 VAuto with HumidAir`. Resolution is an exact trimmed-string match, and a mismatch produces no Profile Link, no Config Problem, and nothing in the console unless Debug Mode is on.
+
+## Consequences
+
+The gap between the two lists is a decision deferred, not a decision made. The absent machines are reported for product to review, and adding any of them is a later catalogue refresh rather than a code change. Because the sheet is a living document that product edits, its raw tab exports are committed verbatim so that a change made by product shows up in `git diff` separately from a change made by the transform.
