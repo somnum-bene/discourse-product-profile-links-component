@@ -101,7 +101,7 @@ What a Catalogue Apply would do to one instance, decided as data before any requ
 _Avoid_: diff, changeset, dry run
 
 **Managed Field**:
-One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all.
+One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all. `Humidifier` is permanently in that state: product decided against a humidifier list, and the field was changed to a text one so a member's legacy entry can be shown as they wrote it (ADR-0012).
 _Avoid_: known field, our field, target field
 
 **Refused URL**:

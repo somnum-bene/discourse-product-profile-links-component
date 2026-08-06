@@ -6,4 +6,14 @@ They are excluded anyway, and so is any product Shopify reports as archived, unp
 
 The consequence to be clear about: a user holding a discontinued value gets no Profile Link, silently. That is an Unmatched Value, which this component deliberately does not treat as a Config Problem, so nothing appears in the console unless Debug Mode is on. This is correct here only because something outside the component is expected to render that text — if that plan changes, the catch-all Mappings are the way back, and adding them is a catalogue refresh rather than a code change.
 
-`Humidifier` is excluded for a different reason and should not be confused with this one. Its tab in the spreadsheet has no `Suggested Title` or `Suggested URL` columns at all — the curation pass was never done for it — and all five of its legacy rows are discontinued devices, two of which point at a search results page. So there is no Humidifier list to ship, at any quality bar, and parsing harder will not produce one. It waits on a product-supplied list.
+`Humidifier` is excluded for a different reason and should not be confused with this one. Its tab in the spreadsheet has no `Suggested Title` or `Suggested URL` columns at all — the curation pass was never done for it — and all five of its legacy rows are discontinued devices, two of which point at a search results page. So there is no Humidifier list to ship, at any quality bar, and parsing harder will not produce one.
+
+## Humidifier is now decided, not deferred (2026-08-05)
+
+This ADR left `Humidifier` waiting on a product-supplied list. Product's answer is that there will not be one: humidifiers are out of scope for Profile Links entirely.
+
+The field itself stays, and its type was changed from `dropdown` to `text` on the instance. It is kept so that a humidifier a member entered on the legacy bulletin board can be carried across and displayed as they wrote it, which is a record of what they own rather than a link to buy one. As a text field it offers no options, so the two ways of being empty that ADR-0015 forced us to live with stop mattering here: the four hand-entered options are still stored against the field and are simply no longer offered.
+
+`Humidifier` therefore remains a Managed Field with no Mappings — reported by the apply step rather than forgotten, which is what the allowlist derived from `SHEET_TABS` exists for. A value held in it is an Unmatched Value by design and will never resolve a Profile Link.
+
+One consequence is unhandled and worth stating rather than discovering later: the apply step's warning for this field still describes it as a dropdown that "offers 4 options" and warns about "every User who picks one". That was true when it was written and is now wrong in its particulars, because a text field offers nothing. The warning is inaccurate, not dangerous — it reports on a field the plan never writes to.
