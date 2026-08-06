@@ -1,0 +1,442 @@
+// The catalogue transform. Every decision about which curated product titles
+// ship, what they link to, why the rest were left out, and the order a user
+// scrolls them in happens here — and nowhere else. It is pure: no network, no
+// filesystem, no clock, no environment. The commands around it fetch, read,
+// write and print, so there is nowhere in them for a decision to hide.
+//
+// The rules it applies are recorded in docs/adr/0009 (Shopify is the authority
+// for product URLs), 0010 (the sheet defines membership, Shopify defines
+// validity) and 0012 (discontinued equipment is out of scope).
+
+/**
+ * One row of a Sheet Export, reduced to the two columns that carry meaning.
+ * The rest of the spreadsheet describes the legacy bulletin board it was
+ * written for.
+ */
+export interface SheetRow {
+  /** The Custom User Field this tab maps to — `Machine`, `Mask`, `Humidifier`. */
+  userFieldName: string;
+  /** The `Suggested Title` column, as the sheet holds it. */
+  suggestedTitle: string;
+  /** The `Suggested URL` column. Read for its slug only, never carried through. */
+  suggestedUrl: string;
+}
+
+/**
+ * Shopify's product statuses. Only `ACTIVE` is admissible.
+ *
+ * `UNLISTED` is the one to know about: it means the product is buyable by direct
+ * link but hidden from storefront collections and search, and the cpap.com
+ * catalogue currently has two of them under the Machines division. A profile
+ * link to an unlisted product would resolve, so treating it as inadmissible is a
+ * choice — an unlisted product has been deliberately taken out of the catalogue,
+ * and every exclusion is reported with its status, so a reviewer who disagrees
+ * can see exactly which titles it cost.
+ */
+export type ProductStatus = "ACTIVE" | "ARCHIVED" | "DRAFT" | "UNLISTED";
+
+/** The slice of a Shopify product this transform judges. */
+export interface ProductRecord {
+  handle: string;
+  title: string;
+  status: ProductStatus;
+  tags: string[];
+  /**
+   * Shopify's canonical storefront URL, already `https://www.cpap.com/…`. Null
+   * when the product was never published to the Online Store sales channel,
+   * which is a different fact from being archived and has to stay distinct.
+   */
+  onlineStoreUrl: string | null;
+}
+
+/** A Suggested Title joined to a live, linkable product. */
+export interface ResolvedProduct {
+  userFieldName: string;
+  /** The Suggested Title verbatim — never Shopify's product title (ADR-0010). */
+  value: string;
+  handle: string;
+  status: ProductStatus;
+  /** Shopify's `onlineStoreUrl`, never a rewritten spreadsheet URL (ADR-0009). */
+  url: string;
+}
+
+/**
+ * Why a Suggested Title did not make the catalogue. Each value is a separate
+ * fact someone can act on, which is the reason they are not collapsed into one
+ * "failed" outcome — an unpublished product is a merchandising job, a missing
+ * handle is a data job, and a legacy catch-all is neither.
+ */
+export type ExclusionReason =
+  /** The row carries no Suggested Title at all. */
+  | "blank-title"
+  /** The title ends in ` (Discontinued)` — legacy bookkeeping, not a product. */
+  | "discontinued-suffix"
+  /** Neither the Suggested URL's slug nor the title found a product. */
+  | "no-matching-product"
+  /** The title matched more than one product, so no single answer is safe. */
+  | "ambiguous-title-match"
+  /** Shopify reports the product as anything other than `ACTIVE`. */
+  | "not-active"
+  /** The product is live but was never published to the Online Store. */
+  | "unpublished"
+  /** Shopify carries the authoritative `Discontinued` tag on the product. */
+  | "discontinued-tag";
+
+/** A Suggested Title left out of the catalogue, with the reason it was. */
+export interface ExcludedProduct {
+  userFieldName: string;
+  value: string;
+  /**
+   * The product handle involved — the one Shopify matched, or the one the join
+   * looked for, or empty when the Suggested URL named none.
+   */
+  handle: string;
+  reason: ExclusionReason;
+  /** Every fact behind the reason, so precedence between them loses nothing. */
+  detail: string;
+}
+
+export interface CatalogueInput {
+  sheetRows: SheetRow[];
+  products: ProductRecord[];
+}
+
+export interface CatalogueResult {
+  catalogue: ResolvedProduct[];
+  exclusions: ExcludedProduct[];
+}
+
+/** One entry of the `profile_link_fields` setting value. */
+export interface FieldMapping {
+  user_field_name: string;
+  mappings: { value: string; url: string }[];
+}
+
+/** The Dropdown Options one Custom User Field should offer. */
+export interface FieldOptions {
+  user_field_name: string;
+  options: string[];
+}
+
+const DISCONTINUED_SUFFIX = " (discontinued)";
+const DISCONTINUED_TAG = "discontinued";
+const ADMISSIBLE_STATUS: ProductStatus = "ACTIVE";
+
+/**
+ * Titles are compared case-insensitively and with runs of whitespace collapsed,
+ * because two Dropdown Options differing only in case or spacing are a defect
+ * rather than two products — the test instance's hand-entered `DreamStation` /
+ * `Dreamstation` pair is what that looks like in practice.
+ *
+ * Exported because the Catalogue Refresh's review document counts distinct
+ * Suggested Titles per field, and a report that disagreed with the transform
+ * about which two titles are the same title would be worse than no report.
+ */
+export function normalizeTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * The product handle a Suggested URL identifies, or an empty string when it
+ * identifies none. Only a `/products/<handle>` path counts: some Suggested URLs
+ * point at a collection page and one points at a search results page, and
+ * inventing a handle out of either is how a confident wrong answer gets shipped
+ * (ADR-0009). Those rows fall through to the title match instead.
+ *
+ * Exported because the Catalogue Refresh has to ask Shopify about exactly the
+ * handles this join will look for. If the command worked out the handles some
+ * other way it could fetch a product the transform never consults, or miss one
+ * it does.
+ */
+export function handleFromSuggestedUrl(suggestedUrl: string): string {
+  const match = /\/products\/([^/?#]+)/.exec(suggestedUrl);
+
+  return match ? match[1] : "";
+}
+
+function isDiscontinued(product: ProductRecord): boolean {
+  return product.tags.some(
+    (tag) => tag.trim().toLowerCase() === DISCONTINUED_TAG
+  );
+}
+
+/**
+ * Sorts by title the way a person reads a dropdown: case-insensitively, so
+ * `AirFit` and `airFit` sit together instead of in two blocks, and falling back
+ * to code point order so the result never depends on which two strings were
+ * compared first. `localeCompare` is deliberately not used — its answer varies
+ * with the host's locale and ICU build, and the committed catalogue has to be
+ * byte-identical on every machine that regenerates it.
+ */
+function compareValues(a: string, b: string): number {
+  const loweredA = a.toLowerCase();
+  const loweredB = b.toLowerCase();
+
+  if (loweredA !== loweredB) {
+    return loweredA < loweredB ? -1 : 1;
+  }
+
+  if (a === b) {
+    return 0;
+  }
+
+  return a < b ? -1 : 1;
+}
+
+/**
+ * Turns Sheet Exports and Shopify products into the Resolved Product Catalogue,
+ * plus the Excluded Products that did not make it and why.
+ *
+ * The sheet decides membership and Shopify decides validity (ADR-0010), so a
+ * title Shopify never heard of is reported rather than dropped, and a product
+ * Shopify carries that the sheet does not name is simply not in scope.
+ */
+export function buildCatalogue({
+  sheetRows,
+  products,
+}: CatalogueInput): CatalogueResult {
+  const byHandle = new Map<string, ProductRecord>();
+  const byTitle = new Map<string, ProductRecord[]>();
+
+  for (const product of products) {
+    if (!byHandle.has(product.handle)) {
+      byHandle.set(product.handle, product);
+    }
+
+    const key = normalizeTitle(product.title);
+    const sameTitle = byTitle.get(key);
+
+    if (sameTitle) {
+      sameTitle.push(product);
+    } else {
+      byTitle.set(key, [product]);
+    }
+  }
+
+  const catalogue: ResolvedProduct[] = [];
+  const exclusions: ExcludedProduct[] = [];
+  const fieldOrder: string[] = [];
+  const seen = new Set<string>();
+
+  for (const row of sheetRows) {
+    const userFieldName = row.userFieldName;
+
+    if (!fieldOrder.includes(userFieldName)) {
+      fieldOrder.push(userFieldName);
+    }
+
+    // Verbatim apart from surrounding whitespace, because resolution is an
+    // exact trimmed-string match against what the user selected.
+    const value = row.suggestedTitle.trim();
+
+    // The spreadsheet is a legacy migration map, so it names each product once
+    // per legacy value it replaced — forty-eight rows for four titles in one
+    // case. First occurrence wins; title and URL are 1:1 across the source.
+    // The separator is a NUL rather than a space or a slash: it cannot occur
+    // in a field name or a title, so no two different pairs can collide on one
+    // key. It is written as an escape because a literal NUL byte in the source
+    // makes git treat the whole file as binary and stop showing its diffs.
+    const key = `${userFieldName}\u0000${normalizeTitle(value)}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+
+    if (!value) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: "",
+        reason: "blank-title",
+        detail: "the row has no Suggested Title",
+      });
+      continue;
+    }
+
+    if (normalizeTitle(value).endsWith(DISCONTINUED_SUFFIX)) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: handleFromSuggestedUrl(row.suggestedUrl),
+        reason: "discontinued-suffix",
+        detail:
+          "the Suggested Title is a legacy catch-all for equipment with no " +
+          "current equivalent, and links to a category page rather than a " +
+          "product (ADR-0012)",
+      });
+      continue;
+    }
+
+    const wantedHandle = handleFromSuggestedUrl(row.suggestedUrl);
+    let product = wantedHandle ? byHandle.get(wantedHandle) : undefined;
+
+    if (!product) {
+      const candidates = byTitle.get(normalizeTitle(value)) ?? [];
+
+      if (candidates.length === 1) {
+        product = candidates[0];
+      } else if (candidates.length > 1) {
+        exclusions.push({
+          userFieldName,
+          value,
+          handle: wantedHandle,
+          reason: "ambiguous-title-match",
+          detail: `the Suggested Title matches ${candidates.length} products: ${candidates
+            .map((candidate) => candidate.handle)
+            .join(", ")}`,
+        });
+        continue;
+      }
+    }
+
+    if (!product) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: wantedHandle,
+        reason: "no-matching-product",
+        detail: wantedHandle
+          ? `no product has the handle "${wantedHandle}", and none is titled "${value}"`
+          : `the Suggested URL names no product, and no product is titled "${value}"`,
+      });
+      continue;
+    }
+
+    // Every fact Shopify gave, whichever one the reason names. A product can be
+    // archived and tagged and unpublished at once — `Morf Nasal Mask` is two of
+    // the three — and reporting only the first would make the exclusion list
+    // less useful than the API response it came from.
+    const facts = [`status ${product.status}`];
+
+    if (isDiscontinued(product)) {
+      facts.push("tagged Discontinued");
+    }
+
+    if (!product.onlineStoreUrl) {
+      facts.push("not published to the Online Store");
+    }
+
+    const detail = facts.join("; ");
+
+    // Precedence runs from the most fundamental fact outward: a product that is
+    // not live cannot be published, and one that is not published cannot be
+    // linked. `detail` carries the rest either way.
+    if (product.status !== ADMISSIBLE_STATUS) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: product.handle,
+        reason: "not-active",
+        detail,
+      });
+      continue;
+    }
+
+    if (!product.onlineStoreUrl) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: product.handle,
+        reason: "unpublished",
+        detail,
+      });
+      continue;
+    }
+
+    if (isDiscontinued(product)) {
+      exclusions.push({
+        userFieldName,
+        value,
+        handle: product.handle,
+        reason: "discontinued-tag",
+        detail,
+      });
+      continue;
+    }
+
+    catalogue.push({
+      userFieldName,
+      value,
+      handle: product.handle,
+      status: product.status,
+      url: product.onlineStoreUrl,
+    });
+  }
+
+  // Order is decided here rather than left to fall out of a serialiser: it is
+  // what a user scrolls, and a structure whose order is incidental reshuffles
+  // itself whenever the spreadsheet is edited. Fields keep the order the sheet
+  // presented them in; titles within a field are alphabetical.
+  const fieldRank = new Map(fieldOrder.map((name, index) => [name, index]));
+  const byFieldThenValue = (
+    a: { userFieldName: string; value: string },
+    b: { userFieldName: string; value: string }
+  ): number =>
+    (fieldRank.get(a.userFieldName) ?? 0) -
+      (fieldRank.get(b.userFieldName) ?? 0) || compareValues(a.value, b.value);
+
+  catalogue.sort(byFieldThenValue);
+  exclusions.sort(byFieldThenValue);
+
+  return { catalogue, exclusions };
+}
+
+function groupByField(
+  catalogue: ResolvedProduct[]
+): { userFieldName: string; entries: ResolvedProduct[] }[] {
+  const groups: { userFieldName: string; entries: ResolvedProduct[] }[] = [];
+
+  for (const entry of catalogue) {
+    const group = groups.find((g) => g.userFieldName === entry.userFieldName);
+
+    if (group) {
+      group.entries.push(entry);
+    } else {
+      groups.push({ userFieldName: entry.userFieldName, entries: [entry] });
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * The value of the `profile_link_fields` setting, as a data structure rather
+ * than YAML text — the serialiser stays outside the tested surface.
+ *
+ * A Custom User Field with no Resolved Products behind it produces no entry at
+ * all. An entry with an empty `mappings` list is a Config Problem, so shipping
+ * one would be worse than shipping nothing: `Humidifier` is in exactly that
+ * state and is meant to stay absent (ADR-0012).
+ */
+export function renderFieldMappings(
+  catalogue: ResolvedProduct[]
+): FieldMapping[] {
+  return groupByField(catalogue).map((group) => ({
+    user_field_name: group.userFieldName,
+    mappings: group.entries.map((entry) => ({
+      value: entry.value,
+      url: entry.url,
+    })),
+  }));
+}
+
+/**
+ * The Dropdown Options each Custom User Field should offer — the second sink,
+ * pushed to a Discourse instance rather than committed (ADR-0011).
+ *
+ * These come from the same catalogue as the Mappings on purpose. A Dropdown
+ * Option with no Mapping behind it is an Unmatched Value: the user selects
+ * their machine, no Profile Link appears, and nothing is logged unless Debug
+ * Mode is on. Deriving the two lists separately would make that a matter of
+ * discipline.
+ */
+export function dropdownOptionsFor(
+  catalogue: ResolvedProduct[]
+): FieldOptions[] {
+  return groupByField(catalogue).map((group) => ({
+    user_field_name: group.userFieldName,
+    options: group.entries.map((entry) => entry.value),
+  }));
+}

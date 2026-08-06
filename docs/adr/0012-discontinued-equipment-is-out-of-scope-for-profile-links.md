@@ -1,0 +1,19 @@
+# Discontinued equipment is out of scope for Profile Links
+
+Forty-eight rows of the source spreadsheet carry a `Suggested Title` ending in ` (Discontinued)` — four distinct titles, each pointing at a category page rather than a product: `CPAP Machines` at `/collections/cpap-machines`, and the equivalents for masks. They exist because the sheet is a legacy migration map, and every legacy device with no current equivalent had to land somewhere. Read as a catch-all, they are the fallback for every user whose equipment no longer exists.
+
+They are excluded anyway, and so is any product Shopify reports as archived, unpublished, or tagged `Discontinued`. Product's position is that discontinued equipment will surface as static text in a separate user field or in the native Discourse signature, not as a Profile Link — and a Profile Link to a category page is a poor thing on its own terms. It looks like a product link and is not one, and the suffix would render verbatim in a user card, telling users their equipment is discontinued in a context where nobody asked. The design target is a new user selecting a product cpap.com currently sells.
+
+The consequence to be clear about: a user holding a discontinued value gets no Profile Link, silently. That is an Unmatched Value, which this component deliberately does not treat as a Config Problem, so nothing appears in the console unless Debug Mode is on. This is correct here only because something outside the component is expected to render that text — if that plan changes, the catch-all Mappings are the way back, and adding them is a catalogue refresh rather than a code change.
+
+`Humidifier` is excluded for a different reason and should not be confused with this one. Its tab in the spreadsheet has no `Suggested Title` or `Suggested URL` columns at all — the curation pass was never done for it — and all five of its legacy rows are discontinued devices, two of which point at a search results page. So there is no Humidifier list to ship, at any quality bar, and parsing harder will not produce one.
+
+## Humidifier is now decided, not deferred (2026-08-05)
+
+This ADR left `Humidifier` waiting on a product-supplied list. Product's answer is that there will not be one: humidifiers are out of scope for Profile Links entirely.
+
+The field itself stays, and its type was changed from `dropdown` to `text` on the instance. It is kept so that a humidifier a member entered on the legacy bulletin board can be carried across and displayed as they wrote it, which is a record of what they own rather than a link to buy one. As a text field it offers no options, so the two ways of being empty that ADR-0015 forced us to live with stop mattering here: the four hand-entered options are still stored against the field and are simply no longer offered.
+
+`Humidifier` therefore remains a Managed Field with no Mappings — reported by the apply step rather than forgotten, which is what the allowlist derived from `SHEET_TABS` exists for. A value held in it is an Unmatched Value by design and will never resolve a Profile Link.
+
+One consequence is unhandled and worth stating rather than discovering later: the apply step's warning for this field still describes it as a dropdown that "offers 4 options" and warns about "every User who picks one". That was true when it was written and is now wrong in its particulars, because a text field offers nothing. The warning is inaccurate, not dangerous — it reports on a field the plan never writes to.

@@ -1,0 +1,56 @@
+# The pre-commit hooks run these same gates, but they are local, per-clone, and
+# bypassable with --no-verify. This workflow is the copy that cannot be skipped.
+#
+# It deliberately calls the repository's own scripts rather than restating them,
+# so there is one definition of "lint" and one of "test" to keep in step.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A force-push should cancel the run it superseded rather than race it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: lint and unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from package.json's packageManager field.
+      - uses: pnpm/action-setup@v4
+
+      # .nvmrc, not the engines floor. engines says node >= 22 and @types/node
+      # is pinned to 22 so a script cannot quietly depend on a newer builtin,
+      # but the version CI actually runs should be the one developers run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile fails rather than resolving, so a dependency added
+      # without committing the updated lockfile is caught here.
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      - run: pnpm test
+
+      # The drift gate. `settings.yml` ships the catalogue as the setting's
+      # default (ADR-0008), so the committed file and
+      # data/resolved-products.csv have to agree — a hand edit to the generated
+      # region is exactly how they stop agreeing, and it looks like ordinary
+      # configuration in a diff. The build needs no credentials, which is what
+      # lets this run here at all.
+      - name: settings.yml matches the catalogue
+        run: pnpm build:settings --check

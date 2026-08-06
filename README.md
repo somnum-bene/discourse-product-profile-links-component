@@ -16,7 +16,7 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 | 🚫 **No duplicate rows** | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
 | ♾️ **No ceiling** | Map as many Custom User Fields as you like. The old ten-slot limit is gone. |
-| 🧪 **Actually tested** | 82 unit tests over the pure modules, runnable in a second with no Discourse instance. |
+| 🧪 **Actually tested** | 457 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance. |
 
 ---
 
@@ -26,12 +26,22 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 
 The Field Mappings, edited in Discourse's structured settings editor. Each **Field Mapping** names one Custom User Field and nests the **Mappings** that turn its values into Profile Links:
 
-- **`user_field_name`** — the field's name, exactly as it appears in `/admin/customize/user_fields`. **Case-sensitive.**
+- **`user_field_name`** — the field's name, exactly as it appears in `/admin/config/user_fields`. **Case-sensitive.**
 - **`mappings`** — one or more value/URL pairs:
   - **`value`** — must match the member's field value exactly.
   - **`url`** — where the Profile Link points. Discourse validates it as you type.
 
 A value that matches no Mapping renders nothing. An empty configuration is valid — it just renders nothing at all.
+
+> ### ⚠️ Don't edit this setting on a live site
+>
+> The cpap.com Field Mappings ship as this setting's **default**, generated from the product catalogue and committed ([ADR-0008](docs/adr/0008-the-catalogue-ships-as-the-settings-default.md)). Discourse stores an administrator's edit as a **Setting Override**, and once a site has one, **a shipped default never reaches that setting again — silently, and for good.**
+>
+> So editing Mappings through the theme settings UI freezes that site's catalogue at the moment you click save. Nothing breaks and nothing is logged; the site simply stops receiving product changes while every other site carries on getting them. **Opening the editor and saving it unchanged does this too** — that is how the test instance acquired one ([ADR-0019](docs/adr/0019-an-empty-override-is-an-accident-and-only-a-migration-can-remove-it.md)).
+>
+> **And there is no undo.** Discourse exposes no route that deletes a Setting Override — the admin API only writes one. Removing it takes a settings migration, or deleting and reinstalling the component. `migrations/settings/0002` removes an *empty* one, because that can only be an accident; a populated one is somebody's configuration and is kept.
+>
+> Change `data/resolved-products.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run — though only once the override differs from what the repository shipped, since nothing readable from outside distinguishes "no override" from "an override that agrees".
 
 ### `profile_link_debug_mode`
 
@@ -51,6 +61,38 @@ Two things worth knowing afterwards:
 - A field name that never had any CSV mappings (including one past the tenth slot, which had nowhere to put them) is **carried over empty and reported**. It resolved no Profile Links before either; keeping it means your configuration isn't silently thinned out.
 
 So: check the console once after updating. See [ADR-0006](docs/adr/0006-a-settings-migration-replaces-uninstall-and-re-add.md).
+
+---
+
+## 🗂 The cpap.com product catalogue
+
+The Mappings and the Custom User Fields' **Dropdown Options** are generated from one committed file, `data/resolved-products.csv`, because a Dropdown Option with no matching Mapping value resolves nothing and logs nothing ([ADR-0011](docs/adr/0011-dropdown-options-are-a-second-sink-applied-per-site.md)). They land in **two different places**, though: Mappings ship in `settings.yml`, and Dropdown Options are Discourse site data that no commit can reach — so the last step runs once per instance.
+
+| Command | What it does | Credentials it needs |
+|---|---|---|
+| `pnpm export:sheet` | re-exports the three allowlisted migration-spreadsheet tabs to `data/user_*.csv` | `SHEET_WORKBOOK_ID` |
+| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from those exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
+| `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
+| `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree | **none** |
+| `pnpm verify:catalogue` | asks cpap.com whether all 55 URLs serve a page, one request at a time | **none** — it only asks for public product pages |
+| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
+
+The two that need credentials read them from an ignored `.env`; the three that need none cannot read it at all, which is what lets them run in CI and on a shared machine. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
+
+`pnpm verify:catalogue` is the one check here that is **not** a hook and not a CI step, and that is deliberate — it sends 55 requests to a storefront that rate-limits, and a commit that cannot be made while cpap.com is busy would be a gate failing for reasons nobody here controls ([ADR-0018](docs/adr/0018-reachability-is-a-deliberate-command-and-never-a-gate.md)). Run it before an apply. It exits non-zero on anything unshippable, and it reports four outcomes rather than pass/fail:
+
+- **verified** — Shopify admits the product *and* the URL answers 2XX from a page that is still that product.
+- **failed** — Shopify admits it and cpap.com did not serve it.
+- **unresolved** — nothing ever answered (429, 503, or no response). Not a pass and not a failure; it blocks, and you run the pass again.
+- **excluded** — Shopify does not admit it, so it was never requested. The catalogue should not contain one at all.
+
+> ⚠️ **A 2XX is not proof the page exists.** cpap.com serves a product handle it no longer has by redirecting to its **homepage**, with a 200 — so `/products/airsense-11-autoset` "succeeds" while a member clicking it lands on the front page. The pass looks at where the response came from, not only at the status code, and reports that as failed. See [ADR-0017](docs/adr/0017-a-2xx-is-not-proof-that-a-product-page-exists.md).
+
+Two facts about the Discourse admin API that cost time to rediscover:
+
+- On Discourse 2026.8 the field definitions live at **`/admin/config/user_fields.json`**, and they are written with `PUT /admin/config/user_fields/:id.json`. The older `/admin/customize/user_fields` path returns **404** — for the JSON *and* for the admin page, so a bookmark or an older tutorial will send you to a dead URL.
+- **A `200` from the write route does not mean the write landed.** An empty option list is discarded, duplicates are silently merged, and the response is a cheerful copy of the field either way. The readback is the only thing that reports whether an apply happened — [ADR-0014](docs/adr/0014-a-write-is-confirmed-by-reading-it-back.md).
 
 ---
 
@@ -107,6 +149,8 @@ pre-commit install   # 👈 don't skip this
 | `pnpm test` | unit tests, once |
 | `pnpm test:watch` | unit tests, on change |
 
+The catalogue commands — `export:sheet`, `refresh:catalogue`, `build:settings`, `verify:catalogue`, `apply:catalogue` — are in [their own section above](#-the-cpapcom-product-catalogue), with the credentials each one needs.
+
 ### 🪝 Git hooks
 
 `pre-commit` runs the same gates before a commit exists, rather than finding out later. The whole suite takes a couple of seconds, so there's no fast/slow split — everything runs every time:
@@ -116,6 +160,7 @@ pre-commit install   # 👈 don't skip this
 - 🚧 refuses a commit directly to `main`
 - 🎨 eslint, prettier, stylelint on the staged files
 - 🧠 Glint type-check and the full unit suite on the project
+- 🧾 `settings.yml`'s generated `profile_link_fields` default still matches the product catalogue it was built from
 
 > ⚠️ Note the hook runs eslint **without `--cache`**, unlike the `lint:js` script. A cached run once reported this branch clean while it held nineteen real errors. A gate that can do that is worse than no gate.
 
@@ -138,7 +183,7 @@ There are no rendering tests yet, which is the main reason `lib/` carries as muc
 ## 📚 Going deeper
 
 - **[`CONTEXT.md`](CONTEXT.md)** — the domain glossary. Start here.
-- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong.
+- **[`docs/adr/`](docs/adr/)** — the decisions, and why. Settings shape, the config adapter, where tests live, why the surfaces stay separate, how duplicate rows are hidden, the settings migration, where retries belong — and how the catalogue pipeline decides what ships, what it may overwrite, what it refuses to touch, and how a generated value is checked against a rule that only Discourse enforces.
 - **[`AGENTS.md`](AGENTS.md)** — issue tracker, triage labels and domain-doc conventions for agent workflows.
 
 ---
