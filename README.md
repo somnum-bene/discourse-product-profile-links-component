@@ -37,9 +37,11 @@ A value that matches no Mapping renders nothing. An empty configuration is valid
 >
 > The cpap.com Field Mappings ship as this setting's **default**, generated from the product catalogue and committed ([ADR-0008](docs/adr/0008-the-catalogue-ships-as-the-settings-default.md)). Discourse stores an administrator's edit as a **Setting Override**, and once a site has one, **a shipped default never reaches that setting again — silently, and for good.**
 >
-> So editing Mappings through the theme settings UI freezes that site's catalogue at the moment you click save. Nothing breaks and nothing is logged; the site simply stops receiving product changes while every other site carries on getting them. There is no undo beyond resetting the setting to its default, and by then you will have lost whatever you typed.
+> So editing Mappings through the theme settings UI freezes that site's catalogue at the moment you click save. Nothing breaks and nothing is logged; the site simply stops receiving product changes while every other site carries on getting them. **Opening the editor and saving it unchanged does this too** — that is how the test instance acquired one ([ADR-0019](docs/adr/0019-an-empty-override-is-an-accident-and-only-a-migration-can-remove-it.md)).
 >
-> Change `data/resolved-products.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run.
+> **And there is no undo.** Discourse exposes no route that deletes a Setting Override — the admin API only writes one. Removing it takes a settings migration, or deleting and reinstalling the component. `migrations/settings/0002` removes an *empty* one, because that can only be an accident; a populated one is somebody's configuration and is kept.
+>
+> Change `data/resolved-products.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run — though only once the override differs from what the repository shipped, since nothing readable from outside distinguishes "no override" from "an override that agrees".
 
 ### `profile_link_debug_mode`
 

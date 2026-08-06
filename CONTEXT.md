@@ -109,8 +109,12 @@ A Mapping URL Discourse's schema will not accept, judged by the `validations: ur
 _Avoid_: invalid URL, bad link, validation error
 
 **Setting Override**:
-A setting value stored against one site because an Administrator edited it there. Discourse then stops delivering that setting's shipped default to that site — silently, permanently, and invisibly from the outside, since the site keeps working. An override on `profile_link_fields` freezes that site's Field Mappings at the moment of the edit (ADR-0008), which is why the ownership warning is in the setting's own `description`. A Catalogue Apply detects one by comparing the live value against the default.
+A setting value stored against one site because an Administrator edited it there — including saving the editor unchanged. Discourse then stops delivering that setting's shipped default to that site — silently, permanently, and invisibly from the outside, since the site keeps working. An override on `profile_link_fields` freezes that site's Field Mappings at the moment of the edit (ADR-0008), which is why the ownership warning is in the setting's own `description`. Discourse offers no route that removes one; only a Settings Migration or reinstalling the component reaches it (ADR-0019). A Catalogue Apply detects one by comparing the live value against the default, which cannot see an override that agrees with the default.
 _Avoid_: local change, customisation, site setting
+
+**Empty Override**:
+A Setting Override on `profile_link_fields` holding no Field Mappings. Renders nothing on every Link Surface and reports no Config Problem, because linking nothing is a legitimate configuration — so it is indistinguishable from a working site until someone asks why there are no Profile Links. Treated as an accident rather than a preference and removed by `migrations/settings/0002`, on the grounds that the shipped default was itself empty until the catalogue landed, so setting it deliberately was a no-op nobody had reason to perform (ADR-0019).
+_Avoid_: blank setting, empty config, unset
 
 **Readback**:
 Rereading a Discourse instance's Dropdown Options after a Catalogue Apply has written them, and comparing them against the checked-out catalogue. Not a precaution: the update route answers `200 OK` to a write it discards, so the Readback is the only thing that reports whether an apply happened (ADR-0014).
