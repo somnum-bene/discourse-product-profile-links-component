@@ -8,11 +8,21 @@
   display: none;
 }
 
+// Core's metadata outlet lays its children out in a row, so more than one
+// Profile Link ended up side by side on the user card. Each Link is its own
+// row, the way the Profile page and the Post Footer already show them.
 .user-card-metadata-outlet.custom-profile-links-links {
   padding: 3px 5px;
   display: flex;
+  flex-direction: column;
   border-radius: var(--d-border-radius);
-  align-items: center;
+  align-items: flex-start;
+
+  // Match the weight core gives a Custom User Field's label on the card, so a
+  // replaced row does not read differently from one core still renders.
+  .profile-link-field-name {
+    font-weight: bold;
+  }
 }
 
 .custom-profile-links-post {
