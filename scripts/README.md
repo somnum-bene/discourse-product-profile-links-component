@@ -335,6 +335,32 @@ lint: `@discourse/lint-configs` routes `.mts` to `ember-eslint-parser`, which
 hands it to Babel without the TypeScript plugin, so the first type annotation is
 a parse error.
 
+## What the lint gates actually cover
+
+`pnpm lint` is four gates, and three of them decide for themselves which files
+they look at: `lint:js` (eslint), `lint:prettier` and `lint:css` (stylelint) take
+globs, while `lint:types` follows `tsconfig.json`'s `include` instead. The
+pre-commit hooks run the same tools over the same paths, expressed as `files:`
+regexes rather than globs — one intention written down twice, which is why
+`spec/unit/lint-gates.test.ts` asserts the two stay in step.
+
+The paths are the source directories — `javascripts`, `migrations`, `scripts`,
+`data`, `test`, `spec` — **and the repository root itself**. The root is in
+there because the files deciding how everything else gets linted live beside
+`package.json` rather than inside any of those directories: `.prettierrc.cjs`,
+`eslint.config.mjs`, `stylelint.config.mjs` and `vitest.config.mjs` were checked
+by nothing at all until the gates were widened to reach them. Root coverage is
+one level and no deeper — `[^/]+` in the hooks, an unstarred glob in the
+scripts — and it accepts `.js`, `.mjs` and `.cjs`, which is what a config file
+at that level is written in. A new root config file is picked up by the same
+patterns without anyone editing them; the test discovers the files rather than
+listing them, so it is covered too.
+
+**Markdown is deliberately outside prettier**, and pulling it in is not a
+tidy-up: every tracked `.md` file would reformat, and the prose in them is
+wrapped by hand for reading. A test asserts the exclusion, so a later widening
+cannot take markdown along with it by accident.
+
 ## Where the logic lives
 
 `buildCatalogue`, `settingsWithCatalogue`, `isValidUrl`, `planApply`, the verify

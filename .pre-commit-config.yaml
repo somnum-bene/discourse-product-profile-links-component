@@ -43,17 +43,24 @@ repos:
       # Deliberately no `--cache`, unlike the `lint:js` script. A cached run
       # reported this branch clean while it held nineteen errors; a hook that
       # can do that is worse than no hook.
+      #
+      # The `[^/]+` alternative is the repository root, and it is there because
+      # the files deciding how everything else gets linted — .prettierrc.cjs,
+      # eslint.config.mjs, stylelint.config.mjs, vitest.config.mjs — live
+      # outside every source directory and were checked by nothing at all. The
+      # npm scripts carry the same widening as two extra glob arguments;
+      # spec/unit/lint-gates.test.ts asserts the two stay in step.
       - id: eslint
         name: eslint
         entry: pnpm exec eslint --no-error-on-unmatched-pattern
         language: system
-        files: ^(javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|mjs|cjs|ts|gts|mts|cts)$
+        files: ^((javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|mjs|cjs|ts|gts|mts|cts)|[^/]+\.(js|mjs|cjs))$
 
       - id: prettier
         name: prettier
         entry: pnpm exec prettier --check --no-error-on-unmatched-pattern
         language: system
-        files: ^((javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|ts|gts|mts|cts)|(javascripts|desktop|mobile|common|scss|stylesheets)/.*\.scss)$
+        files: ^((javascripts|migrations|scripts|data|test|spec)/.*\.(js|gjs|mjs|cjs|ts|gts|mts|cts)|(javascripts|desktop|mobile|common|scss|stylesheets)/.*\.scss|[^/]+\.(js|mjs|cjs))$
 
       - id: stylelint
         name: stylelint
