@@ -11,9 +11,18 @@
 // Core's metadata outlet lays its children out in a row, so more than one
 // Profile Link ended up side by side on the user card. Each Link is its own
 // row, the way the Profile page and the Post Footer already show them.
+//
+// That wrapping row is also why the stack claims the whole line. Core's own
+// metadata sits before us on it, and how much of it there is depends on the
+// User: an established account contributes a posted count and a read time and
+// fills the line, so the stack wraps below and reads correctly, while a new
+// account contributes only "Joined 12 mins ago" and leaves room for the stack
+// beside it. Without a full-width basis the layout is decided by whichever
+// stats core happened to render.
 .user-card-metadata-outlet.custom-profile-links-links {
   padding: 0;
   display: flex;
+  flex-basis: 100%;
   flex-direction: column;
   border-radius: var(--d-border-radius);
   align-items: flex-start;
