@@ -494,33 +494,36 @@ describe("renderFieldMappings", () => {
 // the console unless Debug Mode is on. This makes generation-time divergence
 // unshippable. It does not make deployed drift impossible — that is the
 // readback's job (ADR-0011).
+// The relation checked here is that Dropdown Options are a subset of Mapping
+// values, not that the two sinks are identical. ADR-0011's failure mode is a
+// Dropdown Option with no Mapping behind it: a member selects it and no
+// Profile Link appears. The reverse — a Mapping with no Dropdown Option — has
+// no failure mode, because nobody can select a value that is not offered.
+// ADR-0021 depends on that asymmetry, so this assertion must stay a subset
+// check, not equality: a future change that "fixes" it back to equality would
+// fail the moment ADR-0021's kind of Mapping exists.
 function crossSinkMismatches(
   fields: FieldMapping[],
   options: FieldOptions[]
 ): string[] {
   const mismatches: string[] = [];
 
-  if (fields.length !== options.length) {
-    mismatches.push(
-      `${fields.length} Field Mappings against ${options.length} option lists`
-    );
-  }
-
-  for (const field of fields) {
-    const forField = options.find(
-      (entry) => entry.user_field_name === field.user_field_name
+  for (const forField of options) {
+    const field = fields.find(
+      (entry) => entry.user_field_name === forField.user_field_name
     );
 
-    if (!forField) {
-      mismatches.push(`${field.user_field_name} has no Dropdown Options`);
+    if (!field) {
+      mismatches.push(`${forField.user_field_name} has no Field Mappings`);
       continue;
     }
 
-    const values = field.mappings.map((mapping) => mapping.value);
+    const values = new Set(field.mappings.map((mapping) => mapping.value));
+    const orphaned = forField.options.filter((option) => !values.has(option));
 
-    if (values.join("\n") !== forField.options.join("\n")) {
+    if (orphaned.length > 0) {
       mismatches.push(
-        `${field.user_field_name}: [${values.join(", ")}] against [${forField.options.join(", ")}]`
+        `${forField.user_field_name}: [${orphaned.join(", ")}] has no Mapping`
       );
     }
   }
@@ -529,7 +532,7 @@ function crossSinkMismatches(
 }
 
 describe("the cross-sink assertion", () => {
-  it("finds the Mapping values and the Dropdown Options identical, per field", () => {
+  it("finds every Dropdown Option backed by a Mapping value, per field", () => {
     const { catalogue } = build();
 
     expect(
@@ -565,7 +568,26 @@ describe("the cross-sink assertion", () => {
     expect(mismatches[0]).toContain("Machine");
   });
 
-  it("fails when a whole field drifts out of one sink", () => {
+  it("fails when a whole field's Mappings go missing", () => {
+    const { catalogue } = build();
+    const fields = renderFieldMappings(catalogue).filter(
+      (field) => field.user_field_name !== "Mask"
+    );
+
+    const mismatches = crossSinkMismatches(
+      fields,
+      dropdownOptionsFor(catalogue)
+    );
+
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]).toContain("Mask");
+    expect(mismatches[0]).toContain("no Field Mappings");
+  });
+
+  it("passes when a Mapping has no corresponding Dropdown Option", () => {
+    // This is the relaxation the assertion exists to permit: a Collection
+    // Link (ADR-0021) is a Mapping with deliberately no Dropdown Option, and
+    // that must not read as drift.
     const { catalogue } = build();
 
     expect(
@@ -574,8 +596,8 @@ describe("the cross-sink assertion", () => {
         dropdownOptionsFor(catalogue).filter(
           (entry) => entry.user_field_name !== "Mask"
         )
-      ).length
-    ).toBeGreaterThan(0);
+      )
+    ).toEqual([]);
   });
 });
 
