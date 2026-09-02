@@ -8,7 +8,7 @@ The commands and what each one is allowed to touch:
 
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pnpm export:sheet`      | two allowlisted spreadsheet tabs         | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
+| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`                                                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
@@ -22,25 +22,39 @@ it could no longer run in CI.
 
 ## The Sheet Export refuses more than it accepts
 
-`export:sheet` fetches two tabs of a workbook that also holds roughly 124,000
-real usernames and email addresses. This repository is public. Those two facts
-set the design:
+`export:sheet` fetches three tabs. It was written against a workbook that also
+held roughly 124,000 real usernames and email addresses two clicks away, and
+this repository is public. Those two facts set the design, and it keeps them
+now that the workbook is the internally-owned cpap.com Sheet: a guard that only
+runs while the danger is visible is a guard you find out about too late.
 
 - **The workbook id is configuration, not a constant.** It is a public link to
   real customer data, so committing it would publish the link. It lives in
   `.env` as `SHEET_WORKBOOK_ID` and the run aborts without it.
-- **The allowlist is the only way through.** `SHEET_TABS` names the two tabs
-  and, for each, the exact header row and the two columns read from it. A name
-  becomes a URL only via `tabNamed`, which refuses anything unlisted, and the
-  command itself contains no tab name and builds no URL — a test enforces both,
-  because an allowlist you can go around is a convention.
+- **The allowlist is the only way through.** `SHEET_TABS` names the two option
+  tables and, for each, the exact header row and the two columns read from it;
+  `ASSIGNMENT_TABS` names the curation tab and its eleven. A name becomes a URL
+  only via `tabNamed` or `assignmentTabNamed`, each of which refuses anything
+  unlisted, and the command itself contains no tab name and builds no URL — a
+  test enforces both, because an allowlist you can go around is a convention.
 - **Three independent guards, all fail-closed.** The header row must match
   exactly; the row count must stay under a ceiling these tabs are nowhere near
   and the personal-data tabs are far above; no cell may look like an email
   address. Each catches a restructured workbook the other two would miss. A
   surprise stops the run — skipping it is not safe.
-- **Nothing is written until both tabs pass.** A partial run would leave one
+- **Nothing is written until every tab passes.** A partial run would leave one
   refreshed export beside a stale one, which is worse than leaving both.
+
+Two shapes of tab, and deliberately not one. The `user_*` option tables reduce
+to a Suggested Title and a Suggested URL, which is genuinely all they
+contribute. The `collection-assignment` tab is eleven columns of human
+curation that reduce to nothing: `Recommended Collection URL` is a proposal,
+`Override` can replace it, and `Disposition` decides whether either is used.
+Squeezing that into `titleColumn`/`urlColumn` would have to drop columns or lie
+about the two it kept, so `AssignmentTab` sits beside `SheetTab` rather than
+replacing it — the guards are shared, the shape is not. Reading the curation
+tab is all this command does with it: applying an `Override` and refusing an
+`undecided` `Disposition` are the transform's decisions, not the export's.
 
 `data/user_humidifier.csv` is retired rather than deleted (ADR-0022). `Humidifier`
 was dropped from `SHEET_TABS` and this command no longer fetches or writes it,

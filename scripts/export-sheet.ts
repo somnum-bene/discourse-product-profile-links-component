@@ -1,4 +1,4 @@
-// Fetch the `user_*` tabs of the migration spreadsheet and commit them
+// Fetch the exported tabs of the migration spreadsheet and commit them
 // verbatim as the Sheet Exports. Run it with `pnpm export:sheet`.
 //
 // The shell is deliberately thin: it fetches, validates, and writes. Every
@@ -11,9 +11,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import {
+  EXPORT_TABS,
   exportFileName,
+  isSheetTab,
   readSheetTab,
-  SHEET_TABS,
   sheetCsvUrl,
   SheetExportError,
   sheetRowsFrom,
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
   // half way through would leave `data/` holding one refreshed export and a
   // stale one, which is worse than leaving both alone.
   const fetched = [];
-  for (const tab of SHEET_TABS) {
+  for (const tab of EXPORT_TABS) {
     const response = await fetch(sheetCsvUrl(workbookId, tab));
     if (!response.ok) {
       throw new SheetExportError(
@@ -49,7 +50,10 @@ async function main(): Promise<void> {
     // is worth more than the saving.
     const csvText = await response.text();
     const dataRows = readSheetTab(tab, csvText);
-    const sheetRows = sheetRowsFrom(tab, csvText);
+    // Only the option tables feed the catalogue. The curation tab is fetched,
+    // validated and committed on the same terms and contributes no rows, which
+    // is a fact about the tab rather than a special case for it.
+    const sheetRows = isSheetTab(tab) ? sheetRowsFrom(tab, csvText) : [];
     fetched.push({ tab, csvText, dataRows, sheetRows });
   }
 

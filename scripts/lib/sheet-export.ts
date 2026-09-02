@@ -1,11 +1,17 @@
-// The Sheet Exports are provenance: the `user_*` tabs of the migration
+// The Sheet Exports are provenance: the exported tabs of the migration
 // spreadsheet, committed exactly as the sheet returned them, so that a change
 // product made to the spreadsheet shows up in `git diff` separately from a
 // change the transform made. Nothing in the component reads them.
 //
-// The reason this file is careful out of proportion to what it does: the same
-// workbook holds roughly 124,000 real usernames and email addresses on tabs
-// two clicks away from these two. Every guard below is fail-closed, because
+// Two shapes of tab, on purpose. The `user_*` option tables reduce to a
+// Suggested Title and a Suggested URL; the collection-assignment tab is eleven
+// columns of human curation that reduce to nothing. They share the guards and
+// not the shape — see `ExportTab` below.
+//
+// The reason this file is careful out of proportion to what it does: the
+// workbook this command was first written against held roughly 124,000 real
+// usernames and email addresses on tabs two clicks away. Every guard below is
+// fail-closed, because
 // the failure worth protecting against is not "we fetched the wrong tab" — that
 // is loud — but "a tab we recognise by name now holds different data", which is
 // silent. Skipping a surprise is not safe. Stopping is.
@@ -22,14 +28,24 @@ export type { SheetRow };
  */
 export const WORKBOOK_ID_VAR = "SHEET_WORKBOOK_ID";
 
-/** A tab this command is allowed to fetch, and everything it is allowed to read. */
-export interface SheetTab {
-  /** Exact tab name in the workbook. The allowlist is a list of these. */
+/**
+ * Everything the fetch-and-validate path needs to know about a tab, and the
+ * whole of what it is allowed to know: a name to address it by and the header
+ * row it must still have. `sheetCsvUrl`, `exportFileName` and `readSheetTab`
+ * take this and nothing more, so a tab of any shape gets the same three
+ * fail-closed guards without either allowlist having to restate them.
+ */
+export interface ExportTab {
+  /** Exact tab name in the workbook. Every allowlist is a list of these. */
   tab: string;
-  /** The Custom User Field the tab's rows belong to. */
-  userFieldName: string;
   /** The header row, exactly and in order. Anything else aborts the run. */
   headers: readonly string[];
+}
+
+/** An option table: one `user_*` tab, reducible to Suggested Title and URL. */
+export interface SheetTab extends ExportTab {
+  /** The Custom User Field the tab's rows belong to. */
+  userFieldName: string;
   /**
    * Header of the column holding the Suggested Title, or null when the tab has
    * no Suggested columns at all.
@@ -40,9 +56,58 @@ export interface SheetTab {
 }
 
 /**
- * The tab allowlist. Two entries, and no code path that fetches a tab absent
- * from it: the only way to turn a name into a URL is `tabNamed`, which refuses
- * anything not listed here.
+ * A curation table: the collection-assignment tab, which a person edits and
+ * this command only reads. It is deliberately not a `SheetTab`. Its eleven
+ * columns do not reduce to a title and a URL — `Recommended Collection URL` is
+ * a proposal, `Override` can replace it, and `Disposition` decides whether
+ * either is used at all — so squeezing it into `titleColumn`/`urlColumn` would
+ * have to either drop columns or lie about what the two it kept mean. Adding a
+ * second shape alongside the first costs one interface; generalising `SheetTab`
+ * would cost the meaning of the one that already works.
+ */
+export interface AssignmentTab extends ExportTab {
+  /** Header of each column, by the name the rest of the pipeline calls it. */
+  columns: {
+    field: string;
+    legacyPnums: string;
+    legacyText: string;
+    baseNameSource: string;
+    profileLinkValue: string;
+    recommendedCollectionTitle: string;
+    recommendedCollectionUrl: string;
+    confidence: string;
+    rationale: string;
+    override: string;
+    disposition: string;
+  };
+}
+
+/**
+ * One curated row of the collection-assignment tab, named rather than
+ * positional. Values are passed through verbatim and no column is preferred
+ * over another here: whether `override` wins over `recommendedCollectionUrl`,
+ * and whether an `undecided` `disposition` blocks a release, are the
+ * transform's decisions, not this file's. Reading the tab and judging it are
+ * separate jobs for the same reason `sheetRowsFrom` does no trimming.
+ */
+export interface AssignmentRow {
+  field: string;
+  legacyPnums: string;
+  legacyText: string;
+  baseNameSource: string;
+  profileLinkValue: string;
+  recommendedCollectionTitle: string;
+  recommendedCollectionUrl: string;
+  confidence: string;
+  rationale: string;
+  override: string;
+  disposition: string;
+}
+
+/**
+ * The option-table allowlist. Two entries, and no code path that fetches a tab
+ * absent from it: the only way to turn a name into a `SheetTab` is `tabNamed`,
+ * which refuses anything not listed here.
  */
 export const SHEET_TABS: readonly SheetTab[] = [
   {
@@ -62,8 +127,56 @@ export const SHEET_TABS: readonly SheetTab[] = [
 ];
 
 /**
- * A ceiling on how many data rows a `user_*` tab may have. The two of them
- * run to 68 and 149 rows; the tabs holding personal data run to about
+ * The curation-table allowlist, and the second half of the tab allowlist. Its
+ * header row is the schema locked on #26, in column order; a curator who adds,
+ * renames or reorders a column stops the run rather than shifting the meaning
+ * of `Disposition` one place to the left.
+ */
+export const ASSIGNMENT_TABS: readonly AssignmentTab[] = [
+  {
+    tab: "collection-assignment",
+    headers: [
+      "Field",
+      "Legacy PNum(s)",
+      "Legacy Text",
+      "Base Name Source",
+      "Profile Link Value",
+      "Recommended Collection Title",
+      "Recommended Collection URL",
+      "Confidence",
+      "Rationale",
+      "Override",
+      "Disposition",
+    ],
+    columns: {
+      field: "Field",
+      legacyPnums: "Legacy PNum(s)",
+      legacyText: "Legacy Text",
+      baseNameSource: "Base Name Source",
+      profileLinkValue: "Profile Link Value",
+      recommendedCollectionTitle: "Recommended Collection Title",
+      recommendedCollectionUrl: "Recommended Collection URL",
+      confidence: "Confidence",
+      rationale: "Rationale",
+      override: "Override",
+      disposition: "Disposition",
+    },
+  },
+];
+
+/**
+ * Every tab the export command fetches, in the order it writes them. The
+ * command iterates this and never either allowlist directly, so adding a third
+ * shape later is one entry here rather than a second loop over there.
+ */
+export const EXPORT_TABS: readonly ExportTab[] = [
+  ...SHEET_TABS,
+  ...ASSIGNMENT_TABS,
+];
+
+/**
+ * A ceiling on how many data rows an exported tab may have. The three of them
+ * run to 75, 151 and 83 rows; the tabs holding personal data run to about
  * 124,000. A tab that has grown by an order of magnitude under a header row
  * that still matches has been restructured, not edited, and the run stops.
  */
@@ -86,14 +199,41 @@ export class SheetExportError extends Error {
 const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
 
 /**
- * Resolve a tab name against the allowlist. This is the only way to obtain a
- * `SheetTab`, which is the only thing `sheetCsvUrl` accepts, so an unlisted tab
- * cannot be fetched even by mistake.
+ * Resolve a tab name against the option-table allowlist. This is the only way
+ * to obtain a `SheetTab`, and a tab object is the only thing `sheetCsvUrl`
+ * accepts, so an unlisted tab cannot be fetched even by mistake.
  */
 export function tabNamed(name: string): SheetTab {
-  const tab = SHEET_TABS.find((candidate) => candidate.tab === name);
+  return namedIn(SHEET_TABS, name);
+}
+
+/**
+ * The same, for the curation tab. Two lookups rather than one that returns the
+ * wider `ExportTab`: a caller that wants the Suggested columns and a caller
+ * that wants `Disposition` are asking different questions, and a single lookup
+ * would answer both with a type that has neither.
+ */
+export function assignmentTabNamed(name: string): AssignmentTab {
+  return namedIn(ASSIGNMENT_TABS, name);
+}
+
+/**
+ * Whether an exported tab is an option table, and so has rows to contribute to
+ * the catalogue. The command needs to ask because it iterates `EXPORT_TABS`,
+ * which holds both shapes; it identifies by name against the allowlist rather
+ * than by sniffing for a property, so a malformed object cannot answer yes.
+ */
+export function isSheetTab(tab: ExportTab): tab is SheetTab {
+  return SHEET_TABS.some((candidate) => candidate.tab === tab.tab);
+}
+
+function namedIn<T extends ExportTab>(
+  allowlist: readonly T[],
+  name: string
+): T {
+  const tab = allowlist.find((candidate) => candidate.tab === name);
   if (!tab) {
-    const allowed = SHEET_TABS.map((candidate) => candidate.tab).join(", ");
+    const allowed = allowlist.map((candidate) => candidate.tab).join(", ");
     throw new SheetExportError(
       `refusing to fetch tab "${name}": not in the allowlist (${allowed})`
     );
@@ -106,7 +246,7 @@ export function tabNamed(name: string): SheetTab {
  * which matters: the allowlist is written in names, and `export?format=csv`
  * takes only a numeric gid, which the workbook is free to reassign.
  */
-export function sheetCsvUrl(workbookId: string, tab: SheetTab): string {
+export function sheetCsvUrl(workbookId: string, tab: ExportTab): string {
   const params = new URLSearchParams({
     tqx: "out:csv",
     sheet: tab.tab,
@@ -115,7 +255,7 @@ export function sheetCsvUrl(workbookId: string, tab: SheetTab): string {
 }
 
 /** Where a tab's export is committed. Named after the tab so provenance is obvious. */
-export function exportFileName(tab: SheetTab): string {
+export function exportFileName(tab: ExportTab): string {
   return `${tab.tab}.csv`;
 }
 
@@ -197,14 +337,17 @@ export function parseCsv(text: string): string[][] {
 /**
  * Check a fetched tab against everything the allowlist promises about it and
  * return its data rows. Throws on the first thing that does not match, and the
- * caller writes nothing until all three tabs have passed.
+ * caller writes nothing until every tab has passed.
  *
  * Three independent guards, because each catches a restructure the others miss:
  * the header row (a tab now holding different columns), the row count (a tab
  * now holding a different volume of data), and the cell contents (a tab now
  * holding email addresses under a header row that still looks right).
+ *
+ * It takes an `ExportTab`, so the curation tab is held to exactly the same
+ * three as the two option tables it sits beside in the same workbook.
  */
-export function readSheetTab(tab: SheetTab, csvText: string): string[][] {
+export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
   if (csvText.trim() === "") {
     throw new SheetExportError(
       `${tab.tab}: the sheet returned an empty response. The endpoint answers ` +
@@ -229,8 +372,8 @@ export function readSheetTab(tab: SheetTab, csvText: string): string[][] {
   if (dataRows.length > MAX_DATA_ROWS) {
     throw new SheetExportError(
       `${tab.tab}: ${dataRows.length} data rows exceeds the ${MAX_DATA_ROWS}-row ` +
-        `ceiling. The tabs holding personal data are far larger than these ` +
-        `three, so a jump this size is a restructured workbook.`
+        `ceiling. The tabs holding personal data are far larger than any ` +
+        `exported one, so a jump this size is a restructured workbook.`
     );
   }
 
@@ -272,6 +415,39 @@ export function sheetRowsFrom(tab: SheetTab, csvText: string): SheetRow[] {
     userFieldName: tab.userFieldName,
     suggestedTitle: dataRow[titleIndex] ?? "",
     suggestedUrl: dataRow[urlIndex] ?? "",
+  }));
+}
+
+/**
+ * The curation tab's rows, named by column. Like `sheetRowsFrom`, it reads by
+ * header rather than by position and passes every value through verbatim: an
+ * empty `Override` stays empty, an `undecided` `Disposition` stays `undecided`,
+ * and neither is resolved here. The header allowlist has already established
+ * that the columns are the ones these names mean.
+ */
+export function assignmentRowsFrom(
+  tab: AssignmentTab,
+  csvText: string
+): AssignmentRow[] {
+  const dataRows = readSheetTab(tab, csvText);
+  const at = (dataRow: string[], header: string): string =>
+    dataRow[tab.headers.indexOf(header)] ?? "";
+
+  return dataRows.map((dataRow) => ({
+    field: at(dataRow, tab.columns.field),
+    legacyPnums: at(dataRow, tab.columns.legacyPnums),
+    legacyText: at(dataRow, tab.columns.legacyText),
+    baseNameSource: at(dataRow, tab.columns.baseNameSource),
+    profileLinkValue: at(dataRow, tab.columns.profileLinkValue),
+    recommendedCollectionTitle: at(
+      dataRow,
+      tab.columns.recommendedCollectionTitle
+    ),
+    recommendedCollectionUrl: at(dataRow, tab.columns.recommendedCollectionUrl),
+    confidence: at(dataRow, tab.columns.confidence),
+    rationale: at(dataRow, tab.columns.rationale),
+    override: at(dataRow, tab.columns.override),
+    disposition: at(dataRow, tab.columns.disposition),
   }));
 }
 

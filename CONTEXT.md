@@ -57,8 +57,12 @@ The setting that logs Unmatched Values to the console. Config Problems are repor
 _Avoid_: verbose mode, logging, dev mode
 
 **Sheet Export**:
-A verbatim export of one tab of the migration spreadsheet, committed for provenance. Its `Suggested Title` and `Suggested URL` columns are the only ones that matter; the rest describe the legacy bulletin board it was written for. Never read by the component.
+A verbatim export of one tab of the migration spreadsheet, committed for provenance. Never read by the component. Two kinds, held to the same fail-closed guards and not to the same shape: an **Option Table** export (`user_machine`, `user_mask`), where the `Suggested Title` and `Suggested URL` columns are the only ones that matter and the rest describe the legacy bulletin board it was written for; and the **Collection Assignment** export, which reduces to no such pair.
 _Avoid_: the sheet, product CSV, source CSV
+
+**Collection Assignment**:
+The curated table of Collection Link candidates — one row per candidate, carrying its legacy values, its proposed `Profile Link Value`, a recommended collection with a `Confidence` and a `Rationale`, a curator-editable `Override`, and a Disposition. A person edits it; this pipeline only reads it. The recommendation is a proposal rather than a resolved value, which is why it is exported as its own shape rather than as an Option Table with two of its eleven columns picked out.
+_Avoid_: assignment sheet, collection tab, mapping table
 
 **Suggested Title**:
 The curated display name for a product, taken from a Sheet Export. For a Resolved Product it becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree. For a Collection Link it supplies the base name the ` (Discontinued)` suffix is appended to — except on the four retired legacy catch-all titles, which name no equipment, where the base name comes from the Sheet Export's `Text` column instead (ADR-0020).
