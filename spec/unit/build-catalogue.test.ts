@@ -574,9 +574,14 @@ describe("the cross-sink assertion", () => {
       (field) => field.user_field_name !== "Mask"
     );
 
-    expect(
-      crossSinkMismatches(fields, dropdownOptionsFor(catalogue)).length
-    ).toBeGreaterThan(0);
+    const mismatches = crossSinkMismatches(
+      fields,
+      dropdownOptionsFor(catalogue)
+    );
+
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]).toContain("Mask");
+    expect(mismatches[0]).toContain("no Field Mappings");
   });
 
   it("passes when a Mapping has no corresponding Dropdown Option", () => {
