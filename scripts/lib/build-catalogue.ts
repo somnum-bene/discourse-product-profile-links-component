@@ -14,7 +14,7 @@
  * written for.
  */
 export interface SheetRow {
-  /** The Custom User Field this tab maps to — `Machine`, `Mask`, `Humidifier`. */
+  /** The Custom User Field this tab maps to — `Machine`, `Mask`. */
   userFieldName: string;
   /** The `Suggested Title` column, as the sheet holds it. */
   suggestedTitle: string;
@@ -407,8 +407,7 @@ function groupByField(
  *
  * A Custom User Field with no Resolved Products behind it produces no entry at
  * all. An entry with an empty `mappings` list is a Config Problem, so shipping
- * one would be worse than shipping nothing: `Humidifier` is in exactly that
- * state and is meant to stay absent (ADR-0012).
+ * one would be worse than shipping nothing (ADR-0012).
  */
 export function renderFieldMappings(
   catalogue: ResolvedProduct[]

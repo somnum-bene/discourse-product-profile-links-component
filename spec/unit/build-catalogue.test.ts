@@ -464,25 +464,23 @@ describe("renderFieldMappings", () => {
   });
 
   it("omits a Custom User Field with nothing behind it rather than shipping an empty one", () => {
-    // The Humidifier tab has no Suggested columns at all, so every row it
-    // contributes is blank. A Field Mapping with no Mappings is a Config
-    // Problem, which is worse than the field simply being absent (ADR-0012).
-    const humidifierRows: SheetRow[] = [
-      { userFieldName: "Humidifier", suggestedTitle: "", suggestedUrl: "" },
-      { userFieldName: "Humidifier", suggestedTitle: "  ", suggestedUrl: "" },
+    // A tab with no Suggested columns at all contributes rows that are blank
+    // by construction (`sheetRowsFrom` never gives them a title to begin
+    // with). A Field Mapping with no Mappings is a Config Problem, which is
+    // worse than the field simply being absent (ADR-0012).
+    const blankRows: SheetRow[] = [
+      { userFieldName: "Vendor", suggestedTitle: "", suggestedUrl: "" },
+      { userFieldName: "Vendor", suggestedTitle: "  ", suggestedUrl: "" },
     ];
 
-    const { catalogue, exclusions } = build([
-      ...MACHINE_ROWS,
-      ...humidifierRows,
-    ]);
+    const { catalogue, exclusions } = build([...MACHINE_ROWS, ...blankRows]);
     const fields = renderFieldMappings(catalogue);
 
     expect(fields.map((field) => field.user_field_name)).toEqual(["Machine"]);
     expect(
       exclusions.some(
         (exclusion) =>
-          exclusion.userFieldName === "Humidifier" &&
+          exclusion.userFieldName === "Vendor" &&
           exclusion.reason === "blank-title"
       )
     ).toBe(true);

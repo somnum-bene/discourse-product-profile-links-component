@@ -9,6 +9,7 @@ import {
   sheetCsvUrl,
   SheetExportError,
   sheetRowsFrom,
+  type SheetTab,
   tabNamed,
   WORKBOOK_ID_VAR,
 } from "../../scripts/lib/sheet-export";
@@ -21,7 +22,7 @@ import {
 
 const MACHINE_HEADER = `"Value","Text","URL","Suggested Title","Suggested URL"`;
 const MASK_HEADER = MACHINE_HEADER;
-const HUMIDIFIER_HEADER = `"Value","Text",""`;
+const NO_TITLE_HEADER = `"Value","Text",""`;
 
 const MACHINE_CSV = [
   MACHINE_HEADER,
@@ -38,15 +39,28 @@ const MASK_CSV = [
   `"5479","DreamWear Full Face CPAP Mask with Headgear - Fit Pack (S, M, MW, L Cushions with Medium Frame)","https://cpap.com/products/dreamwear-full-face-cpap-mask-with-headgear","DreamWear Full Face CPAP Mask","https://www.sleeping.com/products/dreamwear-full-face-cpap-mask-with-headgear"`,
 ].join("\n");
 
-const HUMIDIFIER_CSV = [
-  HUMIDIFIER_HEADER,
+// No tab in the current allowlist has this shape — both `user_machine` and
+// `user_mask` curate Suggested Titles — but the allowlist has held one before
+// (`user_humidifier`, retired by ADR-0022) and nothing stops a future tab from
+// exporting for provenance only, so `readSheetTab` and `sheetRowsFrom` still
+// have to handle a tab whose `titleColumn`/`urlColumn` are null. A synthetic
+// tab, rather than a real allowlist entry, is what exercises that without
+// resurrecting a retired one.
+const NO_TITLE_CSV = [
+  NO_TITLE_HEADER,
   `"5027","DreamStation Heated Humidifier","https://sleeping.com/products/dreamstation-heated-humidifier"`,
   `"24","HC150 Heated Humidifier With Hose, 2 Chambers and Stand","https://www.sleeping.com/search?q=humidifiers&options%5Bprefix%5D=last"`,
 ].join("\n");
 
 const machine = tabNamed("user_machine");
 const mask = tabNamed("user_mask");
-const humidifier = tabNamed("user_humidifier");
+const noTitleTab: SheetTab = {
+  tab: "user_no_title",
+  userFieldName: "NoTitle",
+  headers: ["Value", "Text", ""],
+  titleColumn: null,
+  urlColumn: null,
+};
 
 describe("parseCsv", () => {
   it("keeps a comma that sits inside a quoted field", () => {
@@ -98,11 +112,10 @@ describe("parseCsv", () => {
 });
 
 describe("the tab allowlist", () => {
-  it("holds exactly the three user_* tabs", () => {
+  it("holds exactly the two user_* tabs", () => {
     expect(SHEET_TABS.map((tab) => tab.tab)).toEqual([
       "user_machine",
       "user_mask",
-      "user_humidifier",
     ]);
   });
 
@@ -126,11 +139,8 @@ describe("the tab allowlist", () => {
     expect(machine.titleColumn).toBe("Suggested Title");
     expect(machine.urlColumn).toBe("Suggested URL");
     expect(mask.userFieldName).toBe("Mask");
-
-    // No Suggested columns at all, which is the state ADR-0012 describes.
-    expect(humidifier.userFieldName).toBe("Humidifier");
-    expect(humidifier.titleColumn).toBeNull();
-    expect(humidifier.urlColumn).toBeNull();
+    expect(mask.titleColumn).toBe("Suggested Title");
+    expect(mask.urlColumn).toBe("Suggested URL");
   });
 
   it("addresses a tab by name, never by the gid the workbook can reassign", () => {
@@ -146,7 +156,6 @@ describe("the tab allowlist", () => {
     expect(SHEET_TABS.map(exportFileName)).toEqual([
       "user_machine.csv",
       "user_mask.csv",
-      "user_humidifier.csv",
     ]);
   });
 });
@@ -157,8 +166,8 @@ describe("readSheetTab", () => {
     expect(readSheetTab(mask, MASK_CSV)).toHaveLength(3);
   });
 
-  it("accepts the humidifier tab, whose third column header is blank", () => {
-    expect(readSheetTab(humidifier, HUMIDIFIER_CSV)).toHaveLength(2);
+  it("accepts a tab whose third column header is blank", () => {
+    expect(readSheetTab(noTitleTab, NO_TITLE_CSV)).toHaveLength(2);
   });
 
   it("aborts when a column has been renamed", () => {
@@ -251,7 +260,7 @@ describe("readSheetTab", () => {
   it("does not mistake a real product row for personal data", () => {
     expect(() => readSheetTab(machine, MACHINE_CSV)).not.toThrow();
     expect(() => readSheetTab(mask, MASK_CSV)).not.toThrow();
-    expect(() => readSheetTab(humidifier, HUMIDIFIER_CSV)).not.toThrow();
+    expect(() => readSheetTab(noTitleTab, NO_TITLE_CSV)).not.toThrow();
   });
 });
 
@@ -313,8 +322,8 @@ describe("sheetRowsFrom", () => {
   });
 
   it("yields no rows for a tab with no Suggested columns, but still validates it", () => {
-    expect(sheetRowsFrom(humidifier, HUMIDIFIER_CSV)).toEqual([]);
-    expect(() => sheetRowsFrom(humidifier, MACHINE_CSV)).toThrow(
+    expect(sheetRowsFrom(noTitleTab, NO_TITLE_CSV)).toEqual([]);
+    expect(() => sheetRowsFrom(noTitleTab, MACHINE_CSV)).toThrow(
       /unexpected header row/
     );
   });

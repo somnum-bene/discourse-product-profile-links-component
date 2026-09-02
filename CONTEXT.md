@@ -8,6 +8,10 @@ A Discourse theme component that turns a User's Custom User Field values into la
 A labelled hyperlink shown for a User, derived from one of their Custom User Field values.
 _Avoid_: link, custom link, product link
 
+**Collection Link**:
+A Profile Link whose target is a cpap.com collection page rather than a product page, held by a User whose equipment cpap.com no longer sells. Its value is the equipment's name with ` (Discontinued)` appended, so the label says what the link is (ADR-0020). It is a Mapping with no Dropdown Option behind it — resolvable by a User who already holds the value, never offered to a User choosing one — and it reaches the Mappings sink through its own array rather than the Resolved Product Catalogue (ADR-0021).
+_Avoid_: category link, collection page link, discontinued link, fallback link
+
 **User**:
 A person with a Discourse account, whose Custom User Field values produce Profile Links.
 _Avoid_: member, customer, profile owner
@@ -21,7 +25,7 @@ A field defined at `/admin/config/user_fields` that Users fill in on their profi
 _Avoid_: user field, profile field, custom field
 
 **Dropdown Option**:
-One of the predefined values a Custom User Field offers. A Mapping's value must equal one exactly, or it resolves no Profile Link.
+One of the predefined values a Custom User Field offers. Every Dropdown Option must have a Mapping behind it or it is an Unmatched Value waiting to happen — but the reverse does not hold, because a Collection Link is a Mapping deliberately absent from the options (ADR-0021). The rule is that the options are a subset of the Mapping values, not that the two agree.
 _Avoid_: choice, option value, field option
 
 **Field Mapping**:
@@ -57,7 +61,7 @@ A verbatim export of one tab of the migration spreadsheet, committed for provena
 _Avoid_: the sheet, product CSV, source CSV
 
 **Suggested Title**:
-The curated display name for a product, taken from a Sheet Export. Becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree.
+The curated display name for a product, taken from a Sheet Export. For a Resolved Product it becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree. For a Collection Link it supplies the base name the ` (Discontinued)` suffix is appended to — except on the four retired legacy catch-all titles, which name no equipment, where the base name comes from the Sheet Export's `Text` column instead (ADR-0020).
 _Avoid_: product name, label, title
 
 **Resolved Product**:
@@ -65,12 +69,16 @@ A Suggested Title joined to a live product in the cpap.com Shopify catalogue, ca
 _Avoid_: product, matched product, SKU
 
 **Resolved Product Catalogue**:
-The committed file of Resolved Products. The single input to both sinks — the Mappings shipped in `settings.yml` and the Dropdown Options pushed to a site.
+The committed file of Resolved Products. The only input to the Dropdown Options pushed to a site, and — together with the Collection Links — one of two inputs to the Mappings shipped in `settings.yml`. That asymmetry is the point: what a site offers comes from products alone, so a Collection Link cannot be offered by construction (ADR-0021).
 _Avoid_: product CSV, catalogue file, product list
 
 **Excluded Product**:
-A Suggested Title left out of the Resolved Product Catalogue because Shopify reports its product archived, unpublished, or tagged `Discontinued`. Reported with its reason, never dropped silently.
+A Suggested Title left out of the Resolved Product Catalogue, reported with its reason and never dropped silently. Exclusion no longer means no Profile Link: five of the seven reasons — `discontinued-suffix`, `not-active`, `unpublished`, `discontinued-tag`, `no-matching-product` — send the title on to become a Collection Link instead. Only `blank-title` and `ambiguous-title-match` end there, the second deliberately, because a title matching two products is evidence the product is still sold and the Sheet Export is wrong (ADR-0020).
 _Avoid_: missing product, failed product, dead link
+
+**Disposition**:
+What the curated collection table says should happen to one Collection Link candidate — `collection`, `plain-text`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021).
+_Avoid_: status, state, decision, resolution
 
 **Catalogue Refresh**:
 Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.
@@ -101,7 +109,7 @@ What a Catalogue Apply would do to one instance, decided as data before any requ
 _Avoid_: diff, changeset, dry run
 
 **Managed Field**:
-One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all. `Humidifier` is permanently in that state: product decided against a humidifier list, and the field was changed to a text one so a member's legacy entry can be shown as they wrote it (ADR-0012).
+One of the two Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist — `Machine` and `Mask`. A Managed Field with no Mappings behind it is still in scope — that is how it gets reported rather than forgotten — while a field outside the list is never mentioned at all. `Humidifier` passed through both states — permanently unmapped under ADR-0012, briefly in scope via Collection Links under ADR-0020 — before being dropped from the pipeline entirely (ADR-0022): its Collection Link targets turned out to carry no real link equity on inspection, and the business no longer needs the field carried through this migration. Its Custom User Field may still exist on the live Discourse instance; that is a site-administration question this pipeline does not answer (ADR-0015). `Software` is a Custom User Field on the instance but was never a Managed Field, and nothing here links it.
 _Avoid_: known field, our field, target field
 
 **Refused URL**:
@@ -132,8 +140,8 @@ A Field Mapping is not a CSV, and a Mapping is not a CSV row — that is what th
 **"Product CSV" is retired.**
 It was reserved for "a genuine CSV file as a source of Mapping data" before there were two of them at different stages. Say **Sheet Export** for the raw spreadsheet tab and **Resolved Product Catalogue** for the file both sinks are generated from; the distinction between them is the whole point of the pipeline, and one name for both erases it.
 
-**Two things are called "discontinued", and only one is authoritative.**
-Shopify's `Discontinued` tag is a live fact about a product. The ` (Discontinued)` suffix on some Suggested Titles is legacy spreadsheet bookkeeping marking a catch-all category link. Both are excluded, for different reasons — see ADR-0012 — but do not treat the suffix as evidence about the catalogue.
+**Three things are called "discontinued", and only one is a fact about a product.**
+Shopify's `Discontinued` tag is a live fact. The ` (Discontinued)` suffix on the four legacy catch-all Suggested Titles is retired spreadsheet bookkeeping and is never evidence about the catalogue. The ` (Discontinued)` suffix on a **Collection Link** value is neither — it is generated by this pipeline, deliberately visible to the User because the value is also the anchor text, and it marks equipment cpap.com no longer sells whatever Shopify's tag says (ADR-0020). A title can reach a Collection Link through the tag, through a non-`ACTIVE` status, through being unpublished, or through matching no product at all.
 
 **"mapping" unqualified is ambiguous.**
 It spans **Field Mapping** and **Mapping**, which are different things at different levels. Always qualify which one you mean.

@@ -15,6 +15,7 @@ import { buildCatalogue } from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  curatesTitles,
   declaredDigest,
   type Division,
   DIVISIONS,
@@ -105,12 +106,12 @@ async function main(): Promise<void> {
       (entry) => entry.userFieldName === division.userFieldName
     ).length;
 
-    // Stated rather than left as a zero to be interpreted: `Humidifier` is
-    // meant to produce nothing (ADR-0012), and a run that printed the same
-    // silence for "nothing to map" and "everything failed to resolve" would
-    // make the expected case look like the broken one.
+    // Stated rather than left as a zero to be interpreted: a field whose tab
+    // curates no Suggested columns is meant to produce nothing (ADR-0012), and
+    // a run that printed the same silence for "nothing to map" and "everything
+    // failed to resolve" would make the expected case look like the broken one.
     process.stdout.write(
-      mappings === 0
+      mappings === 0 && !curatesTitles(division.userFieldName)
         ? `${division.userFieldName}: no Mappings — expected, the tab curates none\n`
         : `${division.userFieldName}: ${mappings} Mappings\n`
     );
@@ -118,7 +119,7 @@ async function main(): Promise<void> {
 }
 
 /**
- * The three Sheet Exports, re-validated on the way in. They are committed, so
+ * The Sheet Exports, re-validated on the way in. They are committed, so
  * this rereads them rather than the spreadsheet — the point of committing them
  * is that a refresh and a review are looking at the same rows.
  */

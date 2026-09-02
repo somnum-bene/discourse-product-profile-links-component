@@ -78,7 +78,7 @@ async function main(): Promise<void> {
 /**
  * What shipped. A Custom User Field the catalogue has nothing for is absent from
  * this list because it is absent from the setting: an entry with an empty
- * mappings list is a Config Problem, so `Humidifier` having no entry is the
+ * mappings list is a Config Problem, so a field having no entry is the
  * intended outcome rather than a missing one (ADR-0012).
  */
 function summary(

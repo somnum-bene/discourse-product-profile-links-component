@@ -9,6 +9,7 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  curatesTitles,
   declaredDigest,
   digestOf,
   divisionFieldsOf,
@@ -565,6 +566,29 @@ describe("the catalogue file", () => {
   });
 });
 
+describe("curatesTitles", () => {
+  it("is true for both current tabs, which both have Suggested columns", () => {
+    // No current SHEET_TABS entry has `titleColumn: null` — `user_humidifier`
+    // was the one that did, until ADR-0022 retired it — so the `false` branch
+    // of `tab.titleColumn !== null` has no real tab to exercise it against
+    // right now. It stays rather than being deleted because a future tab
+    // exporting for provenance only (see sheet-export.ts's `SheetTab.titleColumn`
+    // doc comment) would be in exactly that state, and `readSheetTab` /
+    // `sheetRowsFrom` are still tested against a synthetic tab shaped that way
+    // in spec/unit/sheet-export.test.ts.
+    expect(curatesTitles("Machine")).toBe(true);
+    expect(curatesTitles("Mask")).toBe(true);
+  });
+
+  it("throws for a field SHEET_TABS has never heard of, rather than guessing", () => {
+    // `DIVISIONS` is a separate, hand-written list from `SHEET_TABS`. A future
+    // field added to one and not the other must not silently read as
+    // "curates titles" just because `undefined !== null`.
+    expect(() => curatesTitles("Humidifier")).toThrow(CatalogueRefreshError);
+    expect(() => curatesTitles("Humidifier")).toThrow(/names no tab/);
+  });
+});
+
 describe("the review document", () => {
   const built = buildCatalogue({
     sheetRows: SHEET_ROWS,
@@ -602,16 +626,11 @@ describe("the review document", () => {
     expect(review).toContain("status ARCHIVED; tagged Discontinued");
   });
 
-  it("says Humidifier is empty on purpose rather than leaving a blank section", () => {
-    expect(review).toContain(
-      "## Humidifier — no Mappings, and that is expected"
-    );
-    expect(review).toContain("ADR-0012");
-  });
-
-  it("does not say the same thing about a field whose curated titles all failed", () => {
-    // Both Mask titles in the fixtures are excluded, so the field is empty for
-    // the opposite reason to Humidifier's. The two must not read alike.
+  it("says a field with no curated Mappings is a problem, not silence", () => {
+    // Both Mask titles in the fixtures are excluded, so the field ends up with
+    // no Mappings the same way a broken tab would, and that must not read like
+    // the "no Suggested columns at all" case (ADR-0012), which no current tab
+    // is in.
     expect(
       built.catalogue.some((entry) => entry.userFieldName === "Mask")
     ).toBe(false);
@@ -643,7 +662,6 @@ describe("the review document", () => {
     // the fixtures hold an archived mask carrying the division tag, and counting
     // it would report three products on sale where there are two.
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
-    expect(review).toContain("| Humidifier | 0 | 0 | 0 | 0 | 0 |");
   });
 
   it("is the same document twice, because there is no clock in it", () => {

@@ -86,10 +86,6 @@ export interface Division {
 export const DIVISIONS: readonly Division[] = [
   { userFieldName: "Machine", tag: "Catalog-Merchant-Division-Machines" },
   { userFieldName: "Mask", tag: "Catalog-Merchant-Division-Masks" },
-  {
-    userFieldName: "Humidifier",
-    tag: "Catalog-Merchant-Division-Humidifiers",
-  },
 ];
 
 /**
@@ -600,9 +596,9 @@ interface FieldSummary {
   /**
    * Whether the field's spreadsheet tab curates Suggested Titles at all. This is
    * what separates the two ways a field can end up with no Mappings, and they
-   * are opposites: `Humidifier` has no Suggested columns and is meant to be
-   * empty, while an empty `Mask` would mean every curated title failed to
-   * resolve. Reporting the same sentence for both would hide the second.
+   * are opposites: a tab with no Suggested columns has no Mappings by design,
+   * while an empty `Mask` would mean every curated title failed to resolve.
+   * Reporting the same sentence for both would hide the second.
    */
   curatesTitles: boolean;
   sheetTitles: number;
@@ -610,6 +606,33 @@ interface FieldSummary {
   excluded: number;
   live: number;
   unnamed: number;
+}
+
+/**
+ * Whether the named field's spreadsheet tab curates Suggested Titles at all.
+ * Shared with the command's own summary line, so "does this field curate
+ * titles" is decided once rather than re-derived from `SHEET_TABS` wherever
+ * it is needed.
+ *
+ * Throws for a field `SHEET_TABS` has never heard of, rather than guessing:
+ * `DIVISIONS` is a separate, hand-written list, so a future field added to one
+ * and not the other is a programming mistake, and `undefined !== null` would
+ * silently misclassify it as curating titles instead of surfacing the gap.
+ */
+export function curatesTitles(userFieldName: string): boolean {
+  const tab = SHEET_TABS.find(
+    (candidate) => candidate.userFieldName === userFieldName
+  );
+
+  if (!tab) {
+    throw new CatalogueRefreshError(
+      `"${userFieldName}" names no tab in SHEET_TABS. Every field this ` +
+        `reasons about has to be in the allowlist somewhere, or this is being ` +
+        `asked about a field the Sheet Export does not know.`
+    );
+  }
+
+  return tab.titleColumn !== null;
 }
 
 function summarize(
@@ -634,11 +657,10 @@ function summarize(
       .filter((row) => row.userFieldName === field && row.suggestedTitle.trim())
       .map((row) => normalizeTitle(row.suggestedTitle))
   );
-  const tab = SHEET_TABS.find((candidate) => candidate.userFieldName === field);
 
   return {
     division,
-    curatesTitles: tab?.titleColumn !== null,
+    curatesTitles: curatesTitles(field),
     sheetTitles: titles.size,
     entries: catalogue.filter((entry) => entry.userFieldName === field),
     excluded: exclusions.filter((entry) => entry.userFieldName === field)
@@ -707,9 +729,10 @@ function renderFieldSection(field: FieldSummary): string {
     return [
       `## ${name} — no Mappings, and that is a problem`,
       `The \`${tab}\` tab curates ${field.sheetTitles} Suggested Titles and not ` +
-        `one of them resolved to a linkable product. That is not the ` +
-        `\`Humidifier\` case: something has changed about the tab, the handles ` +
-        `or the catalogue. Read the exclusions below before applying anything.`,
+        `one of them resolved to a linkable product. That is not the case of a ` +
+        `field with no Suggested columns at all: something has changed about ` +
+        `the tab, the handles or the catalogue. Read the exclusions below ` +
+        `before applying anything.`,
     ].join("\n\n");
   }
 

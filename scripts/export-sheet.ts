@@ -1,4 +1,4 @@
-// Fetch the three `user_*` tabs of the migration spreadsheet and commit them
+// Fetch the `user_*` tabs of the migration spreadsheet and commit them
 // verbatim as the Sheet Exports. Run it with `pnpm export:sheet`.
 //
 // The shell is deliberately thin: it fetches, validates, and writes. Every
@@ -33,8 +33,8 @@ async function main(): Promise<void> {
   }
 
   // Fetch and validate everything before writing anything. A run that aborts
-  // half way through would leave `data/` holding one refreshed export and two
-  // stale ones, which is worse than leaving all three alone.
+  // half way through would leave `data/` holding one refreshed export and a
+  // stale one, which is worse than leaving both alone.
   const fetched = [];
   for (const tab of SHEET_TABS) {
     const response = await fetch(sheetCsvUrl(workbookId, tab));
