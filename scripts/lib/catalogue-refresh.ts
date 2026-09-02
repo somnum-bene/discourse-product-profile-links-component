@@ -613,13 +613,26 @@ interface FieldSummary {
  * Shared with the command's own summary line, so "does this field curate
  * titles" is decided once rather than re-derived from `SHEET_TABS` wherever
  * it is needed.
+ *
+ * Throws for a field `SHEET_TABS` has never heard of, rather than guessing:
+ * `DIVISIONS` is a separate, hand-written list, so a future field added to one
+ * and not the other is a programming mistake, and `undefined !== null` would
+ * silently misclassify it as curating titles instead of surfacing the gap.
  */
 export function curatesTitles(userFieldName: string): boolean {
   const tab = SHEET_TABS.find(
     (candidate) => candidate.userFieldName === userFieldName
   );
 
-  return tab?.titleColumn !== null;
+  if (!tab) {
+    throw new CatalogueRefreshError(
+      `"${userFieldName}" names no tab in SHEET_TABS. Every field this ` +
+        `reasons about has to be in the allowlist somewhere, or this is being ` +
+        `asked about a field the Sheet Export does not know.`
+    );
+  }
+
+  return tab.titleColumn !== null;
 }
 
 function summarize(

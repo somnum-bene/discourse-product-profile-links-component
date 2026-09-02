@@ -9,6 +9,7 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  curatesTitles,
   declaredDigest,
   digestOf,
   divisionFieldsOf,
@@ -562,6 +563,21 @@ describe("the catalogue file", () => {
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
     ).toThrow(/empty field/);
+  });
+});
+
+describe("curatesTitles", () => {
+  it("is true for a tab with Suggested columns and false for one without", () => {
+    expect(curatesTitles("Machine")).toBe(true);
+    expect(curatesTitles("Mask")).toBe(true);
+  });
+
+  it("throws for a field SHEET_TABS has never heard of, rather than guessing", () => {
+    // `DIVISIONS` is a separate, hand-written list from `SHEET_TABS`. A future
+    // field added to one and not the other must not silently read as
+    // "curates titles" just because `undefined !== null`.
+    expect(() => curatesTitles("Humidifier")).toThrow(CatalogueRefreshError);
+    expect(() => curatesTitles("Humidifier")).toThrow(/names no tab/);
   });
 });
 
