@@ -4,7 +4,7 @@
 // change the transform made. Nothing in the component reads them.
 //
 // Two shapes of tab, on purpose. The `user_*` option tables reduce to a
-// Suggested Title and a Suggested URL; the collection-assignment tab is eleven
+// Suggested Title and a Suggested URL; the Collection Assignment is eleven
 // columns of human curation that reduce to nothing. They share the guards and
 // not the shape — see `ExportTab` below.
 //
@@ -56,53 +56,49 @@ export interface SheetTab extends ExportTab {
 }
 
 /**
- * A curation table: the collection-assignment tab, which a person edits and
- * this command only reads. It is deliberately not a `SheetTab`. Its eleven
- * columns do not reduce to a title and a URL — `Recommended Collection URL` is
- * a proposal, `Override` can replace it, and `Disposition` decides whether
- * either is used at all — so squeezing it into `titleColumn`/`urlColumn` would
- * have to either drop columns or lie about what the two it kept mean. Adding a
- * second shape alongside the first costs one interface; generalising `SheetTab`
- * would cost the meaning of the one that already works.
+ * The Collection Assignment's columns: the name this pipeline calls each one,
+ * against the header the Sheet holds it under. #26 locked this schema, and
+ * this object is the only place it is written down — the header allowlist, the
+ * row shape and the reader all derive from it, so there is no second copy for
+ * a curator's rename to fall out of step with.
+ */
+const ASSIGNMENT_COLUMNS = {
+  field: "Field",
+  legacyPnums: "Legacy PNum(s)",
+  legacyText: "Legacy Text",
+  baseNameSource: "Base Name Source",
+  profileLinkValue: "Profile Link Value",
+  recommendedCollectionTitle: "Recommended Collection Title",
+  recommendedCollectionUrl: "Recommended Collection URL",
+  confidence: "Confidence",
+  rationale: "Rationale",
+  override: "Override",
+  disposition: "Disposition",
+} as const;
+
+/**
+ * The Collection Assignment tab, which a person edits and this command only
+ * reads. It is deliberately not a `SheetTab`. Its eleven columns do not reduce
+ * to a title and a URL — `Recommended Collection URL` is a proposal,
+ * `Override` can replace it, and `Disposition` decides whether either is used
+ * at all — so squeezing it into `titleColumn`/`urlColumn` would have to either
+ * drop columns or lie about what the two it kept mean. Adding a second shape
+ * alongside the first costs one interface; generalising `SheetTab` would cost
+ * the meaning of the one that already works.
  */
 export interface AssignmentTab extends ExportTab {
-  /** Header of each column, by the name the rest of the pipeline calls it. */
-  columns: {
-    field: string;
-    legacyPnums: string;
-    legacyText: string;
-    baseNameSource: string;
-    profileLinkValue: string;
-    recommendedCollectionTitle: string;
-    recommendedCollectionUrl: string;
-    confidence: string;
-    rationale: string;
-    override: string;
-    disposition: string;
-  };
+  columns: typeof ASSIGNMENT_COLUMNS;
 }
 
 /**
- * One curated row of the collection-assignment tab, named rather than
- * positional. Values are passed through verbatim and no column is preferred
- * over another here: whether `override` wins over `recommendedCollectionUrl`,
- * and whether an `undecided` `disposition` blocks a release, are the
- * transform's decisions, not this file's. Reading the tab and judging it are
- * separate jobs for the same reason `sheetRowsFrom` does no trimming.
+ * One curated row of the Collection Assignment, named rather than positional.
+ * Values are passed through verbatim and no column is preferred over another
+ * here: whether `override` wins over `recommendedCollectionUrl`, and whether
+ * an `undecided` `disposition` blocks a release, are the transform's
+ * decisions, not this file's. Reading the tab and judging it are separate jobs
+ * for the same reason `sheetRowsFrom` does no trimming.
  */
-export interface AssignmentRow {
-  field: string;
-  legacyPnums: string;
-  legacyText: string;
-  baseNameSource: string;
-  profileLinkValue: string;
-  recommendedCollectionTitle: string;
-  recommendedCollectionUrl: string;
-  confidence: string;
-  rationale: string;
-  override: string;
-  disposition: string;
-}
+export type AssignmentRow = Record<keyof typeof ASSIGNMENT_COLUMNS, string>;
 
 /**
  * The option-table allowlist. Two entries, and no code path that fetches a tab
@@ -127,40 +123,16 @@ export const SHEET_TABS: readonly SheetTab[] = [
 ];
 
 /**
- * The curation-table allowlist, and the second half of the tab allowlist. Its
- * header row is the schema locked on #26, in column order; a curator who adds,
- * renames or reorders a column stops the run rather than shifting the meaning
- * of `Disposition` one place to the left.
+ * The Collection Assignment allowlist, and the second half of the tab
+ * allowlist. Its header row is `ASSIGNMENT_COLUMNS` read in order, so a
+ * curator who adds, renames or reorders a column stops the run rather than
+ * shifting the meaning of `Disposition` one place to the left.
  */
 export const ASSIGNMENT_TABS: readonly AssignmentTab[] = [
   {
     tab: "collection-assignment",
-    headers: [
-      "Field",
-      "Legacy PNum(s)",
-      "Legacy Text",
-      "Base Name Source",
-      "Profile Link Value",
-      "Recommended Collection Title",
-      "Recommended Collection URL",
-      "Confidence",
-      "Rationale",
-      "Override",
-      "Disposition",
-    ],
-    columns: {
-      field: "Field",
-      legacyPnums: "Legacy PNum(s)",
-      legacyText: "Legacy Text",
-      baseNameSource: "Base Name Source",
-      profileLinkValue: "Profile Link Value",
-      recommendedCollectionTitle: "Recommended Collection Title",
-      recommendedCollectionUrl: "Recommended Collection URL",
-      confidence: "Confidence",
-      rationale: "Rationale",
-      override: "Override",
-      disposition: "Disposition",
-    },
+    headers: Object.values(ASSIGNMENT_COLUMNS),
+    columns: ASSIGNMENT_COLUMNS,
   },
 ];
 
@@ -175,10 +147,13 @@ export const EXPORT_TABS: readonly ExportTab[] = [
 ];
 
 /**
- * A ceiling on how many data rows an exported tab may have. The three of them
- * run to 75, 151 and 83 rows; the tabs holding personal data run to about
- * 124,000. A tab that has grown by an order of magnitude under a header row
- * that still matches has been restructured, not edited, and the run stops.
+ * A ceiling on how many data rows an exported tab may have. Each of them runs
+ * to a few hundred at the outside; the personal-data tabs of the workbook this
+ * was written against ran to about 124,000. A tab that has grown by an order
+ * of magnitude under a header row that still matches has been restructured,
+ * not edited, and the run stops. The ceiling is deliberately far above any
+ * real count rather than pinned to one, so a refresh that adds rows is not a
+ * refusal and a restructure still is.
  */
 export const MAX_DATA_ROWS = 2000;
 
@@ -208,7 +183,7 @@ export function tabNamed(name: string): SheetTab {
 }
 
 /**
- * The same, for the curation tab. Two lookups rather than one that returns the
+ * The same, for the Collection Assignment. Two lookups rather than one that returns the
  * wider `ExportTab`: a caller that wants the Suggested columns and a caller
  * that wants `Disposition` are asking different questions, and a single lookup
  * would answer both with a type that has neither.
@@ -218,13 +193,18 @@ export function assignmentTabNamed(name: string): AssignmentTab {
 }
 
 /**
- * Whether an exported tab is an option table, and so has rows to contribute to
- * the catalogue. The command needs to ask because it iterates `EXPORT_TABS`,
- * which holds both shapes; it identifies by name against the allowlist rather
- * than by sniffing for a property, so a malformed object cannot answer yes.
+ * The option table an exported tab is, or null when it is not one. The command
+ * needs to ask because it iterates `EXPORT_TABS`, which holds both shapes.
+ *
+ * It returns the allowlist entry rather than answering yes about the argument,
+ * and that is the whole point: a `tab is SheetTab` predicate would have to
+ * decide on the strength of the name, so an object calling itself
+ * `user_machine` with no `titleColumn` would be narrowed to a type it does not
+ * have and read as an empty row. Handing back the entry the allowlist holds
+ * means the caller works with the trusted object, never the one it asked about.
  */
-export function isSheetTab(tab: ExportTab): tab is SheetTab {
-  return SHEET_TABS.some((candidate) => candidate.tab === tab.tab);
+export function sheetTabFor(tab: ExportTab): SheetTab | null {
+  return SHEET_TABS.find((candidate) => candidate.tab === tab.tab) ?? null;
 }
 
 function namedIn<T extends ExportTab>(
@@ -344,8 +324,8 @@ export function parseCsv(text: string): string[][] {
  * now holding a different volume of data), and the cell contents (a tab now
  * holding email addresses under a header row that still looks right).
  *
- * It takes an `ExportTab`, so the curation tab is held to exactly the same
- * three as the two option tables it sits beside in the same workbook.
+ * It takes an `ExportTab`, so the Collection Assignment is held to exactly the
+ * same three as the two option tables it sits beside in the same workbook.
  */
 export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
   if (csvText.trim() === "") {
@@ -419,36 +399,30 @@ export function sheetRowsFrom(tab: SheetTab, csvText: string): SheetRow[] {
 }
 
 /**
- * The curation tab's rows, named by column. Like `sheetRowsFrom`, it reads by
- * header rather than by position and passes every value through verbatim: an
- * empty `Override` stays empty, an `undecided` `Disposition` stays `undecided`,
- * and neither is resolved here. The header allowlist has already established
- * that the columns are the ones these names mean.
+ * The Collection Assignment's rows, named by column. Like `sheetRowsFrom`, it
+ * reads by header rather than by position and passes every value through
+ * verbatim: an empty `Override` stays empty, an `undecided` `Disposition` stays
+ * `undecided`, and neither is resolved here. The header allowlist has already
+ * established that the columns are the ones these names mean.
  */
 export function assignmentRowsFrom(
   tab: AssignmentTab,
   csvText: string
 ): AssignmentRow[] {
   const dataRows = readSheetTab(tab, csvText);
-  const at = (dataRow: string[], header: string): string =>
-    dataRow[tab.headers.indexOf(header)] ?? "";
+  const columns = Object.entries(tab.columns) as [
+    keyof AssignmentRow,
+    string,
+  ][];
 
-  return dataRows.map((dataRow) => ({
-    field: at(dataRow, tab.columns.field),
-    legacyPnums: at(dataRow, tab.columns.legacyPnums),
-    legacyText: at(dataRow, tab.columns.legacyText),
-    baseNameSource: at(dataRow, tab.columns.baseNameSource),
-    profileLinkValue: at(dataRow, tab.columns.profileLinkValue),
-    recommendedCollectionTitle: at(
-      dataRow,
-      tab.columns.recommendedCollectionTitle
-    ),
-    recommendedCollectionUrl: at(dataRow, tab.columns.recommendedCollectionUrl),
-    confidence: at(dataRow, tab.columns.confidence),
-    rationale: at(dataRow, tab.columns.rationale),
-    override: at(dataRow, tab.columns.override),
-    disposition: at(dataRow, tab.columns.disposition),
-  }));
+  return dataRows.map((dataRow) =>
+    Object.fromEntries(
+      columns.map(([name, header]) => [
+        name,
+        dataRow[tab.headers.indexOf(header)] ?? "",
+      ])
+    )
+  ) as AssignmentRow[];
 }
 
 function sameHeaders(found: string[], expected: readonly string[]): boolean {

@@ -6,7 +6,6 @@ import {
   assignmentTabNamed,
   EXPORT_TABS,
   exportFileName,
-  isSheetTab,
   MAX_DATA_ROWS,
   parseCsv,
   readSheetTab,
@@ -15,6 +14,7 @@ import {
   SheetExportError,
   sheetRowsFrom,
   type SheetTab,
+  sheetTabFor,
   tabNamed,
   WORKBOOK_ID_VAR,
 } from "../../scripts/lib/sheet-export";
@@ -60,7 +60,10 @@ const NO_TITLE_CSV = [
 // The curation tab, in the column order locked on #26. The first row is a real
 // seeded one; the second exercises the two columns that make this tab not a
 // SheetTab — a filled `Override` sitting beside a `Recommended Collection URL`
-// it disagrees with, under a `Disposition` that is not `undecided`.
+// it disagrees with, under a `Disposition` that is not `undecided`. Both hold
+// values that could really be on the tab: 6402/6404/6407/6414 are dropped
+// outright per #32 and never reach it, so a fixture using them would encode a
+// row the schema forbids.
 const ASSIGNMENT_HEADER = [
   "Field",
   "Legacy PNum(s)",
@@ -80,7 +83,7 @@ const ASSIGNMENT_HEADER = [
 const ASSIGNMENT_CSV = [
   ASSIGNMENT_HEADER,
   `"Machine","6391","REFURB AirCurve 11 BiPAP ASV","Suggested Title","AirCurve 11 BiPAP ASV (Discontinued)","BiPAP Machines","https://www.cpap.com/collections/bipap-machines","High","No active Shopify product; BiPAP is the nearest live collection.","","undecided"`,
-  `"Mask","6402, 6404","Headgear, spare","Text","Headgear, spare (Discontinued)","Mask Parts","https://www.cpap.com/collections/mask-parts","Medium","Accessory, not a mask.","https://www.cpap.com/collections/cpap-mask-parts","collection"`,
+  `"Mask","5854, 5794","Legacy Full Face Masks, all sizes","Text","Legacy Full Face Masks, all sizes (Discontinued)","Full Face Masks","https://www.cpap.com/collections/full-face-cpap-masks","Medium","A catch-all naming no one product.","https://www.cpap.com/collections/cpap-full-face-masks","collection"`,
 ].join("\n");
 
 const machine = tabNamed("user_machine");
@@ -193,7 +196,7 @@ describe("the tab allowlist", () => {
   });
 });
 
-describe("the curation tab allowlist", () => {
+describe("the Collection Assignment allowlist", () => {
   it("holds exactly the collection-assignment tab", () => {
     expect(ASSIGNMENT_TABS.map((tab) => tab.tab)).toEqual([
       "collection-assignment",
@@ -216,15 +219,7 @@ describe("the curation tab allowlist", () => {
     ]);
   });
 
-  it("names every column it reads, and names no column it does not have", () => {
-    // The two must agree or `assignmentRowsFrom` reads by a header the
-    // allowlist never checked, which is the one way past the header guard.
-    expect(Object.values(assignment.columns).sort()).toEqual(
-      [...assignment.headers].sort()
-    );
-  });
-
-  it("refuses a tab that is not the curation tab, including an option table", () => {
+  it("refuses a tab that is not the Collection Assignment, including an option table", () => {
     for (const forbidden of [
       "Discourse",
       "user-list-260410-001810",
@@ -244,7 +239,7 @@ describe("the curation tab allowlist", () => {
 });
 
 describe("EXPORT_TABS", () => {
-  it("is every tab the command fetches, option tables then curation", () => {
+  it("is every tab the command fetches, option tables then assignment", () => {
     expect(EXPORT_TABS.map((tab) => tab.tab)).toEqual([
       "user_machine",
       "user_mask",
@@ -253,20 +248,24 @@ describe("EXPORT_TABS", () => {
   });
 
   it("says which of them contribute rows to the catalogue", () => {
-    expect(EXPORT_TABS.filter(isSheetTab).map((tab) => tab.tab)).toEqual([
-      "user_machine",
-      "user_mask",
-    ]);
-    expect(isSheetTab(assignment)).toBe(false);
+    expect(EXPORT_TABS.map(sheetTabFor).map((tab) => tab?.tab ?? null)).toEqual(
+      ["user_machine", "user_mask", null]
+    );
   });
 
-  it("does not answer yes to an object that merely looks like an option table", () => {
-    // Identified by name against the allowlist, not by sniffing for a
-    // property, so a hand-built object cannot talk its way into the catalogue.
-    expect(isSheetTab({ ...noTitleTab, tab: "user_machine_" })).toBe(false);
+  it("hands back the allowlist entry, never the object it was asked about", () => {
+    // The reason this returns a tab rather than answering yes about one. An
+    // impostor carrying an allowlisted name would pass any `tab is SheetTab`
+    // predicate and then be read as a row of empty strings, because the
+    // `titleColumn` the narrowing promised is not there.
+    const impostor = { tab: "user_machine", headers: ["Value"] };
+
+    expect(sheetTabFor(impostor)).toBe(machine);
+    expect(sheetTabFor(impostor)).not.toBe(impostor);
+    expect(sheetTabFor({ ...noTitleTab, tab: "user_machine_" })).toBeNull();
   });
 
-  it("addresses the curation tab by name too", () => {
+  it("addresses the Collection Assignment by name too", () => {
     const url = sheetCsvUrl("WORKBOOK", assignment);
 
     expect(url).toContain("sheet=collection-assignment");
@@ -443,8 +442,8 @@ describe("sheetRowsFrom", () => {
   });
 });
 
-describe("readSheetTab, on the curation tab", () => {
-  // The curation tab sits in the same workbook as the option tables and is
+describe("readSheetTab, on the Collection Assignment", () => {
+  // The Collection Assignment sits in the same workbook as the option tables and is
   // edited by hand rather than generated, so it gets the same three guards and
   // no weaker version of any of them.
   it("accepts the locked header row and returns only the data rows", () => {
@@ -488,7 +487,7 @@ describe("readSheetTab, on the curation tab", () => {
     // `Rationale` is free text a curator types, which makes it the likeliest
     // place in the workbook for a person's address to arrive by accident.
     const contaminated = ASSIGNMENT_CSV.replace(
-      "Accessory, not a mask.",
+      "A catch-all naming no one product.",
       "Confirmed by someone@example.com"
     );
 
@@ -526,10 +525,10 @@ describe("assignmentRowsFrom", () => {
     const [, overridden] = assignmentRowsFrom(assignment, ASSIGNMENT_CSV);
 
     expect(overridden.recommendedCollectionUrl).toBe(
-      "https://www.cpap.com/collections/mask-parts"
+      "https://www.cpap.com/collections/full-face-cpap-masks"
     );
     expect(overridden.override).toBe(
-      "https://www.cpap.com/collections/cpap-mask-parts"
+      "https://www.cpap.com/collections/cpap-full-face-masks"
     );
     expect(overridden.disposition).toBe("collection");
   });
@@ -537,7 +536,7 @@ describe("assignmentRowsFrom", () => {
   it("keeps a comma inside Legacy PNum(s) as one field", () => {
     const [, multiple] = assignmentRowsFrom(assignment, ASSIGNMENT_CSV);
 
-    expect(multiple.legacyPnums).toBe("6402, 6404");
+    expect(multiple.legacyPnums).toBe("5854, 5794");
   });
 
   it("reads by header, so it refuses the columns in a different order", () => {

@@ -33,7 +33,7 @@ runs while the danger is visible is a guard you find out about too late.
   `.env` as `SHEET_WORKBOOK_ID` and the run aborts without it.
 - **The allowlist is the only way through.** `SHEET_TABS` names the two option
   tables and, for each, the exact header row and the two columns read from it;
-  `ASSIGNMENT_TABS` names the curation tab and its eleven. A name becomes a URL
+  `ASSIGNMENT_TABS` names the Collection Assignment and its eleven. A name becomes a URL
   only via `tabNamed` or `assignmentTabNamed`, each of which refuses anything
   unlisted, and the command itself contains no tab name and builds no URL — a
   test enforces both, because an allowlist you can go around is a convention.
@@ -47,13 +47,13 @@ runs while the danger is visible is a guard you find out about too late.
 
 Two shapes of tab, and deliberately not one. The `user_*` option tables reduce
 to a Suggested Title and a Suggested URL, which is genuinely all they
-contribute. The `collection-assignment` tab is eleven columns of human
+contribute. The Collection Assignment is eleven columns of human
 curation that reduce to nothing: `Recommended Collection URL` is a proposal,
 `Override` can replace it, and `Disposition` decides whether either is used.
 Squeezing that into `titleColumn`/`urlColumn` would have to drop columns or lie
 about the two it kept, so `AssignmentTab` sits beside `SheetTab` rather than
-replacing it — the guards are shared, the shape is not. Reading the curation
-tab is all this command does with it: applying an `Override` and refusing an
+replacing it — the guards are shared, the shape is not. Reading the Collection
+Assignment is all this command does with it: applying an `Override` and refusing an
 `undecided` `Disposition` are the transform's decisions, not the export's.
 
 `data/user_humidifier.csv` is retired rather than deleted (ADR-0022). `Humidifier`

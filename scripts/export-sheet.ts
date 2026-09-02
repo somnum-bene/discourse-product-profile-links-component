@@ -13,11 +13,11 @@ import process from "node:process";
 import {
   EXPORT_TABS,
   exportFileName,
-  isSheetTab,
   readSheetTab,
   sheetCsvUrl,
   SheetExportError,
   sheetRowsFrom,
+  sheetTabFor,
   WORKBOOK_ID_VAR,
 } from "./lib/sheet-export.ts";
 
@@ -50,10 +50,11 @@ async function main(): Promise<void> {
     // is worth more than the saving.
     const csvText = await response.text();
     const dataRows = readSheetTab(tab, csvText);
-    // Only the option tables feed the catalogue. The curation tab is fetched,
-    // validated and committed on the same terms and contributes no rows, which
-    // is a fact about the tab rather than a special case for it.
-    const sheetRows = isSheetTab(tab) ? sheetRowsFrom(tab, csvText) : [];
+    // Only the option tables feed the catalogue. The Collection Assignment is
+    // fetched, validated and committed on the same terms and contributes no
+    // rows, which is a fact about the tab rather than a special case for it.
+    const optionTable = sheetTabFor(tab);
+    const sheetRows = optionTable ? sheetRowsFrom(optionTable, csvText) : [];
     fetched.push({ tab, csvText, dataRows, sheetRows });
   }
 
