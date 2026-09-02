@@ -602,16 +602,11 @@ describe("the review document", () => {
     expect(review).toContain("status ARCHIVED; tagged Discontinued");
   });
 
-  it("says Humidifier is empty on purpose rather than leaving a blank section", () => {
-    expect(review).toContain(
-      "## Humidifier — no Mappings, and that is expected"
-    );
-    expect(review).toContain("ADR-0012");
-  });
-
-  it("does not say the same thing about a field whose curated titles all failed", () => {
-    // Both Mask titles in the fixtures are excluded, so the field is empty for
-    // the opposite reason to Humidifier's. The two must not read alike.
+  it("says a field with no curated Mappings is a problem, not silence", () => {
+    // Both Mask titles in the fixtures are excluded, so the field ends up with
+    // no Mappings the same way a broken tab would, and that must not read like
+    // the "no Suggested columns at all" case (ADR-0012), which no current tab
+    // is in.
     expect(
       built.catalogue.some((entry) => entry.userFieldName === "Mask")
     ).toBe(false);
@@ -643,7 +638,6 @@ describe("the review document", () => {
     // the fixtures hold an archived mask carrying the division tag, and counting
     // it would report three products on sale where there are two.
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
-    expect(review).toContain("| Humidifier | 0 | 0 | 0 | 0 | 0 |");
   });
 
   it("is the same document twice, because there is no clock in it", () => {

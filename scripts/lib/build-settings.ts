@@ -91,9 +91,8 @@ export function generatedRegion(
     // A Field Mapping with no Mappings is a Config Problem: the component
     // reports it on every page load and ignores the field. A Custom User Field
     // the catalogue has nothing for is meant to have no entry at all rather
-    // than an empty one — `Humidifier` is in exactly that state (ADR-0012) —
-    // so an empty list arriving here is a fault upstream, not something to
-    // serialise faithfully.
+    // than an empty one, so an empty list arriving here is a fault upstream,
+    // not something to serialise faithfully.
     if (field.mappings.length === 0) {
       throw new BuildSettingsError(
         `The Field Mapping for "${field.user_field_name}" has no Mappings. A ` +

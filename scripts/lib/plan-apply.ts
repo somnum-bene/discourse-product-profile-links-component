@@ -33,9 +33,9 @@ import { SHEET_TABS } from "./sheet-export.ts";
  *
  * It is derived from that allowlist rather than written out again because the
  * two must agree: a field the spreadsheet curates titles for and this step has
- * never heard of would go unreported, which is the failure `Humidifier` would
- * have been. The catalogue names only the fields that resolved *some* product,
- * so it cannot answer "which fields were in scope and came up empty".
+ * never heard of would go unreported. The catalogue names only the fields that
+ * resolved *some* product, so it cannot answer "which fields were in scope and
+ * came up empty".
  */
 export const MANAGED_FIELDS: readonly string[] = SHEET_TABS.map(
   (tab) => tab.userFieldName
@@ -262,10 +262,10 @@ function reasonFor(
  * direction, and the reason a routine catalogue change asks for `replace` again.
  *
  * A field the catalogue has no Mappings for is not touched at all unless it is
- * named in `clear`. Emptying `Humidifier` destroys site data for a field this
- * work does not otherwise cover, and it must not ride along on populating
- * `Machine` and `Mask` (ADR-0012). Naming the field is the authorisation; asking
- * for `replace` as well would make the second flag noise.
+ * named in `clear`. Emptying a field this work does not otherwise cover
+ * destroys site data, and it must not ride along on populating `Machine` and
+ * `Mask` (ADR-0012). Naming the field is the authorisation; asking for
+ * `replace` as well would make the second flag noise.
  */
 export function planApply(
   currentFields: readonly UserFieldDefinition[],
@@ -515,10 +515,10 @@ function notDropdown(
  * same choice offered twice, with no way to tell which one a User picked.
  *
  * There is deliberately no check for an *empty* option list. `dropdownOptionsFor`
- * emits no entry at all for a field with no Resolved Products — that is what
- * keeps `Humidifier` absent rather than present and empty — so the case cannot
- * arise here, and a guard nothing can reach is a guard nothing tests. The
- * invariant is asserted where it is actually true, against `dropdownOptionsFor`.
+ * emits no entry at all for a field with no Resolved Products — that keeps
+ * such a field absent rather than present and empty — so the case cannot arise
+ * here, and a guard nothing can reach is a guard nothing tests. The invariant
+ * is asserted where it is actually true, against `dropdownOptionsFor`.
  */
 function assertUsableTargets(targets: readonly FieldOptions[]): void {
   for (const target of targets) {

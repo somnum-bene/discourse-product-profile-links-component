@@ -1,11 +1,11 @@
-// The Sheet Exports are provenance: the three `user_*` tabs of the migration
+// The Sheet Exports are provenance: the `user_*` tabs of the migration
 // spreadsheet, committed exactly as the sheet returned them, so that a change
 // product made to the spreadsheet shows up in `git diff` separately from a
 // change the transform made. Nothing in the component reads them.
 //
 // The reason this file is careful out of proportion to what it does: the same
 // workbook holds roughly 124,000 real usernames and email addresses on tabs
-// two clicks away from these three. Every guard below is fail-closed, because
+// two clicks away from these two. Every guard below is fail-closed, because
 // the failure worth protecting against is not "we fetched the wrong tab" — that
 // is loud — but "a tab we recognise by name now holds different data", which is
 // silent. Skipping a surprise is not safe. Stopping is.
@@ -32,8 +32,7 @@ export interface SheetTab {
   headers: readonly string[];
   /**
    * Header of the column holding the Suggested Title, or null when the tab has
-   * no Suggested columns at all. `user_humidifier` is the null case and that is
-   * by design, not an oversight — see ADR-0012.
+   * no Suggested columns at all.
    */
   titleColumn: string | null;
   /** Header of the column holding the Suggested URL, or null. Pairs with titleColumn. */
@@ -41,7 +40,7 @@ export interface SheetTab {
 }
 
 /**
- * The tab allowlist. Three entries, and no code path that fetches a tab absent
+ * The tab allowlist. Two entries, and no code path that fetches a tab absent
  * from it: the only way to turn a name into a URL is `tabNamed`, which refuses
  * anything not listed here.
  */
@@ -60,21 +59,11 @@ export const SHEET_TABS: readonly SheetTab[] = [
     titleColumn: "Suggested Title",
     urlColumn: "Suggested URL",
   },
-  {
-    // Three columns, and the third one's header is genuinely blank in the
-    // spreadsheet. It holds URLs, but nobody curated a Suggested Title to go
-    // with them, so the tab exports for provenance and yields no rows.
-    tab: "user_humidifier",
-    userFieldName: "Humidifier",
-    headers: ["Value", "Text", ""],
-    titleColumn: null,
-    urlColumn: null,
-  },
 ];
 
 /**
- * A ceiling on how many data rows a `user_*` tab may have. The three of them
- * run to 68, 149 and 5 rows; the tabs holding personal data run to about
+ * A ceiling on how many data rows a `user_*` tab may have. The two of them
+ * run to 68 and 149 rows; the tabs holding personal data run to about
  * 124,000. A tab that has grown by an order of magnitude under a header row
  * that still matches has been restructured, not edited, and the run stops.
  */

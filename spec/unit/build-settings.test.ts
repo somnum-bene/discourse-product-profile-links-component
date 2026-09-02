@@ -130,10 +130,9 @@ describe("the generated region", () => {
   it("refuses a Field Mapping with no Mappings", () => {
     // Shipping one would be worse than shipping nothing: the component reports
     // it as a Config Problem on every page load and ignores the field. A
-    // Custom User Field the catalogue has nothing for gets no entry at all,
-    // which is the state `Humidifier` is meant to be in.
+    // Custom User Field the catalogue has nothing for gets no entry at all.
     expect(() =>
-      generatedRegion([{ user_field_name: "Humidifier", mappings: [] }], DIGEST)
+      generatedRegion([{ user_field_name: "Vendor", mappings: [] }], DIGEST)
     ).toThrow(/no Mappings/);
   });
 
@@ -475,13 +474,9 @@ describe("the settings.yml this repository ships", () => {
   });
 
   it("gives no field an empty mappings list", () => {
-    // `Humidifier` curates no titles (ADR-0012), so it is absent rather than
-    // present and empty — the two look similar in a diff and mean opposite
-    // things to the component.
-    expect(shipped.map((field) => field.user_field_name)).not.toContain(
-      "Humidifier"
-    );
-
+    // A field with nothing resolved is absent rather than present and empty
+    // (ADR-0012) — the two look similar in a diff and mean opposite things to
+    // the component.
     for (const field of shipped) {
       expect(field.mappings.length).toBeGreaterThan(0);
     }

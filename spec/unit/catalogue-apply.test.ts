@@ -38,10 +38,14 @@ const LIB_FILE = "scripts/lib/catalogue-apply.ts";
 const COMMAND_FILE = "scripts/apply-catalogue.ts";
 
 /**
- * The test instance's three fields exactly as `/admin/config/user_fields.json`
- * reported them on 2026-08-05, all thirteen keys of each. The nine keys the plan
- * has no opinion about are here because the update route takes a whole field
- * object, so they are the thing most likely to be lost.
+ * `Machine` and `Mask` exactly as `/admin/config/user_fields.json` reported
+ * them on 2026-08-05, all thirteen keys of each, plus a third field the
+ * instance also defines that this pipeline does not manage — a leftover from
+ * before ADR-0022 dropped `Humidifier` from scope, standing in generically for
+ * "a Custom User Field on the instance this pipeline has no opinion about".
+ * The nine keys the plan has no opinion about are here because the update
+ * route takes a whole field object, so they are the thing most likely to be
+ * lost.
  */
 const LIVE_RESPONSE = {
   user_fields: [
@@ -80,8 +84,8 @@ const LIVE_RESPONSE = {
     },
     {
       id: 4,
-      name: "Humidifier",
-      description: "Humidifier link",
+      name: "Sleep Position",
+      description: "Sleep Position",
       field_type: "dropdown",
       editable: true,
       required: false,
@@ -91,12 +95,7 @@ const LIVE_RESPONSE = {
       show_on_signup: true,
       searchable: false,
       position: 3,
-      options: [
-        "DreamStation Heated Humidifier",
-        "HC150 Heated Humidifier",
-        "Dreamstation Heated Humidifier",
-        "S9™ Series H5i™ Heated Humidifier",
-      ],
+      options: ["Side Sleeper", "Back Sleeper", "Stomach Sleeper"],
     },
   ],
 };
@@ -172,12 +171,8 @@ describe("the arguments the command takes", () => {
   });
 
   it("takes a field to clear either spelling", () => {
-    expect(parseApplyArgs(["--clear", "Humidifier"]).clear).toEqual([
-      "Humidifier",
-    ]);
-    expect(parseApplyArgs(["--clear=Humidifier"]).clear).toEqual([
-      "Humidifier",
-    ]);
+    expect(parseApplyArgs(["--clear", "Vendor"]).clear).toEqual(["Vendor"]);
+    expect(parseApplyArgs(["--clear=Vendor"]).clear).toEqual(["Vendor"]);
   });
 
   it("takes a field name with spaces in it", () => {
@@ -188,8 +183,8 @@ describe("the arguments the command takes", () => {
 
   it("collects more than one field, one name at a time", () => {
     expect(
-      parseApplyArgs(["--clear", "Humidifier", "--clear", "Mask"]).clear
-    ).toEqual(["Humidifier", "Mask"]);
+      parseApplyArgs(["--clear", "Vendor", "--clear", "Mask"]).clear
+    ).toEqual(["Vendor", "Mask"]);
   });
 
   it("refuses clear with nothing after it, rather than clearing everything", () => {
@@ -279,10 +274,10 @@ describe("reading the field definitions", () => {
     expect(fields.map((entry) => [entry.id, entry.name])).toEqual([
       [2, "Machine"],
       [3, "Mask"],
-      [4, "Humidifier"],
+      [4, "Sleep Position"],
     ]);
     expect(Object.keys(fields[0])).toHaveLength(13);
-    expect(fields[2].description).toBe("Humidifier link");
+    expect(fields[2].description).toBe("Sleep Position");
     expect(fields[2].position).toBe(3);
   });
 
@@ -339,10 +334,10 @@ describe("reading the field definitions", () => {
 });
 
 describe("the body one write sends", () => {
-  const humidifier = parseUserFields(LIVE_RESPONSE)[2];
+  const sleepPosition = parseUserFields(LIVE_RESPONSE)[2];
 
   it("carries every key the instance reported except the id", () => {
-    const { user_field: body } = writePayload(humidifier, ["Only this"]);
+    const { user_field: body } = writePayload(sleepPosition, ["Only this"]);
 
     expect(body.id).toBeUndefined();
     expect(Object.keys(body).sort()).toEqual(
@@ -361,30 +356,29 @@ describe("the body one write sends", () => {
         "show_on_user_card",
       ].sort()
     );
-    expect(body.description).toBe("Humidifier link");
+    expect(body.description).toBe("Sleep Position");
     expect(body.show_on_user_card).toBe(true);
     expect(body.position).toBe(3);
   });
 
   it("replaces the options and nothing else", () => {
-    const { user_field: body } = writePayload(humidifier, ["A", "B"]);
+    const { user_field: body } = writePayload(sleepPosition, ["A", "B"]);
 
     expect(body.options).toEqual(["A", "B"]);
   });
 
   it("leaves the field it was given alone", () => {
-    writePayload(humidifier, ["A"]);
+    writePayload(sleepPosition, ["A"]);
 
-    expect(humidifier.options).toEqual([
-      "DreamStation Heated Humidifier",
-      "HC150 Heated Humidifier",
-      "Dreamstation Heated Humidifier",
-      "S9™ Series H5i™ Heated Humidifier",
+    expect(sleepPosition.options).toEqual([
+      "Side Sleeper",
+      "Back Sleeper",
+      "Stomach Sleeper",
     ]);
   });
 
   it("writes options in the order it was given, not sorted", () => {
-    const { user_field: body } = writePayload(humidifier, [
+    const { user_field: body } = writePayload(sleepPosition, [
       "zeta",
       "Alpha",
       "Mu",
@@ -398,12 +392,12 @@ describe("the body one write sends", () => {
 describe("a write this transport cannot carry out", () => {
   const clear: FieldWrite = {
     id: 4,
-    user_field_name: "Humidifier",
+    user_field_name: "Vendor",
     reason: "clear",
-    before: ["DreamStation Heated Humidifier"],
+    before: ["Acme Supply Co"],
     after: [],
     added: [],
-    removed: ["DreamStation Heated Humidifier"],
+    removed: ["Acme Supply Co"],
   };
   const populate: FieldWrite = {
     id: 2,
@@ -469,12 +463,15 @@ describe("whether a plan gets sent at all", () => {
 
   it("stops on a clear before any request, not partway through the writes", () => {
     const decision = applyDecision(
-      planApply(current, catalogue, { replace: true, clear: ["Humidifier"] })
+      planApply(current, catalogue, {
+        replace: true,
+        clear: ["Sleep Position"],
+      })
     );
 
     expect(decision.kind).toBe("impossible");
     expect(decision.kind === "impossible" && decision.message).toContain(
-      "Humidifier"
+      "Sleep Position"
     );
     expect(decision.kind === "impossible" && decision.message).toContain(
       CLEAR_UNSUPPORTED
@@ -484,13 +481,12 @@ describe("whether a plan gets sent at all", () => {
   it("says nothing about a clear for a field that is already empty", () => {
     // Nothing to remove means no write, so there is nothing this transport
     // cannot carry out.
-    const plan = planApply(
-      [...current, dropdown(9, "Sleep Position", [])],
-      catalogue,
-      { replace: true, clear: ["Sleep Position"] }
-    );
+    const plan = planApply([...current, dropdown(9, "Vendor", [])], catalogue, {
+      replace: true,
+      clear: ["Vendor"],
+    });
 
-    expect(plan.unchanged).toContain("Sleep Position");
+    expect(plan.unchanged).toContain("Vendor");
     expect(applyDecision(plan)).toEqual({ kind: "proceed" });
   });
 });
@@ -641,14 +637,12 @@ describe("how far the instance's component is from the catalogue", () => {
   it("mentions a field the instance maps and the catalogue does not", () => {
     const live = [
       ...shipped,
-      field("Humidifier", [
-        mapping("HC150", "https://www.cpap.com/products/h"),
-      ]),
+      field("Vendor", [mapping("Acme", "https://www.cpap.com/products/h")]),
     ];
     const notes = componentDrift(live, shipped);
 
     expect(notes).toHaveLength(1);
-    expect(notes[0].user_field_name).toBe("Humidifier");
+    expect(notes[0].user_field_name).toBe("Vendor");
     expect(notes[0].detail).toContain("does not touch that field");
   });
 
@@ -689,12 +683,12 @@ describe("reading the write back", () => {
     // The failure this exists for: an empty options list is answered 200 and
     // changes nothing, so the run is green and the site is untouched.
     const mismatches = readbackMismatches(
-      [dropdown(4, "Humidifier", ["DreamStation Heated Humidifier"])],
-      [{ user_field_name: "Humidifier", options: [] }]
+      [dropdown(4, "Vendor", ["Acme Supply Co"])],
+      [{ user_field_name: "Vendor", options: [] }]
     );
 
     expect(mismatches).toHaveLength(1);
-    expect(mismatches[0].actual).toEqual(["DreamStation Heated Humidifier"]);
+    expect(mismatches[0].actual).toEqual(["Acme Supply Co"]);
     expect(mismatches[0].detail).toContain("a 200 is not confirmation");
   });
 
@@ -898,36 +892,39 @@ describe("the whole decision against the instance as it stands", () => {
     const applied: LiveUserField[] = [
       dropdown(2, "Machine", [...targets[0].options]),
       dropdown(3, "Mask", [...targets[1].options]),
-      dropdown(4, "Humidifier", ["DreamStation Heated Humidifier"]),
+      dropdown(4, "Sleep Position", ["Side Sleeper"]),
     ];
-    const second = planApply(applied, catalogue, { replace: true });
+    const second = planApply(applied, catalogue, {
+      replace: true,
+      managedFields: ["Machine", "Mask", "Sleep Position"],
+    });
 
     expect(second.writes).toEqual([]);
     expect(second.refusals).toEqual([]);
     expect(second.unchanged).toEqual(["Machine", "Mask"]);
     expect(readbackMismatches(applied, targets)).toEqual([]);
     expect(second.warnings.map((warning) => warning.user_field_name)).toEqual([
-      "Humidifier",
+      "Sleep Position",
     ]);
   });
 
-  it("leaves Humidifier alone when only Machine and Mask are being written", () => {
+  it("leaves Sleep Position alone when only Machine and Mask are being written", () => {
     const catalogue = realCatalogue();
     const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
       replace: true,
     });
 
     expect(
-      plan.writes.some((write) => write.user_field_name === "Humidifier")
+      plan.writes.some((write) => write.user_field_name === "Sleep Position")
     ).toBe(false);
     expect(unsupportedWrites(plan.writes)).toEqual([]);
   });
 
-  it("stops before any request when Humidifier clearing is asked for", () => {
+  it("stops before any request when Sleep Position clearing is asked for", () => {
     const catalogue = realCatalogue();
     const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
       replace: true,
-      clear: ["Humidifier"],
+      clear: ["Sleep Position"],
     });
 
     expect(plan.writes.map((write) => write.reason)).toContain("clear");

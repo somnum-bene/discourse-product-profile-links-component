@@ -17,16 +17,17 @@ import {
 import { SHEET_TABS } from "../../scripts/lib/sheet-export";
 
 /**
- * The three Custom User Fields as `https://tyler-test.discourse.group` defined
- * them on 2026-08-05, read from `/admin/config/user_fields.json` and trimmed to
- * the keys this step reasons about.
+ * `Machine` and `Mask` as `https://tyler-test.discourse.group` defined them on
+ * 2026-08-05, read from `/admin/config/user_fields.json` and trimmed to the
+ * keys this step reasons about, plus a third field the instance also happens
+ * to define that this pipeline does not manage at all — a leftover from
+ * before ADR-0022 dropped `Humidifier` from scope, standing in generically for
+ * "a Custom User Field on the instance this pipeline has no opinion about".
  *
- * It is the real thing rather than a tidy invention because every hard case in
- * this file is already in it: `Machine`'s two options are the catalogue's own
- * products spelled with trademark symbols, `Mask`'s single option matches a
- * Mapping exactly, and `Humidifier` holds four options the catalogue has no
- * Mappings for at all — including `DreamStation` and `Dreamstation`, which are
- * two Dropdown Options and one product.
+ * `Machine` and `Mask` are the real thing rather than a tidy invention because
+ * every hard case in this file is already in them: `Machine`'s two options are
+ * the catalogue's own products spelled with trademark symbols, and `Mask`'s
+ * single option matches a Mapping exactly.
  */
 const TEST_INSTANCE: UserFieldDefinition[] = [
   {
@@ -46,14 +47,9 @@ const TEST_INSTANCE: UserFieldDefinition[] = [
   },
   {
     id: 4,
-    name: "Humidifier",
+    name: "Sleep Position",
     field_type: "dropdown",
-    options: [
-      "DreamStation Heated Humidifier",
-      "HC150 Heated Humidifier",
-      "Dreamstation Heated Humidifier",
-      "S9™ Series H5i™ Heated Humidifier",
-    ],
+    options: ["Side Sleeper", "Back Sleeper", "Stomach Sleeper"],
   },
 ];
 
@@ -101,7 +97,7 @@ function realCatalogue(): ResolvedProduct[] {
 
 describe("the fields this pipeline covers", () => {
   it("is the Sheet Export allowlist, in its order", () => {
-    expect(MANAGED_FIELDS).toEqual(["Machine", "Mask", "Humidifier"]);
+    expect(MANAGED_FIELDS).toEqual(["Machine", "Mask"]);
     expect(MANAGED_FIELDS).toEqual(SHEET_TABS.map((tab) => tab.userFieldName));
   });
 });
@@ -392,51 +388,65 @@ describe("refusing a write that would remove an option", () => {
 });
 
 describe("a field the catalogue has no Mappings for", () => {
-  const humidifier = () => [
+  // Not a real Managed Field — invented and named explicitly via
+  // `managedFields` so this scenario (a field this pipeline is scoped to but
+  // the catalogue has nothing for) stays exercised without tying it to any
+  // one real field's history.
+  const THREE_FIELDS = [...TWO_FIELDS, "Vendor"];
+  const vendor = () => [
     ...emptyFields(),
-    dropdown(4, "Humidifier", ["HC150 Heated Humidifier"]),
+    dropdown(4, "Vendor", ["Acme Supply Co"]),
   ];
 
   it("is left alone, and warned about", () => {
-    const plan = planApply(humidifier(), CATALOGUE);
+    const plan = planApply(vendor(), CATALOGUE, {
+      managedFields: THREE_FIELDS,
+    });
 
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
       "Machine",
       "Mask",
     ]);
     expect(plan.warnings).toHaveLength(1);
-    expect(plan.warnings[0].user_field_name).toBe("Humidifier");
-    expect(plan.warnings[0].detail).toContain("HC150 Heated Humidifier");
+    expect(plan.warnings[0].user_field_name).toBe("Vendor");
+    expect(plan.warnings[0].detail).toContain("Acme Supply Co");
     expect(plan.warnings[0].detail).toContain("no Profile Link");
   });
 
   it("is not cleared by replace", () => {
-    const plan = planApply(humidifier(), CATALOGUE, { replace: true });
+    const plan = planApply(vendor(), CATALOGUE, {
+      managedFields: THREE_FIELDS,
+      replace: true,
+    });
 
     expect(
-      plan.writes.some((write) => write.user_field_name === "Humidifier")
+      plan.writes.some((write) => write.user_field_name === "Vendor")
     ).toBe(false);
   });
 
   it("clears to empty when it is named, and only then", () => {
-    const plan = planApply(humidifier(), CATALOGUE, { clear: ["Humidifier"] });
+    const plan = planApply(vendor(), CATALOGUE, {
+      managedFields: THREE_FIELDS,
+      clear: ["Vendor"],
+    });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.warnings).toEqual([]);
     expect(plan.writes[0]).toEqual({
       id: 4,
-      user_field_name: "Humidifier",
+      user_field_name: "Vendor",
       reason: "clear",
-      before: ["HC150 Heated Humidifier"],
+      before: ["Acme Supply Co"],
       after: [],
       added: [],
-      removed: ["HC150 Heated Humidifier"],
+      removed: ["Acme Supply Co"],
     });
   });
 
   it("needs no replace to clear — naming the field is the authorisation", () => {
-    const plan = planApply(humidifier(), CATALOGUE, {
-      clear: ["Humidifier"],
+    const plan = planApply(vendor(), CATALOGUE, {
+      managedFields: THREE_FIELDS,
+      clear: ["Vendor"],
       replace: false,
     });
 
@@ -446,35 +456,38 @@ describe("a field the catalogue has no Mappings for", () => {
 
   it("is already clear, and is named rather than written to again", () => {
     const plan = planApply(
-      [...emptyFields(), dropdown(4, "Humidifier", [])],
+      [...emptyFields(), dropdown(4, "Vendor", [])],
       CATALOGUE,
-      { clear: ["Humidifier"] }
+      { managedFields: THREE_FIELDS, clear: ["Vendor"] }
     );
 
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
       "Machine",
       "Mask",
     ]);
-    expect(plan.unchanged).toContain("Humidifier");
+    expect(plan.unchanged).toContain("Vendor");
   });
 
   it("warns rather than refuses when the instance does not define it", () => {
-    const plan = planApply(emptyFields(), CATALOGUE);
+    const plan = planApply(emptyFields(), CATALOGUE, {
+      managedFields: THREE_FIELDS,
+    });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.warnings).toHaveLength(1);
-    expect(plan.warnings[0].user_field_name).toBe("Humidifier");
+    expect(plan.warnings[0].user_field_name).toBe("Vendor");
     expect(plan.warnings[0].detail).toContain("does not define it");
   });
 
   it("does not warn about a field outside the pipeline's scope", () => {
     const plan = planApply(
       [...emptyFields(), dropdown(9, "Location", ["Anywhere"])],
-      CATALOGUE
+      CATALOGUE,
+      { managedFields: THREE_FIELDS }
     );
 
     expect(plan.warnings.map((warning) => warning.user_field_name)).toEqual([
-      "Humidifier",
+      "Vendor",
     ]);
   });
 });
@@ -482,13 +495,13 @@ describe("a field the catalogue has no Mappings for", () => {
 describe("refusing to clear the wrong thing", () => {
   it("refuses a name the instance does not define", () => {
     const plan = planApply(emptyFields(), CATALOGUE, {
-      clear: ["Humidfier"],
+      clear: ["Vendor"],
       managedFields: TWO_FIELDS,
     });
 
     expect(plan.refusals).toHaveLength(1);
     expect(plan.refusals[0].reason).toBe("clear-target-missing");
-    expect(plan.refusals[0].detail).toContain("Humidfier");
+    expect(plan.refusals[0].detail).toContain("Vendor");
     expect(plan.writes).toEqual([]);
   });
 
@@ -508,10 +521,10 @@ describe("refusing to clear the wrong thing", () => {
     const plan = planApply(
       [
         ...emptyFields(),
-        { id: 4, name: "Humidifier", field_type: "text", options: null },
+        { id: 4, name: "Vendor", field_type: "text", options: null },
       ],
       CATALOGUE,
-      { clear: ["Humidifier"] }
+      { clear: ["Vendor"] }
     );
 
     expect(plan.refusals).toHaveLength(1);
@@ -522,7 +535,7 @@ describe("refusing to clear the wrong thing", () => {
   it("throws when the same field is named twice", () => {
     expect(() =>
       planApply(emptyFields(), CATALOGUE, {
-        clear: ["Humidifier", "Humidifier"],
+        clear: ["Vendor", "Vendor"],
       })
     ).toThrow(PlanApplyError);
   });
@@ -577,10 +590,11 @@ describe("a field the plan cannot reason about", () => {
     const plan = planApply(
       [
         ...emptyFields(),
-        dropdown(4, "Humidifier", ["HC150 Heated Humidifier"]),
-        dropdown(8, "Humidifier", []),
+        dropdown(4, "Vendor", ["Acme Supply Co"]),
+        dropdown(8, "Vendor", []),
       ],
-      CATALOGUE
+      CATALOGUE,
+      { managedFields: [...TWO_FIELDS, "Vendor"] }
     );
 
     expect(plan.refusals).toEqual([]);
@@ -694,7 +708,7 @@ describe("the test instance as it stands today", () => {
     ).not.toContain("Mask");
   });
 
-  it("writes both mapped fields with replace, and leaves Humidifier alone", () => {
+  it("writes both mapped fields with replace, and does not touch anything else", () => {
     const catalogue = realCatalogue();
     const plan = planApply(TEST_INSTANCE, catalogue, { replace: true });
 
@@ -718,39 +732,46 @@ describe("the test instance as it stands today", () => {
     expect(plan.writes[1].added).toHaveLength(plan.writes[1].after.length - 1);
   });
 
-  it("warns that the Humidifier options resolve nothing, and names them", () => {
-    const plan = planApply(TEST_INSTANCE, realCatalogue(), { replace: true });
+  const withSleepPosition = [...MANAGED_FIELDS, "Sleep Position"];
+
+  it("warns that the Sleep Position options resolve nothing, and names them", () => {
+    const plan = planApply(TEST_INSTANCE, realCatalogue(), {
+      replace: true,
+      managedFields: withSleepPosition,
+    });
 
     expect(plan.warnings).toHaveLength(1);
-    expect(plan.warnings[0].user_field_name).toBe("Humidifier");
+    expect(plan.warnings[0].user_field_name).toBe("Sleep Position");
 
     for (const option of TEST_INSTANCE[2].options ?? []) {
       expect(plan.warnings[0].detail).toContain(option);
     }
   });
 
-  it("clears Humidifier only when it is named, alongside the two writes", () => {
+  it("clears Sleep Position only when it is named, alongside the two writes", () => {
     const plan = planApply(TEST_INSTANCE, realCatalogue(), {
       replace: true,
-      clear: ["Humidifier"],
+      clear: ["Sleep Position"],
+      managedFields: withSleepPosition,
     });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.warnings).toEqual([]);
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
-      "Humidifier",
+      "Sleep Position",
       "Machine",
       "Mask",
     ]);
     expect(plan.writes[0].after).toEqual([]);
-    expect(plan.writes[0].removed).toHaveLength(4);
+    expect(plan.writes[0].removed).toHaveLength(3);
   });
 
   it("is idempotent — applying the plan's own result plans nothing", () => {
     const catalogue = realCatalogue();
     const first = planApply(TEST_INSTANCE, catalogue, {
       replace: true,
-      clear: ["Humidifier"],
+      clear: ["Sleep Position"],
+      managedFields: withSleepPosition,
     });
 
     const applied: UserFieldDefinition[] = TEST_INSTANCE.map((field) => {
@@ -763,14 +784,17 @@ describe("the test instance as it stands today", () => {
 
     const second = planApply(applied, catalogue, {
       replace: true,
-      clear: ["Humidifier"],
+      clear: ["Sleep Position"],
+      managedFields: withSleepPosition,
     });
 
     expect(second.writes).toEqual([]);
     expect(second.refusals).toEqual([]);
-    expect(second.unchanged).toEqual(["Humidifier", "Machine", "Mask"]);
+    expect(second.unchanged).toEqual(["Sleep Position", "Machine", "Mask"]);
 
-    const withoutFlags = planApply(applied, catalogue);
+    const withoutFlags = planApply(applied, catalogue, {
+      managedFields: withSleepPosition,
+    });
 
     expect(withoutFlags.writes).toEqual([]);
     expect(withoutFlags.refusals).toEqual([]);

@@ -8,7 +8,7 @@ The commands and what each one is allowed to touch:
 
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
+| `pnpm export:sheet`      | two allowlisted spreadsheet tabs         | `data/user_*.csv`                                      | `SHEET_WORKBOOK_ID`                                                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
@@ -22,14 +22,14 @@ it could no longer run in CI.
 
 ## The Sheet Export refuses more than it accepts
 
-`export:sheet` fetches three tabs of a workbook that also holds roughly 124,000
+`export:sheet` fetches two tabs of a workbook that also holds roughly 124,000
 real usernames and email addresses. This repository is public. Those two facts
 set the design:
 
 - **The workbook id is configuration, not a constant.** It is a public link to
   real customer data, so committing it would publish the link. It lives in
   `.env` as `SHEET_WORKBOOK_ID` and the run aborts without it.
-- **The allowlist is the only way through.** `SHEET_TABS` names the three tabs
+- **The allowlist is the only way through.** `SHEET_TABS` names the two tabs
   and, for each, the exact header row and the two columns read from it. A name
   becomes a URL only via `tabNamed`, which refuses anything unlisted, and the
   command itself contains no tab name and builds no URL — a test enforces both,
@@ -39,10 +39,15 @@ set the design:
   and the personal-data tabs are far above; no cell may look like an email
   address. Each catches a restructured workbook the other two would miss. A
   surprise stops the run — skipping it is not safe.
-- **Nothing is written until all three tabs pass.** A partial run would leave one
-  refreshed export beside two stale ones, which is worse than leaving all three.
-- **`user_humidifier` has no Suggested columns.** That is deliberate (ADR-0012),
-  not a fault: the tab validates, exports for provenance, and yields no rows.
+- **Nothing is written until both tabs pass.** A partial run would leave one
+  refreshed export beside a stale one, which is worse than leaving both.
+
+`data/user_humidifier.csv` is retired rather than deleted (ADR-0022). `Humidifier`
+was dropped from `SHEET_TABS` and this command no longer fetches or writes it,
+but the file stays as a historical record of what shipped before, the same way
+a row leaving `data/resolved-products.csv` is a diff rather than a rewrite of
+history. Deleting it was considered and rejected: nothing reads it, so keeping
+it costs nothing, and it is the only record of what the tab held.
 
 Exports are written byte for byte as the endpoint returned them — LF endings,
 no final newline — which is why `data/` is exempt from the whitespace-fixing
@@ -70,7 +75,7 @@ the same kind of thing:
 
 Two queries go to Shopify. Products the spreadsheet names are fetched **by
 handle** — the same handle the transform's join will look for, so the command
-cannot fetch a product the transform never consults. Each of the three divisions
+cannot fetch a product the transform never consults. Each of the two divisions
 is then surveyed for what it currently sells, which is the only way to answer
 "what does cpap.com sell that the spreadsheet never mentions". A refused query
 arrives as HTTP 200 with an `errors` array, so the body is checked rather than
@@ -80,11 +85,13 @@ Everything it decides is in `lib/catalogue-refresh.ts` and reached by tests. The
 access token is never passed into that file at all: the command reads it and puts
 it in a header, so no function that could log something has it.
 
-`Humidifier` produces no Mappings and the run says so. An empty field is reported
-two different ways on purpose — "expected, the tab curates none" for
-`Humidifier`, and "that is a problem" for a field that curates titles and
-resolved none of them. Printing one message for both would make the broken case
-look like the intended one.
+A field whose tab curates no Suggested columns at all produces no Mappings and
+the run says so. An empty field is reported two different ways on purpose —
+"expected, the tab curates none" for that case, and "that is a problem" for a
+field that curates titles and resolved none of them. Printing one message for
+both would make the broken case look like the intended one. No current tab is
+in the first state — `user_humidifier` was, until ADR-0022 retired it — but the
+distinction stays because a future tab could be.
 
 ## The build generates part of a hand-written file, and a gate keeps it honest
 
@@ -137,7 +144,7 @@ so two more assertions run against the real `settings.yml` rather than against a
 copy of it.
 
 The first feeds the shipped `default:` through the component's own
-`readLinkConfig` with the three Managed Fields standing in for the site, and
+`readLinkConfig` with the two Managed Fields standing in for the site, and
 requires no Config Problems. Those stubs are named from the Sheet Export
 allowlist rather than derived from the file, and that is the whole point: a stub
 list built from the shipped Field Mappings would rename itself along with a
@@ -187,7 +194,7 @@ can restore, and a User holding a removed value silently stops getting a Profile
 Link, with nothing logged unless Debug Mode is on. Discovering this behaviour by
 running it against a live instance is how that data gets lost, so every question
 worth arguing about is answered against a fixture — and the fixture is the test
-instance's own three fields, because every hard case is already in them.
+instance's own two Managed Fields, because every hard case is already in them.
 
 **Refusal is about removal, not authorship** (ADR-0013). There is nowhere in
 Discourse to record that this pipeline wrote an option, so an option we wrote
@@ -202,8 +209,8 @@ stores what the User picked.
 
 A refusal on one field empties the write list for all of them. A field already
 correct produces no writes and is named rather than passed over, which is what
-makes a second run safe. And `Humidifier` is never touched as a side effect of
-populating `Machine` and `Mask` (ADR-0012).
+makes a second run safe. And a field this pipeline does not cover is never
+touched as a side effect of populating `Machine` and `Mask` (ADR-0012).
 
 ## The apply step believes the reread, not the response code
 
@@ -218,7 +225,7 @@ does not exist.
 pnpm apply:catalogue --plan               # decide and print, write nothing
 pnpm apply:catalogue                      # apply, refusing any removal
 pnpm apply:catalogue --replace            # authorise removals, having read them
-pnpm apply:catalogue --clear "Humidifier" # refused: see below
+pnpm apply:catalogue --clear "Sleep Position" # refused: see below
 ```
 
 **The route answers `200 OK` to a write it discards** (ADR-0014). An empty
@@ -234,8 +241,8 @@ The same probing established that **a dropdown cannot be emptied at all**
 tried; the ones that are not ignored leave the field offering one blank choice.
 The only operations that reach zero destroy every value Users have stored, so
 `--clear` is refused before the first request rather than doing the nearest thing
-that appears to work. `Humidifier` keeps its four hand-entered options and the
-run says so every time.
+that appears to work. A field this pipeline does not populate keeps whatever
+options it already has and the run says so every time.
 
 Three more things it does before writing anything, in this order:
 
