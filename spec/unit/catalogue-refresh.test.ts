@@ -567,7 +567,15 @@ describe("the catalogue file", () => {
 });
 
 describe("curatesTitles", () => {
-  it("is true for a tab with Suggested columns and false for one without", () => {
+  it("is true for both current tabs, which both have Suggested columns", () => {
+    // No current SHEET_TABS entry has `titleColumn: null` — `user_humidifier`
+    // was the one that did, until ADR-0022 retired it — so the `false` branch
+    // of `tab.titleColumn !== null` has no real tab to exercise it against
+    // right now. It stays rather than being deleted because a future tab
+    // exporting for provenance only (see sheet-export.ts's `SheetTab.titleColumn`
+    // doc comment) would be in exactly that state, and `readSheetTab` /
+    // `sheetRowsFrom` are still tested against a synthetic tab shaped that way
+    // in spec/unit/sheet-export.test.ts.
     expect(curatesTitles("Machine")).toBe(true);
     expect(curatesTitles("Mask")).toBe(true);
   });
