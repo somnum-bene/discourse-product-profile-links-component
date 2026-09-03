@@ -189,8 +189,13 @@ export async function accessTokenFor(
         `for ${SHEETS_READONLY_SCOPE} under Admin Console → Security → API ` +
         `controls → Domain-wide delegation, and a fresh grant takes a few ` +
         `minutes to take effect.\n` +
-        `  \`invalid_grant\` usually means ${IMPERSONATE_EMAIL_VAR} is not a ` +
-        `Workspace user who can open the Sheet.`
+        `  \`invalid_grant\` is about the assertion, not about the Sheet: ` +
+        `${IMPERSONATE_EMAIL_VAR} is not a user this domain can impersonate, ` +
+        `the key no longer belongs to the service account, or this machine's ` +
+        `clock has drifted far enough that \`iat\` looks wrong. Whether that ` +
+        `user can open the workbook is not decided here at all — a token is ` +
+        `issued either way, and the refusal arrives as a 403 when a tab is ` +
+        `fetched.`
     );
   }
 
