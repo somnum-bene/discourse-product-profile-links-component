@@ -148,9 +148,22 @@ describe("credentialsFrom", () => {
     const broken = { ...ENV, [SERVICE_ACCOUNT_KEY_VAR]: truncated };
     const body = privateKey.split("\n")[1];
 
-    expect(() => credentialsFrom(broken)).toThrow(
-      new RegExp(`^(?!.*${body})`, "s")
-    );
+    // Compared as a string, never as a pattern. Built into a `RegExp` this
+    // assertion was checking for a different string than the one it holds:
+    // base64 contains `+`, which is a quantifier, so a negative lookahead
+    // around a body line containing one matched even when the literal key
+    // material was present. Roughly a fifth of generated keys, and a fresh key
+    // per run, so it never failed and quietly stopped asserting.
+    let refusal = "";
+    try {
+      credentialsFrom(broken);
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+
+    expect(refusal).not.toBe("");
+    expect(refusal).not.toContain(body);
+    expect(refusal).not.toContain("PRIVATE KEY");
   });
 });
 
