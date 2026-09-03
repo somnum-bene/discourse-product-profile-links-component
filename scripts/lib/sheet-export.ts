@@ -294,7 +294,15 @@ function namedIn<T extends ExportTab>(
  * appended header something `valuesToCsv` can refuse.
  */
 export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
-  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}`;
+  // Rows are bounded on the same principle, one past what the ceiling allows:
+  // the header, `MAX_DATA_ROWS` of data, and one more whose arrival is what
+  // proves the ceiling was exceeded. Refusing after the fetch was already
+  // fail-closed on writing, but a tab repointed at one of the tabs holding
+  // ~124,000 real email addresses would still have been pulled into memory,
+  // reconstructed as CSV and parsed character by character before anything
+  // objected. Not asking for it is cheaper than refusing it.
+  const lastRow = MAX_DATA_ROWS + 2;
+  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}${lastRow}`;
   const params = new URLSearchParams({ majorDimension: "ROWS" });
   return (
     `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
@@ -504,9 +512,11 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
 
   if (dataRows.length > MAX_DATA_ROWS) {
     throw new SheetExportError(
-      `${tab.tab}: ${dataRows.length} data rows exceeds the ${MAX_DATA_ROWS}-row ` +
-        `ceiling. The tabs holding personal data are far larger than any ` +
-        `exported one, so a jump this size is a restructured workbook.`
+      `${tab.tab}: at least ${dataRows.length} data rows exceeds the ` +
+        `${MAX_DATA_ROWS}-row ceiling. The tabs holding personal data are far ` +
+        `larger than any exported one, so a jump this size is a restructured ` +
+        `workbook. "At least" because the fetch is bounded at the ceiling — ` +
+        `the tab may be far larger than this number, which is the point.`
     );
   }
 

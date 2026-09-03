@@ -202,7 +202,7 @@ describe("the tab allowlist", () => {
     const url = sheetValuesUrl("WORKBOOK", machine);
 
     expect(url).toContain("/v4/spreadsheets/WORKBOOK/values/");
-    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F"));
+    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F2002"));
     expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
   });
@@ -218,6 +218,33 @@ describe("the tab allowlist", () => {
     expect(sheetValuesUrl("WORKBOOK", assignment)).toContain(
       encodeURIComponent("!A1:L")
     );
+  });
+
+  it("asks one row past the ceiling, so an oversized tab is never fetched", () => {
+    // The row bound is the column probe's twin. Refusing after the fetch was
+    // already fail-closed on writing, but a tab repointed at one of the
+    // ~124,000-row personal-data tabs would have been transferred, rebuilt as
+    // CSV and parsed before anything objected. `MAX_DATA_ROWS + 2` is the
+    // header, the rows allowed, and the one whose arrival proves the ceiling
+    // was passed — so the 2000/2001 refusal boundary is unchanged.
+    for (const tab of EXPORT_TABS) {
+      expect(sheetValuesUrl("WORKBOOK", tab)).toContain(
+        encodeURIComponent(`${MAX_DATA_ROWS + 2}`)
+      );
+    }
+
+    const header = ASSIGNMENT_HEADER;
+    const row = ASSIGNMENT_CSV.split("\n")[1];
+    const atCeiling = [header, ...Array(MAX_DATA_ROWS).fill(row)].join("\n");
+    const overCeiling = [header, ...Array(MAX_DATA_ROWS + 1).fill(row)].join(
+      "\n"
+    );
+
+    expect(readSheetTab(assignment, atCeiling)).toHaveLength(MAX_DATA_ROWS);
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(
+      SheetExportError
+    );
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(/at least/);
   });
 
   it("names each export after its tab, so the file says where it came from", () => {
@@ -315,7 +342,9 @@ describe("EXPORT_TABS", () => {
   it("addresses the Collection Assignment by name too", () => {
     const url = sheetValuesUrl("WORKBOOK", assignment);
 
-    expect(url).toContain(encodeURIComponent("'collection-assignment'!A1:L"));
+    expect(url).toContain(
+      encodeURIComponent("'collection-assignment'!A1:L2002")
+    );
     expect(url).not.toContain("gid=");
   });
 });
