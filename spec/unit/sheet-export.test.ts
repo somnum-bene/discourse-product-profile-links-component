@@ -220,6 +220,24 @@ describe("the tab allowlist", () => {
     );
   });
 
+  it("asks for cells as the sheet displays them, so they arrive as text", () => {
+    // `majorDimension` and `valueRenderOption` are both API defaults, and both
+    // are what make the `string[][]` the command casts to true. Unpinned, a
+    // change of default turns a numeric PNum into a JSON number and the first
+    // thing to touch it calls `.trim()`.
+    expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
+      "valueRenderOption=FORMATTED_VALUE"
+    );
+  });
+
+  it("refuses a cell that did not come back as text", () => {
+    const numeric = [["4872", 6092, "", "", ""]] as unknown as string[][];
+
+    expect(() => valuesToCsv(machine, numeric)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/column B came back/);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/not text/);
+  });
+
   it("asks one row past the ceiling, so an oversized tab is never fetched", () => {
     // The row bound is the column probe's twin. Refusing after the fetch was
     // already fail-closed on writing, but a tab repointed at one of the

@@ -303,7 +303,15 @@ export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
   // objected. Not asking for it is cheaper than refusing it.
   const lastRow = MAX_DATA_ROWS + 2;
   const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}${lastRow}`;
-  const params = new URLSearchParams({ majorDimension: "ROWS" });
+  // `valueRenderOption` is pinned for the same reason `majorDimension` is:
+  // both are defaults today, and the row-array shape everything downstream
+  // reads depends on them. `FORMATTED_VALUE` is what returns strings — under
+  // `UNFORMATTED_VALUE` a numeric PNum arrives as a JSON number, and the first
+  // thing to touch it calls `.trim()` on it.
+  const params = new URLSearchParams({
+    majorDimension: "ROWS",
+    valueRenderOption: "FORMATTED_VALUE",
+  });
   return (
     `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
     `/values/${encodeURIComponent(range)}?${params}`
@@ -357,6 +365,22 @@ export function columnLetter(position: number): string {
  */
 export function valuesToCsv(tab: ExportTab, values: string[][]): string {
   for (const [rowIndex, row] of values.entries()) {
+    // The command casts the response body to `string[][]` on the strength of
+    // the parameters the URL pins, and a cast is a promise rather than a
+    // check. Verifying it here costs one pass and turns "the API answered a
+    // shape we did not expect" from a `TypeError` thrown out of `.trim()`,
+    // several frames from anything explanatory, into a refusal that names the
+    // cell.
+    const notText = row.findIndex((cell) => typeof cell !== "string");
+    if (notText !== -1) {
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 1}, column ` +
+          `${columnLetter(notText + 1)} came back as ` +
+          `${typeof row[notText]}, not text. Every cell is exported as the ` +
+          `sheet displays it, which is what the request asks for.`
+      );
+    }
+
     const appended = row
       .slice(tab.headers.length)
       .findIndex((cell) => cell.trim() !== "");
