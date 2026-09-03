@@ -81,8 +81,8 @@ A Suggested Title left out of the Resolved Product Catalogue, reported with its 
 _Avoid_: missing product, failed product, dead link
 
 **Disposition**:
-What the curated collection table says should happen to one Collection Link candidate — `collection`, `plain-text`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021).
-_Avoid_: status, state, decision, resolution
+What the curated collection table says should happen to one of its rows — `collection`, `plain-text`, `resolves-to-product`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021). `resolves-to-product` is the row that was never a Collection Link candidate: the title names a product the store still sells, so the legacy value becomes an ordinary product Mapping. It is a decision, not an absence of one, and it does **not** mean the row is dropped — the legacy identifier is still one a member can be holding, so it still carries a value downstream. An empty cell is none of the four and is refused: `undecided` is a curator saying nobody has looked yet, and a blank is a row that cannot say even that.
+_Avoid_: status, state, decision, resolution, `not-a-candidate`
 
 **Catalogue Refresh**:
 Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.

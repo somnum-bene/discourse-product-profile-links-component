@@ -85,6 +85,37 @@ const ASSIGNMENT_COLUMNS = {
 } as const;
 
 /**
+ * Every value a curator may put in `Disposition`. This is schema, not policy:
+ * it says which words the column is allowed to hold, and nothing about what
+ * any of them should cause. What `undecided` blocks and which of the others
+ * yields a link stay the transform's decisions.
+ *
+ * `resolves-to-product` is the one that is easy to leave out and expensive to
+ * omit. Some rows in this table are not Collection Link candidates at all —
+ * the title turns out to name a product the store still sells, so the value
+ * belongs as an ordinary product Mapping. Those rows carry `n/a` in both
+ * `Base Name Source` and `Profile Link Value`, which means "proposes no *new*
+ * value", not "this identifier has no value": the legacy PNum is still one a
+ * member can be holding, so it still has to reach the disposition table with
+ * the live product's value. Without a word for that state the row can only be
+ * `undecided`, and a release gate that blocks on `undecided` would block for
+ * ever on a row that is already correctly curated.
+ *
+ * Guarded rather than merely documented because the failure is silent: a
+ * curator typing `colection` produces a row that no transform recognises and
+ * no header check notices.
+ */
+export const DISPOSITIONS = [
+  "collection",
+  "plain-text",
+  "resolves-to-product",
+  "undecided",
+] as const;
+
+/** One of the four words `Disposition` is allowed to hold. */
+export type Disposition = (typeof DISPOSITIONS)[number];
+
+/**
  * The Collection Assignment tab, which a person edits and this command only
  * reads. It is deliberately not a `SheetTab`. Its eleven columns do not reduce
  * to a title and a URL — `Recommended Collection URL` is a proposal,
@@ -106,7 +137,10 @@ export interface AssignmentTab extends ExportTab {
  * decisions, not this file's. Reading the tab and judging it are separate jobs
  * for the same reason `sheetRowsFrom` does no trimming.
  */
-export type AssignmentRow = Record<keyof typeof ASSIGNMENT_COLUMNS, string>;
+export type AssignmentRow = Record<
+  Exclude<keyof typeof ASSIGNMENT_COLUMNS, "disposition">,
+  string
+> & { disposition: Disposition };
 
 /**
  * The option-table allowlist. Two entries, and no code path that fetches a tab
@@ -508,6 +542,14 @@ export function sheetRowsFrom(tab: SheetTab, csvText: string): SheetRow[] {
  * verbatim: an empty `Override` stays empty, an `undecided` `Disposition` stays
  * `undecided`, and neither is resolved here. The header allowlist has already
  * established that the columns are the ones these names mean.
+ *
+ * The one exception is `Disposition`, which is checked against `DISPOSITIONS`.
+ * That is still not a judgment about the row — an unrecognised word is not a
+ * disposition this table can express, the way a renamed column is not a column
+ * this command was written against, so it is refused on the same fail-closed
+ * terms. Doing it here is what lets `AssignmentRow.disposition` be the union
+ * rather than `string`, so a transform switching on it gets exhaustiveness
+ * from the compiler instead of a default branch nobody revisits.
  */
 export function assignmentRowsFrom(
   tab: AssignmentTab,
@@ -518,6 +560,22 @@ export function assignmentRowsFrom(
     keyof AssignmentRow,
     string,
   ][];
+  const dispositionIndex = tab.headers.indexOf(tab.columns.disposition);
+
+  for (const [rowIndex, dataRow] of dataRows.entries()) {
+    const found = dataRow[dispositionIndex] ?? "";
+    if (!isDisposition(found)) {
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 2} holds ` +
+          `${found === "" ? "an empty" : `an unrecognised`} ` +
+          `${tab.columns.disposition}${found === "" ? "" : ` "${found}"`}. ` +
+          `One of ${DISPOSITIONS.map((value) => `"${value}"`).join(", ")} is ` +
+          `expected. An empty cell is not the same as "undecided": ` +
+          `"undecided" is a curator saying nobody has looked yet, and a blank ` +
+          `is a row that cannot say even that.`
+      );
+    }
+  }
 
   return dataRows.map((dataRow) =>
     Object.fromEntries(
@@ -527,6 +585,10 @@ export function assignmentRowsFrom(
       ])
     )
   ) as AssignmentRow[];
+}
+
+function isDisposition(value: string): value is Disposition {
+  return (DISPOSITIONS as readonly string[]).includes(value);
 }
 
 function sameHeaders(found: string[], expected: readonly string[]): boolean {

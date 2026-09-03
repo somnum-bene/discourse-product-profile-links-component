@@ -5,6 +5,7 @@ import {
   assignmentRowsFrom,
   assignmentTabNamed,
   columnLetter,
+  DISPOSITIONS,
   EXPORT_TABS,
   exportFileName,
   MAX_DATA_ROWS,
@@ -570,6 +571,56 @@ describe("assignmentRowsFrom", () => {
     const [, multiple] = assignmentRowsFrom(assignment, ASSIGNMENT_CSV);
 
     expect(multiple.legacyPnums).toBe("5854, 5794");
+  });
+
+  it("accepts every disposition the table is allowed to express", () => {
+    // Including `resolves-to-product`, which is the state the curated table
+    // gained once two rows turned out to name products the store still sells
+    // (#35). Without it those rows can only be `undecided`, and #38's release
+    // gate would block for ever on rows that are already decided.
+    expect(DISPOSITIONS).toEqual([
+      "collection",
+      "plain-text",
+      "resolves-to-product",
+      "undecided",
+    ]);
+
+    for (const disposition of DISPOSITIONS) {
+      const row = ASSIGNMENT_CSV.replace(`,"undecided"`, `,"${disposition}"`);
+
+      expect(assignmentRowsFrom(assignment, row)[0].disposition).toBe(
+        disposition
+      );
+    }
+  });
+
+  it("refuses a disposition the table cannot express", () => {
+    // The silent one. A typo here survives every other guard — the header row
+    // is untouched, the width is right, the cell holds a plausible word — and
+    // then no transform recognises the row.
+    const typo = ASSIGNMENT_CSV.replace(`,"undecided"`, `,"colection"`);
+
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      SheetExportError
+    );
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      /unrecognised Disposition "colection"/
+    );
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(/row 2/);
+  });
+
+  it("refuses an empty Disposition rather than reading it as undecided", () => {
+    // `undecided` is a curator saying nobody has looked yet. A blank cell
+    // cannot say even that, and treating the two alike would let a row skip
+    // the pass entirely by being emptier than the state that blocks the ship.
+    const blank = ASSIGNMENT_CSV.replace(`,"undecided"`, `,""`);
+
+    expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
+      /an empty Disposition/
+    );
+    expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
+      /not the same as "undecided"/
+    );
   });
 
   it("reads by header, so it refuses the columns in a different order", () => {
