@@ -131,6 +131,39 @@ handoff this was built from claimed the token request fails instead.
 `unauthorized_client` is the *other* failure, and it means the opposite: `sub`
 was sent, and the delegation grant is missing or still propagating.
 
+### What this key can actually do
+
+Worth stating plainly, because the paragraphs above describe it as borrowing
+one configured person's access and that undersells it. `sub` is a claim in an
+assertion this code signs, not a restriction the grant imposes. Whoever holds
+the private key can sign an assertion naming **any** cpap.com Workspace user as
+`sub`, and read every Sheet that user can open. `GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL`
+is this repository's choice of subject; it is not a limit on the credential.
+
+So the blast radius of a leaked key is *read access to every Google Sheet in
+the domain*, not read access to one workbook. That is inherent to domain-wide
+delegation, and it is the mechanism we have: the org's policy blocks link
+sharing and blocks sharing a file to a service account, which is what the two
+bullets above are about. There is no narrower version of this that still works
+without a dedicated Workspace user with its own OAuth credentials — a separate
+piece of admin work, deliberately not done here.
+
+**Accepted, with these bounds:**
+
+| Control | What it bounds |
+| --- | --- |
+| One authorised scope | `spreadsheets.readonly` and nothing else. Sheets only, read only — no Drive, no Gmail, no writes. Widening it is an Admin Console change, not a code change. |
+| Scope named in code | `SHEETS_READONLY_SCOPE` is asked for by name in `lib/sheets-auth.ts`, so a wider console grant still does not widen what this command requests. |
+| Key never in the repository | It lives only in the ignored `.env`. Nothing logs it, nothing prints it in an error, and `credentialsFrom`'s refusals are asserted not to echo the material. |
+| Read-only by construction | This code cannot write to the Sheet even if asked to. Correcting the Sheet is a human editing it, followed by a re-export. |
+| Revocable in one place | Removing the client id from Admin Console → Security → API controls → Domain-wide delegation kills the credential outright, without touching the repository. |
+
+Raised by code review on PR #45. Accepted for an internal read-only export
+rather than redesigned, on the grounds that the alternative is an admin round
+trip for a dedicated least-privilege user and the controls above bound it to
+domain-wide Sheets *reads* with a single revocation point. Reconsider if this
+credential is ever wanted for anything beyond exporting these tabs.
+
 The escaped `\n` is the other trap. A PEM holds real newlines, `.env` cannot,
 and Node's `--env-file` hands the value over still escaped — so a key used as
 read is a string that looks right, signs nothing, and fails at the token

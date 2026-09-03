@@ -12,6 +12,16 @@
 // one scope, and uses it to act as a real Workspace user who does — the `sub`
 // claim below. That is the whole reason this file is not thirty lines.
 //
+// What that credential can do, stated plainly because "borrows one person's
+// access" undersells it: `sub` is a claim this code chooses, not a limit the
+// grant imposes. Whoever holds the private key can name any Workspace user as
+// `sub` and read every Sheet that user can open — so a leaked key is
+// domain-wide Sheets *read* access, not access to one workbook. That is
+// inherent to domain-wide delegation, it was raised in review on PR #45, and
+// it is accepted rather than redesigned. `scripts/README.md` has the bounds
+// the acceptance rests on (one read-only scope, key only in the ignored .env,
+// one revocation point in the Admin Console).
+//
 // Hand-rolled with `node:crypto` rather than a JWT dependency, on the same
 // grounds `parseCsv` is hand-rolled: this is the part that holds a private key,
 // and a library that surprises us here is worse than one we can read.

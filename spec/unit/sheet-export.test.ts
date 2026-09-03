@@ -200,20 +200,21 @@ describe("the tab allowlist", () => {
     const url = sheetValuesUrl("WORKBOOK", machine);
 
     expect(url).toContain("/v4/spreadsheets/WORKBOOK/values/");
-    expect(url).toContain(encodeURIComponent("'user_machine'!A1:E"));
+    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F"));
     expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
   });
 
-  it("pins the range to the width the allowlist declares", () => {
-    // Asked for the whole tab, the API answers about whatever width the data
-    // occupies. Asked for A1:E, a sixth column is a header the guard never
-    // sees rather than a column that quietly joins the export.
+  it("asks one column past the width the allowlist declares", () => {
+    // The probe column, and the reason it is not `A1:E`. Bounded at the
+    // declared width, an appended sixth column never arrives, every declared
+    // header still matches, and the export is accepted while no longer being
+    // the tab it claims to be. One column wider makes it refusable.
     expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
-      encodeURIComponent("!A1:E")
+      encodeURIComponent("!A1:F")
     );
     expect(sheetValuesUrl("WORKBOOK", assignment)).toContain(
-      encodeURIComponent("!A1:K")
+      encodeURIComponent("!A1:L")
     );
   });
 
@@ -298,7 +299,7 @@ describe("EXPORT_TABS", () => {
   it("addresses the Collection Assignment by name too", () => {
     const url = sheetValuesUrl("WORKBOOK", assignment);
 
-    expect(url).toContain(encodeURIComponent("'collection-assignment'!A1:K"));
+    expect(url).toContain(encodeURIComponent("'collection-assignment'!A1:L"));
     expect(url).not.toContain("gid=");
   });
 });
@@ -632,6 +633,46 @@ describe("valuesToCsv", () => {
     ]);
   });
 
+  it("refuses a header appended past the declared width", () => {
+    // The restructure the header-row guard structurally cannot see: every
+    // column it knows about still matches, in order, under the right name.
+    // Caught here because `sheetValuesUrl` asks one column wider and this is
+    // the last place the extra cell still exists — the CSV text below has
+    // already dropped it.
+    const widened = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL", "Notes"],
+      ["5854", "test10", "#N/A", "A Title", "https://example.com", "seen"],
+    ];
+
+    expect(() => valuesToCsv(mask, widened)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(mask, widened)).toThrow(/column F/);
+    expect(() => valuesToCsv(mask, widened)).toThrow(/row 1/);
+  });
+
+  it("refuses a value appended past the declared width, header or not", () => {
+    // A curator typing into the first free column without labelling it. The
+    // header row is untouched, so nothing else in the pipeline would notice.
+    const stray = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
+      ["5854", "test10", "#N/A", "A Title", "https://example.com", "oops"],
+    ];
+
+    expect(() => valuesToCsv(mask, stray)).toThrow(/past the 5 columns/);
+    expect(() => valuesToCsv(mask, stray)).toThrow(/row 2/);
+  });
+
+  it("accepts a probe column that came back present but empty", () => {
+    // The probe is one column wider than the tab, so an empty cell in it is
+    // the ordinary case, not a widening. Refusing on width alone would abort
+    // every run — a fail-closed guard firing on a correct tab.
+    const padded = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL", ""],
+      ["5854", "test10", "#N/A", "A Title", "https://example.com", "  "],
+    ];
+
+    expect(parseCsv(valuesToCsv(mask, padded))[1]).toHaveLength(5);
+  });
+
   it("quotes every field, the way the committed exports already look", () => {
     expect(valuesToCsv(noTitleTab, [["a", "b", "c"]])).toBe(`"a","b","c"`);
   });
@@ -667,13 +708,16 @@ describe("valuesToCsv", () => {
     );
   });
 
-  it("drops a column the tab never declared rather than exporting it", () => {
-    // The range pins the width, so this should not arrive — but if it did,
-    // exporting a twelfth column under an eleven-column header would put data
-    // in `data/` that no guard ever looked at.
+  it("refuses a column the tab never declared rather than dropping it", () => {
+    // This test used to assert the opposite, and asserting it was the defect:
+    // dropping the cell silently is what let an appended column produce a
+    // committed export that no longer matched its tab, under a header row
+    // where every declared column still lined up. The range now asks one
+    // column wider precisely so this arrives and can be refused.
     const widened = [["a", "b", "c", "smuggled"]];
 
-    expect(valuesToCsv(noTitleTab, widened)).toBe(`"a","b","c"`);
+    expect(() => valuesToCsv(noTitleTab, widened)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(noTitleTab, widened)).toThrow(/column D/);
   });
 });
 

@@ -234,14 +234,18 @@ function namedIn<T extends ExportTab>(
  * which matters: the allowlist is written in names, and the numeric gid the
  * older CSV endpoint wanted is something the workbook is free to reassign.
  *
- * The range is pinned to the width the allowlist declares rather than left
- * open. Asked for the whole tab, the API returns whatever width the data
- * happens to occupy; asked for `A1:E`, it answers about the five columns this
- * command was written against, so a twelfth column appearing on an eleven
- * column tab is a header the guard never sees rather than a silent widening.
+ * The range is pinned rather than left open, but to one column *past* the
+ * width the allowlist declares — `A1:F` for a five column tab. That extra
+ * column is a probe, and it exists because bounding the range at the declared
+ * width defeated the guard it was meant to serve. Asked for `A1:E`, a sixth
+ * column never arrives, the header row matches exactly, and the export is
+ * accepted while quietly no longer being the verbatim tab it claims to be.
+ * Inserting a column was always caught — every header after it shifts — but
+ * appending one past the end was invisible. Asking one column wider makes an
+ * appended header something `valuesToCsv` can refuse.
  */
 export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
-  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length)}`;
+  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}`;
   const params = new URLSearchParams({ majorDimension: "ROWS" });
   return (
     `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
@@ -284,8 +288,34 @@ export function columnLetter(position: number): string {
  * final column would read as a missing one. Padding to the width the allowlist
  * declares restores the rectangle the sheet actually holds — it never invents a
  * column, because the width came from the header the guard is about to check.
+ *
+ * Truncating is the other half, and the reason the appended-column guard lives
+ * here rather than in `readSheetTab` beside the other three. `sheetValuesUrl`
+ * asks one column wider than declared; anything in that probe column is a
+ * column the tab has grown and this command was not written against, so it is
+ * refused rather than dropped. It has to be caught on the API's rows, because
+ * by the time this function has produced CSV text the extra column is already
+ * gone — which is exactly how an appended column used to slip past a guard
+ * whose own message promises to catch one.
  */
 export function valuesToCsv(tab: ExportTab, values: string[][]): string {
+  for (const [rowIndex, row] of values.entries()) {
+    const appended = row
+      .slice(tab.headers.length)
+      .findIndex((cell) => cell.trim() !== "");
+    if (appended !== -1) {
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 1} holds a value in column ` +
+          `${columnLetter(tab.headers.length + 1 + appended)}, past the ` +
+          `${tab.headers.length} columns the allowlist declares. A column ` +
+          `appended to the end of the tab is the one restructure the header ` +
+          `row cannot show, because every declared header still matches. ` +
+          `Widening the export is a deliberate edit to the allowlist, not ` +
+          `something a curator does to the tab.`
+      );
+    }
+  }
+
   return values
     .map((row) =>
       Array.from(
