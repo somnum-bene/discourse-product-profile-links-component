@@ -58,6 +58,29 @@ const suggestedTitleByField = new Map(
   })
 );
 
+/**
+ * The same tables' `Value` → `Text`, which is the source a Text-sourced row
+ * names. Without it the Text branch below could only check a row against
+ * itself: `Legacy Text` and `Profile Link Value` agreeing says nothing if both
+ * were pasted from the wrong product. This is the outside opinion.
+ */
+const legacyTextByField = new Map(
+  SHEET_TABS.map((tab) => {
+    const valueAt = tab.headers.indexOf("Value");
+    const textAt = tab.headers.indexOf("Text");
+
+    return [
+      tab.userFieldName,
+      new Map(
+        readSheetTab(tab, committedExport(tab)).map((row) => [
+          row[valueAt] ?? "",
+          row[textAt] ?? "",
+        ])
+      ),
+    ] as const;
+  })
+);
+
 const rows = ASSIGNMENT_TABS.flatMap((tab) =>
   assignmentRowsFrom(tab, committedExport(tab)).map((row, index) => ({
     ...row,
@@ -127,6 +150,31 @@ describe("the committed Collection Assignment", () => {
       );
 
     // PNum 5851 read `"Text"` here, which is what this catches.
+    expect(wrong).toEqual([]);
+  });
+
+  it("holds the Legacy Text the option table holds, for a Text-sourced row", () => {
+    // The check above compares a row against itself: it proves the suffix was
+    // applied, not that the name is the right one. A curator pasting the wrong
+    // product into both `Legacy Text` and `Profile Link Value` leaves a row
+    // that is internally consistent and wrong — the 6377/6378 defect one
+    // column over. `Text` is the source the row names, so it is the source
+    // that should settle it.
+    const wrong = rows
+      .filter((row) => row.baseNameSource === "Text")
+      .flatMap((row) => {
+        const table = legacyTextByField.get(row.field);
+
+        return pnumsOf(row)
+          .filter((pnum) => table?.get(pnum) !== row.legacyText)
+          .map(
+            (pnum) =>
+              `row ${row.sheetRow} (PNum ${pnum}): option table holds ` +
+              `${JSON.stringify(table?.get(pnum))}, assignment holds ` +
+              `${JSON.stringify(row.legacyText)}`
+          );
+      });
+
     expect(wrong).toEqual([]);
   });
 
