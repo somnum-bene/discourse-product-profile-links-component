@@ -912,8 +912,9 @@ describe("what each file is allowed to do", () => {
   });
 
   it("keeps the workbook id out of the repository", () => {
-    // The workbook is a public link to real customer email addresses and this
-    // repository is public, so the id is configuration, not a constant.
+    // The workbook is private and holds no member data, but this repository is
+    // public and the id would say which Sheet to go and ask for. Configuration,
+    // not a constant.
     expect(WORKBOOK_ID_VAR).toBe("SHEET_WORKBOOK_ID");
     expect(lib).not.toMatch(/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/);
     expect(command).not.toContain(WORKBOOK_ID_VAR);

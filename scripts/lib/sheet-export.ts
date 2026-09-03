@@ -30,9 +30,12 @@ export type { SheetRow };
 
 /**
  * The workbook is identified by an environment variable rather than a constant.
- * It is a public link to a workbook containing real customer email addresses,
- * and this repository is public, so committing the id would publish the link.
- * The variable lives in the ignored `.env` alongside the API credentials.
+ * It names a private internal workbook holding no member data — the inherited
+ * spreadsheet it replaced was the one that was a public link to real customer
+ * email addresses. The id is still withheld: this repository is public, and
+ * committing it would publish which Sheet to go and ask for. A weaker reason
+ * than it used to be, and still a reason. The variable lives in the ignored
+ * `.env` alongside the API credentials.
  */
 export const WORKBOOK_ID_VAR = "SHEET_WORKBOOK_ID";
 
