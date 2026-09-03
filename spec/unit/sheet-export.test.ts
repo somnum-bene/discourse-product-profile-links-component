@@ -140,6 +140,22 @@ describe("parseCsv", () => {
     expect(parseCsv(`"a"\n"b"\n`)).toHaveLength(2);
   });
 
+  it("ignores a byte order mark at the start of the text", () => {
+    // Google Sheets' File → Download → CSV writes one; the `gviz` endpoint does
+    // not. A BOM is an encoding marker rather than data, and leaving it in
+    // makes the first header cell `\ufeffValue`, which fails the header guard
+    // with a message about a renamed column — a true refusal for a false
+    // reason, on a file that is in fact exactly right.
+    expect(parseCsv(`\ufeff"a","b"`)).toEqual([["a", "b"]]);
+    expect(parseCsv(`\ufeffa,b`)).toEqual([["a", "b"]]);
+  });
+
+  it("keeps a byte order mark that is not at the start", () => {
+    // Only the leading one is an encoding marker. Anywhere else it is a
+    // character the sheet holds, and this parser does not edit cell contents.
+    expect(parseCsv(`"a","\ufeffb"`)).toEqual([["a", "\ufeffb"]]);
+  });
+
   it("refuses text that ends inside a quoted field", () => {
     expect(() => parseCsv(`"a","unterminated`)).toThrow(SheetExportError);
     expect(() => parseCsv(`"a","unterminated`)).toThrow(/quoted field/);

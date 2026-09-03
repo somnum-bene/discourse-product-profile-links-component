@@ -240,17 +240,25 @@ export function exportFileName(tab: ExportTab): string {
 }
 
 /**
- * RFC 4180, enough of it for what the endpoint emits: every field quoted, `""`
- * for a literal quote, commas and newlines legal inside quotes, LF line endings
- * and no final newline. Written out rather than pulled in as a dependency
- * because a CSV parser that surprises us is worse than one we can read.
+ * RFC 4180, enough of it for the two ways a tab reaches us. The `gviz`
+ * endpoint quotes every field, uses LF endings and emits no final newline;
+ * Google Sheets' own File → Download → CSV quotes only what needs it, uses
+ * CRLF, ends with a newline and opens with a byte order mark. All of that is
+ * the same table, so all of it parses the same way. Written out rather than
+ * pulled in as a dependency because a CSV parser that surprises us is worse
+ * than one we can read.
  */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
   let quoted = false;
-  let index = 0;
+  // A leading byte order mark is an encoding marker, not a cell. Left in, it
+  // becomes part of the first header and the run aborts over a renamed column
+  // that was never renamed — a fail-closed guard firing on a correct file,
+  // which teaches whoever hits it to distrust the guard. Only the leading one
+  // is dropped; anywhere else it is a character the sheet holds.
+  let index = text.charCodeAt(0) === 0xfeff ? 1 : 0;
 
   while (index < text.length) {
     const char = text[index];
