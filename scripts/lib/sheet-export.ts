@@ -249,6 +249,21 @@ export function sheetTabFor(tab: ExportTab): SheetTab | null {
   return SHEET_TABS.find((candidate) => candidate.tab === tab.tab) ?? null;
 }
 
+/**
+ * The Collection Assignment counterpart to `sheetTabFor`, and it exists for
+ * the same reason: the export loop holds an `ExportTab` and needs the trusted
+ * allowlist entry back, not an answer about the object it already has.
+ *
+ * Without it there was no way to reach `assignmentRowsFrom` from a loop over
+ * `EXPORT_TABS` — `assignmentTabNamed` takes a name, and the loop has objects
+ * — so the Disposition check ran only in the test suite. A tab validates
+ * against the header row and the row ceiling either way; what was missing was
+ * the check that every `Disposition` cell holds one of the four words.
+ */
+export function assignmentTabFor(tab: ExportTab): AssignmentTab | null {
+  return ASSIGNMENT_TABS.find((candidate) => candidate.tab === tab.tab) ?? null;
+}
+
 function namedIn<T extends ExportTab>(
   allowlist: readonly T[],
   name: string

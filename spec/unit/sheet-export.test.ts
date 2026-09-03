@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ASSIGNMENT_TABS,
   assignmentRowsFrom,
+  assignmentTabFor,
   assignmentTabNamed,
   columnLetter,
   DISPOSITIONS,
@@ -295,6 +296,20 @@ describe("EXPORT_TABS", () => {
     expect(sheetTabFor(impostor)).toBe(machine);
     expect(sheetTabFor(impostor)).not.toBe(impostor);
     expect(sheetTabFor({ ...noTitleTab, tab: "user_machine_" })).toBeNull();
+  });
+
+  it("selects the Collection Assignment on the same terms", () => {
+    // The counterpart the export loop needs to reach `assignmentRowsFrom`,
+    // and it partitions `EXPORT_TABS` against `sheetTabFor` exactly.
+    expect(
+      EXPORT_TABS.map(assignmentTabFor).map((tab) => tab?.tab ?? null)
+    ).toEqual([null, null, "collection-assignment"]);
+
+    const impostor = { tab: "collection-assignment", headers: ["PNum"] };
+
+    expect(assignmentTabFor(impostor)).toBe(assignment);
+    expect(assignmentTabFor(impostor)).not.toBe(impostor);
+    expect(assignmentTabFor({ ...noTitleTab, tab: "user_machine" })).toBeNull();
   });
 
   it("addresses the Collection Assignment by name too", () => {
@@ -797,6 +812,17 @@ describe("what each file is allowed to do", () => {
     expect(command).not.toContain("gviz");
     expect(command).not.toContain("docs.google.com");
     expect(command).toContain("EXPORT_TABS");
+  });
+
+  it("runs every allowlisted tab's row validation, not just the option tables'", () => {
+    // `readSheetTab` checks the header and the row ceiling for both shapes,
+    // but the `Disposition` vocabulary lives in `assignmentRowsFrom` alone.
+    // Left uncalled it validated nothing the command wrote, and a curated word
+    // outside the four reached `data/` under a success line.
+    expect(command).toContain("assignmentTabFor");
+    expect(command).toContain("assignmentRowsFrom");
+    expect(command).toContain("sheetTabFor");
+    expect(command).toContain("sheetRowsFrom");
   });
 
   it("keeps the credential out of the repository and out of every message", () => {

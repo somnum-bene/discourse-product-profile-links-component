@@ -12,6 +12,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import {
+  assignmentRowsFrom,
+  assignmentTabFor,
   EXPORT_TABS,
   exportFileName,
   readSheetTab,
@@ -82,6 +84,17 @@ async function main(): Promise<void> {
     // rows, which is a fact about the tab rather than a special case for it.
     const optionTable = sheetTabFor(tab);
     const sheetRows = optionTable ? sheetRowsFrom(optionTable, csvText) : [];
+
+    // The Collection Assignment's rows are read for the same reason, and the
+    // result is discarded on purpose: `assignmentRowsFrom` is where the
+    // `Disposition` vocabulary is enforced, and a curated word outside it has
+    // to stop the run here rather than reach `data/`. Nothing downstream
+    // consumes these rows yet — the checking is the point.
+    const assignment = assignmentTabFor(tab);
+    if (assignment) {
+      assignmentRowsFrom(assignment, csvText);
+    }
+
     fetched.push({ tab, csvText, dataRows, sheetRows });
   }
 
