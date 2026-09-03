@@ -8,7 +8,7 @@ The commands and what each one is allowed to touch:
 
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`                                                 |
+| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
@@ -63,11 +63,84 @@ a row leaving `data/resolved-products.csv` is a diff rather than a rewrite of
 history. Deleting it was considered and rejected: nothing reads it, so keeping
 it costs nothing, and it is the only record of what the tab held.
 
-Exports are written byte for byte as the endpoint returned them — LF endings,
-no final newline — which is why `data/` is exempt from the whitespace-fixing
-pre-commit hooks. The endpoint is addressed by tab _name_ (`gviz/tq`) rather
-than by the numeric gid `export?format=csv` requires, because the allowlist is
-written in names and a workbook is free to reassign a gid.
+Exports are written with every field quoted, LF endings and no final newline,
+which is why `data/` is exempt from the whitespace-fixing pre-commit hooks.
+Every cell is verbatim, but the bytes are **reconstructed** rather than passed
+through: the Sheets API answers with JSON row arrays, and `valuesToCsv` writes
+them back out in the shape the old CSV endpoint returned. The comment in
+`export-sheet.ts` used to claim "byte for byte as the endpoint returned it",
+and that stopped being true when the source changed — provenance that
+overstates itself is worse than provenance that says what it is.
+
+Two details of that reconstruction are load-bearing. The tab is addressed by
+_name_, never by a numeric gid a workbook is free to reassign, because the
+allowlist is written in names. And the range is **pinned to the width the
+allowlist declares** (`'user_machine'!A1:E`, `'collection-assignment'!A1:K`)
+rather than left open, for two reasons: asked for an open range the API returns
+whatever width the data happens to occupy, so a twelfth column on an
+eleven-column tab would join the export under a header the guard never checked;
+and the API omits trailing empty cells, so a row with no `Suggested URL` comes
+back three cells wide. `valuesToCsv` pads every row back to the declared width
+— which never invents a column, because the width came from the header row the
+guard is about to check.
+
+## Reading the Sheet needs a credential, not a sharing setting
+
+The cpap.com Sheet cannot be made link-readable, so the anonymous `fetch()`
+this command used against the inherited workbook cannot reach it. Two separate
+Workspace policies are in the way, and it is worth knowing both, because the
+first one is the one people try to fix and the second is the one that actually
+decides the design:
+
+- **"Anyone with the link" is blocked** by org policy. That killed the
+  unauthenticated CSV endpoint.
+- **Sharing the file _to_ a service account is also blocked** —
+  `...iam.gserviceaccount.com` is not an allowlisted domain, and a Workspace
+  admin can only allowlist domains they administer, not arbitrary external
+  ones. So the obvious fix, "share it with the robot as Viewer", is not
+  available either.
+
+What works instead is **domain-wide delegation**: the service account's OAuth
+client id is authorised for one scope
+(`https://www.googleapis.com/auth/spreadsheets.readonly`) in Admin Console →
+Security → API controls, which lets it act as a real Workspace user who already
+has ordinary access to the Sheet. The service account holds no access to the
+file at all — it borrows some. `lib/sheets-auth.ts` builds the JWT Bearer grant
+(RFC 7523) for that by hand with `node:crypto`, on the same grounds `parseCsv`
+is hand-rolled: this is the part that holds a private key, and a dependency
+that surprises us here is worse than one we can read.
+
+Three variables, in the ignored `.env`:
+
+```
+GOOGLE_SERVICE_ACCOUNT_EMAIL              # the JWT's `iss`
+GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL  # the JWT's `sub` — the user it acts as
+GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY        # PEM, newlines escaped as \n
+```
+
+`sub` is the claim the whole mechanism turns on and the easy one to leave out:
+without it the service account asks for a token as itself and is refused with
+`unauthorized_client`, which reads like a console problem and sends you to the
+Admin Console instead of to your claim set.
+
+The escaped `\n` is the other trap. A PEM holds real newlines, `.env` cannot,
+and Node's `--env-file` hands the value over still escaped — so a key used as
+read is a string that looks right, signs nothing, and fails at the token
+endpoint with an error about the *client* rather than about the key.
+`credentialsFrom` unescapes it and then asks OpenSSL to parse it, so that
+becomes one legible refusal at startup rather than a puzzle three layers down.
+Neither the key nor the underlying parse error is ever printed: a refusal that
+quoted the key would put it in a terminal and a CI transcript.
+
+**This mechanism depends on a real person's access.**
+`GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL` has to name a Workspace user who can
+open the Sheet. If that person loses access, changes address, or leaves, the
+export breaks — and it breaks at the token or fetch step with a message about
+authorisation, not with anything that says "someone left". Worth knowing before
+it happens.
+
+No token caching or refresh: the command gets one read-only token, fetches a
+handful of tabs, and exits well inside the hour.
 
 ## The Catalogue Refresh writes one file to ship and one file to read
 

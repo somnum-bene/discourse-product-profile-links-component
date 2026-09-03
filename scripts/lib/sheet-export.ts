@@ -1,7 +1,15 @@
 // The Sheet Exports are provenance: the exported tabs of the migration
-// spreadsheet, committed exactly as the sheet returned them, so that a change
-// product made to the spreadsheet shows up in `git diff` separately from a
-// change the transform made. Nothing in the component reads them.
+// spreadsheet, committed as the sheet holds them, so that a change product made
+// to the spreadsheet shows up in `git diff` separately from a change the
+// transform made. Nothing in the component reads them.
+//
+// "As the sheet holds them" and not "byte for byte as the endpoint returned
+// them", which is what this said while the source was a CSV endpoint. The
+// source is now the Sheets API, which answers with JSON row arrays, so the
+// committed bytes are reconstructed by `valuesToCsv` rather than passed
+// through. Every cell is still verbatim; the quoting and the line endings are
+// this file's, and the distinction is worth keeping because provenance that
+// overstates itself is worse than provenance that says what it is.
 //
 // Two shapes of tab, on purpose. The `user_*` option tables reduce to a
 // Suggested Title and a Suggested URL; the Collection Assignment is eleven
@@ -31,7 +39,7 @@ export const WORKBOOK_ID_VAR = "SHEET_WORKBOOK_ID";
 /**
  * Everything the fetch-and-validate path needs to know about a tab, and the
  * whole of what it is allowed to know: a name to address it by and the header
- * row it must still have. `sheetCsvUrl`, `exportFileName` and `readSheetTab`
+ * row it must still have. `sheetValuesUrl`, `exportFileName` and `readSheetTab`
  * take this and nothing more, so a tab of any shape gets the same three
  * fail-closed guards without either allowlist having to restate them.
  */
@@ -175,7 +183,7 @@ const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
 
 /**
  * Resolve a tab name against the option-table allowlist. This is the only way
- * to obtain a `SheetTab`, and a tab object is the only thing `sheetCsvUrl`
+ * to obtain a `SheetTab`, and a tab object is the only thing `sheetValuesUrl`
  * accepts, so an unlisted tab cannot be fetched even by mistake.
  */
 export function tabNamed(name: string): SheetTab {
@@ -222,16 +230,72 @@ function namedIn<T extends ExportTab>(
 }
 
 /**
- * The CSV endpoint for one allowlisted tab. `gviz/tq` addresses a tab by name,
- * which matters: the allowlist is written in names, and `export?format=csv`
- * takes only a numeric gid, which the workbook is free to reassign.
+ * The Sheets API endpoint for one allowlisted tab. Addressed by tab *name*,
+ * which matters: the allowlist is written in names, and the numeric gid the
+ * older CSV endpoint wanted is something the workbook is free to reassign.
+ *
+ * The range is pinned to the width the allowlist declares rather than left
+ * open. Asked for the whole tab, the API returns whatever width the data
+ * happens to occupy; asked for `A1:E`, it answers about the five columns this
+ * command was written against, so a twelfth column appearing on an eleven
+ * column tab is a header the guard never sees rather than a silent widening.
  */
-export function sheetCsvUrl(workbookId: string, tab: ExportTab): string {
-  const params = new URLSearchParams({
-    tqx: "out:csv",
-    sheet: tab.tab,
-  });
-  return `https://docs.google.com/spreadsheets/d/${workbookId}/gviz/tq?${params}`;
+export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
+  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length)}`;
+  const params = new URLSearchParams({ majorDimension: "ROWS" });
+  return (
+    `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
+    `/values/${encodeURIComponent(range)}?${params}`
+  );
+}
+
+/**
+ * The spreadsheet column letter at a 1-based position — 5 is `E`, 11 is `K`.
+ * Handles the two-letter range no tab here reaches, because a helper that is
+ * correct only under twenty-six columns is a trap for whoever adds the
+ * twenty-seventh.
+ */
+export function columnLetter(position: number): string {
+  if (!Number.isInteger(position) || position < 1) {
+    throw new SheetExportError(
+      `a tab must declare at least one column; got ${position}`
+    );
+  }
+
+  let letters = "";
+  let remaining = position;
+  while (remaining > 0) {
+    const index = (remaining - 1) % 26;
+    letters = String.fromCharCode(65 + index) + letters;
+    remaining = Math.floor((remaining - index) / 26);
+  }
+  return letters;
+}
+
+/**
+ * The API's row arrays as the CSV text the rest of this file reads, quoting
+ * every field the way the old `gviz` endpoint did so the committed exports keep
+ * the shape they have always had.
+ *
+ * The padding is the part that matters. The API omits trailing empty cells, so
+ * a row whose `Suggested URL` is blank comes back three cells wide rather than
+ * five, and one whose last two columns are blank comes back shorter still.
+ * Left ragged, the header row would disagree with its own data rows and a blank
+ * final column would read as a missing one. Padding to the width the allowlist
+ * declares restores the rectangle the sheet actually holds — it never invents a
+ * column, because the width came from the header the guard is about to check.
+ */
+export function valuesToCsv(tab: ExportTab, values: string[][]): string {
+  return values
+    .map((row) =>
+      Array.from(
+        { length: tab.headers.length },
+        (_unused, column) => row[column] ?? ""
+      )
+        .map((cell) => `"${cell.replace(/"/g, '""')}"`)
+        .join(",")
+    )
+    .join("\n");
 }
 
 /** Where a tab's export is committed. Named after the tab so provenance is obvious. */

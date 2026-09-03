@@ -4,18 +4,20 @@ import {
   ASSIGNMENT_TABS,
   assignmentRowsFrom,
   assignmentTabNamed,
+  columnLetter,
   EXPORT_TABS,
   exportFileName,
   MAX_DATA_ROWS,
   parseCsv,
   readSheetTab,
   SHEET_TABS,
-  sheetCsvUrl,
   SheetExportError,
   sheetRowsFrom,
   type SheetTab,
   sheetTabFor,
+  sheetValuesUrl,
   tabNamed,
+  valuesToCsv,
   WORKBOOK_ID_VAR,
 } from "../../scripts/lib/sheet-export";
 
@@ -195,12 +197,24 @@ describe("the tab allowlist", () => {
   });
 
   it("addresses a tab by name, never by the gid the workbook can reassign", () => {
-    const url = sheetCsvUrl("WORKBOOK", machine);
+    const url = sheetValuesUrl("WORKBOOK", machine);
 
-    expect(url).toContain("/spreadsheets/d/WORKBOOK/gviz/tq");
-    expect(url).toContain("sheet=user_machine");
-    expect(url).toContain("tqx=out%3Acsv");
+    expect(url).toContain("/v4/spreadsheets/WORKBOOK/values/");
+    expect(url).toContain(encodeURIComponent("'user_machine'!A1:E"));
+    expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
+  });
+
+  it("pins the range to the width the allowlist declares", () => {
+    // Asked for the whole tab, the API answers about whatever width the data
+    // occupies. Asked for A1:E, a sixth column is a header the guard never
+    // sees rather than a column that quietly joins the export.
+    expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
+      encodeURIComponent("!A1:E")
+    );
+    expect(sheetValuesUrl("WORKBOOK", assignment)).toContain(
+      encodeURIComponent("!A1:K")
+    );
   });
 
   it("names each export after its tab, so the file says where it came from", () => {
@@ -282,9 +296,9 @@ describe("EXPORT_TABS", () => {
   });
 
   it("addresses the Collection Assignment by name too", () => {
-    const url = sheetCsvUrl("WORKBOOK", assignment);
+    const url = sheetValuesUrl("WORKBOOK", assignment);
 
-    expect(url).toContain("sheet=collection-assignment");
+    expect(url).toContain(encodeURIComponent("'collection-assignment'!A1:K"));
     expect(url).not.toContain("gid=");
   });
 });
@@ -567,12 +581,107 @@ describe("assignmentRowsFrom", () => {
   });
 });
 
+describe("columnLetter", () => {
+  it("names the column at a 1-based position", () => {
+    expect(columnLetter(1)).toBe("A");
+    expect(columnLetter(5)).toBe("E");
+    expect(columnLetter(11)).toBe("K");
+    expect(columnLetter(26)).toBe("Z");
+  });
+
+  it("keeps counting past the letter no tab here reaches", () => {
+    expect(columnLetter(27)).toBe("AA");
+    expect(columnLetter(28)).toBe("AB");
+    expect(columnLetter(52)).toBe("AZ");
+    expect(columnLetter(53)).toBe("BA");
+  });
+
+  it("refuses a position that is not a column", () => {
+    for (const nonsense of [0, -1, 1.5]) {
+      expect(() => columnLetter(nonsense)).toThrow(SheetExportError);
+    }
+  });
+});
+
+describe("valuesToCsv", () => {
+  // The API hands back JSON row arrays, so the committed bytes are
+  // reconstructed rather than passed through. These are the properties that
+  // make the reconstruction faithful.
+  it("round-trips through parseCsv unchanged", () => {
+    const values = parseCsv(MASK_CSV);
+
+    expect(parseCsv(valuesToCsv(mask, values))).toEqual(values);
+  });
+
+  it("pads a row the API truncated back to the declared width", () => {
+    // The API omits trailing empty cells, so a row with no Suggested URL comes
+    // back short. Left ragged, a blank final column reads as a missing one.
+    const truncated = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
+      ["5854", "test10", "#N/A"],
+    ];
+
+    expect(parseCsv(valuesToCsv(mask, truncated))[1]).toEqual([
+      "5854",
+      "test10",
+      "#N/A",
+      "",
+      "",
+    ]);
+  });
+
+  it("quotes every field, the way the committed exports already look", () => {
+    expect(valuesToCsv(noTitleTab, [["a", "b", "c"]])).toBe(`"a","b","c"`);
+  });
+
+  it("doubles a quote that a cell really holds", () => {
+    const round = valuesToCsv(noTitleTab, [['6" hose', "b", "c"]]);
+
+    expect(round).toBe(`"6"" hose","b","c"`);
+    expect(parseCsv(round)[0][0]).toBe(`6" hose`);
+  });
+
+  it("keeps a comma and a newline that sit inside a cell", () => {
+    const round = valuesToCsv(noTitleTab, [["a, b", "two\nlines", "c"]]);
+
+    expect(parseCsv(round)[0]).toEqual(["a, b", "two\nlines", "c"]);
+  });
+
+  it("uses LF endings and emits no final newline", () => {
+    const round = valuesToCsv(noTitleTab, [
+      ["a", "b", "c"],
+      ["d", "e", "f"],
+    ]);
+
+    expect(round).toBe(`"a","b","c"\n"d","e","f"`);
+    expect(round).not.toContain("\r");
+    expect(round.endsWith("\n")).toBe(false);
+  });
+
+  it("makes an empty tab present as the empty response readSheetTab refuses", () => {
+    expect(valuesToCsv(mask, [])).toBe("");
+    expect(() => readSheetTab(mask, valuesToCsv(mask, []))).toThrow(
+      /renamed or removed/
+    );
+  });
+
+  it("drops a column the tab never declared rather than exporting it", () => {
+    // The range pins the width, so this should not arrive — but if it did,
+    // exporting a twelfth column under an eleven-column header would put data
+    // in `data/` that no guard ever looked at.
+    const widened = [["a", "b", "c", "smuggled"]];
+
+    expect(valuesToCsv(noTitleTab, widened)).toBe(`"a","b","c"`);
+  });
+});
+
 describe("what each file is allowed to do", () => {
   // Read relative to the repository root, which is vitest's working directory.
   // `import.meta.url` would be the obvious way to resolve these and does not
   // typecheck here — the shared Discourse tsconfig builds to CommonJS output,
   // where the meta-property is not allowed.
   const lib = readFileSync("scripts/lib/sheet-export.ts", "utf8");
+  const auth = readFileSync("scripts/lib/sheets-auth.ts", "utf8");
   const command = readFileSync("scripts/export-sheet.ts", "utf8");
 
   it("keeps the allowlist module free of network and filesystem access", () => {
@@ -591,6 +700,31 @@ describe("what each file is allowed to do", () => {
     expect(command).not.toContain("gviz");
     expect(command).not.toContain("docs.google.com");
     expect(command).toContain("EXPORT_TABS");
+  });
+
+  it("keeps the credential out of the repository and out of every message", () => {
+    // The private key is a bearer credential for everything the service
+    // account can read. A refusal that quoted it would put it in a terminal
+    // and a CI transcript, which are the repository's neighbours.
+    expect(auth).not.toMatch(/-----BEGIN [A-Z ]*PRIVATE KEY-----/);
+    expect(auth).not.toMatch(/\bconsole\./);
+    expect(auth).not.toMatch(/process\.std(out|err)/);
+    expect(auth).not.toMatch(
+      /\$\{\s*(privateKey|rawKey|credentials\.privateKey)/
+    );
+    expect(auth).not.toMatch(/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/);
+
+    // Read from the environment it is handed, never from the ambient one, so
+    // a test can hand it a fixture and the command owns where values come from.
+    expect(auth).not.toContain("process.env");
+  });
+
+  it("asks for a read-only scope, named in one place", () => {
+    expect(auth).toContain(
+      "https://www.googleapis.com/auth/spreadsheets.readonly"
+    );
+    expect(auth).not.toContain('auth/spreadsheets"');
+    expect(auth).not.toContain("auth/drive");
   });
 
   it("keeps the workbook id out of the repository", () => {
