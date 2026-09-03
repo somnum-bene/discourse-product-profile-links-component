@@ -71,12 +71,14 @@ The Mappings and the Custom User Fields' **Dropdown Options** are generated from
 | Command | What it does | Credentials it needs |
 |---|---|---|
 | `pnpm export:sheet` | re-exports the three allowlisted Sheet tabs to `data/user_machine.csv`, `data/user_mask.csv` and `data/collection-assignment.csv` | `SHEET_WORKBOOK_ID`, plus the three `GOOGLE_SERVICE_ACCOUNT_*` variables |
-| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from those exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
+| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
 | `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree | **none** |
 | `pnpm verify:catalogue` | asks cpap.com whether all 55 URLs serve a page, one request at a time | **none** — it only asks for public product pages |
 | `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 | `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
+
+`data/collection-assignment.csv` is the exception in that table: it is exported, validated and committed on the same terms as the option tables, and **nothing reads it yet** — it is the recommendation record the Collection Link work builds on, so the Catalogue Refresh above deliberately looks only at the `user_*` exports.
 
 The commands that need credentials read them from an ignored `.env`; the ones that need none cannot read it at all, which is what lets them run in CI and on a shared machine. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
 
