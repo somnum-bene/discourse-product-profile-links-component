@@ -3,6 +3,7 @@ import {
   createPublicKey,
   createVerify,
   generateKeyPairSync,
+  type KeyObject,
 } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SheetExportError } from "../../scripts/lib/sheet-export";
@@ -104,6 +105,36 @@ describe("credentialsFrom", () => {
 
     expect(() => credentialsFrom(flattened)).toThrow(SheetExportError);
     expect(() => credentialsFrom(flattened)).toThrow(/newline escaping/);
+  });
+
+  it("refuses a key that parses but cannot carry an RS256 signature", () => {
+    // Both non-RSA types reach here, and neither fails usefully downstream.
+    // Ed25519 throws ERR_CRYPTO_UNSUPPORTED_OPERATION out of `createSign` —
+    // not a SheetExportError, so it escapes as a stack trace. EC signs
+    // successfully, and the assertion then goes out claiming RS256 over an
+    // ECDSA signature; Google answers `invalid_grant`, whose diagnostic talks
+    // about the impersonated user and the clock, never about the key's type.
+    const pem = (key: KeyObject) =>
+      key.export({ type: "pkcs8", format: "pem" }).toString();
+
+    const keys = [
+      ["ed25519", generateKeyPairSync("ed25519").privateKey],
+      [
+        "ec",
+        generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey,
+      ],
+    ] as const;
+
+    for (const [type, key] of keys) {
+      const wrong = {
+        ...ENV,
+        [SERVICE_ACCOUNT_KEY_VAR]: pem(key).replace(/\n/g, "\\n"),
+      };
+
+      expect(() => credentialsFrom(wrong)).toThrow(SheetExportError);
+      expect(() => credentialsFrom(wrong)).toThrow(/needs an RSA one/);
+      expect(() => credentialsFrom(wrong)).toThrow(new RegExp(`a ${type} key`));
+    }
   });
 
   it("refuses anything else that is not a private key", () => {
