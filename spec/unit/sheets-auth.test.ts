@@ -32,9 +32,13 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 // `--env-file` hands it over still escaped.
 const ESCAPED_KEY = privateKey.replace(/\n/g, "\\n");
 
+// Both addresses are invented. The real service-account address names a live
+// GCP project, and this repository is public — the same reason the workbook id
+// is configuration rather than a constant. A fixture only has to have the
+// shape.
 const ENV = {
   [SERVICE_ACCOUNT_EMAIL_VAR]:
-    "discourse-cpap-sheet-export-re@discourse-cpap-sheet-export.iam.gserviceaccount.com",
+    "sheet-reader@example-project.iam.gserviceaccount.com",
   [IMPERSONATE_EMAIL_VAR]: "someone@cpap.com",
   [SERVICE_ACCOUNT_KEY_VAR]: ESCAPED_KEY,
 };
