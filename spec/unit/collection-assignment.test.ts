@@ -153,6 +153,26 @@ describe("the committed Collection Assignment", () => {
     expect(wrong).toEqual([]);
   });
 
+  it("joins on a Value each option table holds exactly once", () => {
+    // Both maps above are built by `new Map(entries)`, which keeps the last
+    // entry for a repeated key and says nothing. A PNum appearing twice under
+    // two different titles would make the join silently prefer whichever the
+    // sheet happens to list second, so a row derived from the first would read
+    // as wrong — or a wrong row as right. The assertions are only as
+    // trustworthy as the key they join on being unique.
+    const duplicated = SHEET_TABS.flatMap((tab) => {
+      const valueAt = tab.headers.indexOf("Value");
+      const seen = new Set<string>();
+
+      return readSheetTab(tab, committedExport(tab))
+        .map((row) => row[valueAt] ?? "")
+        .filter((value) => !seen.add(value))
+        .map((value) => `${tab.userFieldName}: PNum ${value}`);
+    });
+
+    expect(duplicated).toEqual([]);
+  });
+
   it("holds the Legacy Text the option table holds, for a Text-sourced row", () => {
     // The check above compares a row against itself: it proves the suffix was
     // applied, not that the name is the right one. A curator pasting the wrong
