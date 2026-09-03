@@ -4,9 +4,10 @@ import {
   createVerify,
   generateKeyPairSync,
 } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SheetExportError } from "../../scripts/lib/sheet-export";
 import {
+  accessTokenFor,
   assertionFor,
   claimSetFor,
   credentialsFrom,
@@ -195,5 +196,124 @@ describe("assertionFor", () => {
 
   it("signs a different assertion for a different hour", () => {
     expect(assertionFor(credentials, ISSUED_AT + 3600)).not.toBe(assertion);
+  });
+});
+
+// The one function here that reaches the network. Everything above it is pure
+// and asserted directly; this is the part that can only be wrong about a real
+// response, so the responses are stubbed rather than the module.
+describe("accessTokenFor", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubTokenEndpoint(
+    response: Partial<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }> = {}
+  ) {
+    const call = vi.fn(async () => ({
+      ok: response.ok ?? true,
+      status: response.status ?? 200,
+      json: response.json ?? (async () => ({ access_token: "a-test-token" })),
+    }));
+
+    vi.stubGlobal("fetch", call);
+
+    return call;
+  }
+
+  const credentials = credentialsFrom(ENV);
+
+  it("hands back the token the endpoint issued", async () => {
+    stubTokenEndpoint();
+
+    await expect(accessTokenFor(credentials, ISSUED_AT)).resolves.toBe(
+      "a-test-token"
+    );
+  });
+
+  it("posts the signed assertion as a form-encoded JWT bearer grant", async () => {
+    // The encoding is the part Google is strict about: a JSON body, or the
+    // assertion under any other parameter name, is refused at the endpoint
+    // rather than here — so it is worth pinning.
+    const call = stubTokenEndpoint();
+    await accessTokenFor(credentials, ISSUED_AT);
+
+    const [url, init] = call.mock.calls[0] as unknown as [string, RequestInit];
+    const body = init.body as URLSearchParams;
+
+    expect(url).toBe("https://oauth2.googleapis.com/token");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "content-type": "application/x-www-form-urlencoded",
+    });
+    expect(body.get("grant_type")).toBe(
+      "urn:ietf:params:oauth:grant-type:jwt-bearer"
+    );
+    expect(body.get("assertion")).toBe(assertionFor(credentials, ISSUED_AT));
+  });
+
+  it("refuses a response that carries an error instead of a token", async () => {
+    stubTokenEndpoint({
+      ok: false,
+      status: 401,
+      json: async () => ({
+        error: "unauthorized_client",
+        error_description: "Client is unauthorized",
+      }),
+    });
+
+    await expect(accessTokenFor(credentials, ISSUED_AT)).rejects.toThrow(
+      SheetExportError
+    );
+    await expect(accessTokenFor(credentials, ISSUED_AT)).rejects.toThrow(
+      /401 unauthorized_client: Client is unauthorized/
+    );
+  });
+
+  it("says which side of the setup to look at for each error it names", async () => {
+    // The two errors worth telling apart. `unauthorized_client` is a console
+    // grant that is missing or still propagating; `invalid_grant` is the
+    // assertion itself. Neither is a statement about the Sheet.
+    stubTokenEndpoint({ ok: false, status: 400, json: async () => ({}) });
+
+    const message = await accessTokenFor(credentials, ISSUED_AT).catch(
+      (error: Error) => error.message
+    );
+
+    expect(message).toMatch(/Domain-wide delegation/);
+    expect(message).toMatch(/invalid_grant` is about the assertion/);
+    expect(message).toMatch(/403 when a tab is fetched/);
+  });
+
+  it("refuses a body that is not JSON at all", async () => {
+    // An HTML error page from a proxy, which is what a network in the way
+    // looks like. `response.json()` rejects, and the refusal has to survive
+    // that rather than becoming an unhandled rejection about parsing.
+    stubTokenEndpoint({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<'");
+      },
+    });
+
+    await expect(accessTokenFor(credentials, ISSUED_AT)).rejects.toThrow(
+      /503 with no token/
+    );
+  });
+
+  it("refuses a 200 that came back without a token", async () => {
+    // Fail closed on the shape, not only on the status: an OK response with
+    // no `access_token` would otherwise be returned as `undefined` and sent
+    // as the word "Bearer undefined".
+    stubTokenEndpoint({ json: async () => ({ scope: SHEETS_READONLY_SCOPE }) });
+
+    await expect(accessTokenFor(credentials, ISSUED_AT)).rejects.toThrow(
+      /200 with no token/
+    );
   });
 });
