@@ -357,11 +357,13 @@ describe("readSheetTab", () => {
     );
   });
 
-  it("aborts on an empty response, which is how a renamed tab presents", () => {
-    // The endpoint answers 200 with no body for a tab it cannot find, so an
-    // empty response is indistinguishable from success unless it is refused.
+  it("aborts on a tab with nothing in it, header row included", () => {
+    // Nothing is indistinguishable from success unless it is refused. The
+    // refusal says the tab is empty rather than missing: the Sheets API
+    // rejects a range naming a tab the workbook does not have, so a renamed
+    // tab never reaches this guard.
     expect(() => readSheetTab(machine, "")).toThrow(SheetExportError);
-    expect(() => readSheetTab(machine, "   \n ")).toThrow(/renamed or removed/);
+    expect(() => readSheetTab(machine, "   \n ")).toThrow(/the tab is empty/);
   });
 
   it("aborts when a tab has grown to a size these tabs never reach", () => {
@@ -499,8 +501,8 @@ describe("readSheetTab, on the Collection Assignment", () => {
     }
   });
 
-  it("aborts on an empty response, which is how a renamed tab presents", () => {
-    expect(() => readSheetTab(assignment, "")).toThrow(/renamed or removed/);
+  it("aborts on a tab with nothing in it, header row included", () => {
+    expect(() => readSheetTab(assignment, "")).toThrow(/the tab is empty/);
   });
 
   it("aborts when the tab has grown to a size it never reaches", () => {
@@ -658,10 +660,10 @@ describe("valuesToCsv", () => {
     expect(round.endsWith("\n")).toBe(false);
   });
 
-  it("makes an empty tab present as the empty response readSheetTab refuses", () => {
+  it("makes a tab with no values present as the emptiness readSheetTab refuses", () => {
     expect(valuesToCsv(mask, [])).toBe("");
     expect(() => readSheetTab(mask, valuesToCsv(mask, []))).toThrow(
-      /renamed or removed/
+      /the tab is empty/
     );
   });
 

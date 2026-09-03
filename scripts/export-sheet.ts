@@ -66,8 +66,11 @@ async function main(): Promise<void> {
     const body = (await response.json()) as { values?: string[][] };
 
     // The API omits `values` entirely for a tab with nothing in it. Turning
-    // that into empty text hands it to the same refusal an empty response has
-    // always taken, rather than inventing a second way to say the same thing.
+    // that into empty text hands it to `readSheetTab`'s emptiness guard,
+    // rather than inventing a second way to say the same thing here. That
+    // guard's wording is specific about which emptiness this is: a tab the
+    // workbook does not have is a 400 above, so anything reaching it is a
+    // tab that exists and holds nothing.
     const csvText = valuesToCsv(tab, body.values ?? []);
 
     // Both calls validate, so the CSV is parsed twice. That costs nothing at a

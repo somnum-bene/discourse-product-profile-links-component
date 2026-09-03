@@ -402,9 +402,11 @@ export function parseCsv(text: string): string[][] {
 export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
   if (csvText.trim() === "") {
     throw new SheetExportError(
-      `${tab.tab}: the sheet returned an empty response. The endpoint answers ` +
-        `200 with no body for a tab it cannot find, so the tab has most likely ` +
-        `been renamed or removed.`
+      `${tab.tab}: the tab is empty — not one row, where a header row is ` +
+        `the minimum. A tab the workbook does not have cannot reach this ` +
+        `refusal: the range naming it fails to parse and the fetch is ` +
+        `rejected before here. So this tab exists, under this name, holding ` +
+        `nothing.`
     );
   }
 
