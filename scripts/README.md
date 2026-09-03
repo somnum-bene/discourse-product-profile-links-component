@@ -28,9 +28,12 @@ this repository is public. Those two facts set the design, and it keeps them
 now that the workbook is the internally-owned cpap.com Sheet: a guard that only
 runs while the danger is visible is a guard you find out about too late.
 
-- **The workbook id is configuration, not a constant.** It is a public link to
-  real customer data, so committing it would publish the link. It lives in
-  `.env` as `SHEET_WORKBOOK_ID` and the run aborts without it.
+- **The workbook id is configuration, not a constant.** It names a private
+  internal workbook, and this repository is public, so committing it would
+  publish which Sheet to go and ask for. It lives in `.env` as
+  `SHEET_WORKBOOK_ID` and the run aborts without it. (It is not a public link
+  to customer data, which is what the inherited spreadsheet was — the id is
+  withheld for a weaker reason than it used to be, and still withheld.)
 - **The allowlist is the only way through.** `SHEET_TABS` names the two option
   tables and, for each, the exact header row and the two columns read from it;
   `ASSIGNMENT_TABS` names the Collection Assignment and its eleven. A name becomes a URL
@@ -118,10 +121,15 @@ GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL  # the JWT's `sub` — the user it acts
 GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY        # PEM, newlines escaped as \n
 ```
 
-`sub` is the claim the whole mechanism turns on and the easy one to leave out:
-without it the service account asks for a token as itself and is refused with
-`unauthorized_client`, which reads like a console problem and sends you to the
-Admin Console instead of to your claim set.
+`sub` is the claim the whole mechanism turns on, and leaving it out fails in
+the least helpful way available: the token endpoint answers **200 and hands
+over a token** for the service account itself, which then collects a `403
+PERMISSION_DENIED` from the first tab it asks for. Nothing in either response
+mentions the claim set. Verified against the live endpoint, because the
+handoff this was built from claimed the token request fails instead.
+
+`unauthorized_client` is the *other* failure, and it means the opposite: `sub`
+was sent, and the delegation grant is missing or still propagating.
 
 The escaped `\n` is the other trap. A PEM holds real newlines, `.env` cannot,
 and Node's `--env-file` hands the value over still escaped — so a key used as

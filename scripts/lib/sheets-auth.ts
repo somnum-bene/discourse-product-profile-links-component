@@ -118,10 +118,17 @@ export function credentialsFrom(
  * asserted without a key.
  *
  * `sub` is the claim that makes this work and the one most likely to be left
- * out: without it the service account asks for a token as itself, which is
- * refused with `unauthorized_client` because it has no access to the Sheet and
- * cannot be given any. With it, the token is issued for the Workspace user in
- * `sub`, whose ordinary access is what the export borrows.
+ * out. Leaving it out does not fail here, which is the part worth knowing:
+ * the endpoint answers 200 and issues a perfectly good token for the service
+ * account itself, and that token then collects a 403 from every tab, because
+ * the service account has no access to the Sheet and cannot be given any. So
+ * the symptom of a missing `sub` shows up a layer away from its cause. With
+ * it, the token is issued for the Workspace user in `sub`, whose ordinary
+ * access is what the export borrows.
+ *
+ * That 200-then-403 was checked against the live endpoint rather than read
+ * off the documentation, because the handoff this was built from asserted the
+ * opposite.
  */
 export function claimSetFor(
   credentials: ServiceAccountCredentials,
