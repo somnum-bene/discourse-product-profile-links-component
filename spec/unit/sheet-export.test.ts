@@ -843,6 +843,20 @@ describe("what each file is allowed to do", () => {
     expect(command).toContain("EXPORT_TABS");
   });
 
+  it("validates every tab before it writes any of them", () => {
+    // The one decision this command owns and no library can make for it, and
+    // the only mistake a shell can make on its own: writing inside the fetch
+    // loop instead of after it. Every guard would still pass, every test would
+    // still be green, and a refusal on the last tab would leave `data/` with
+    // two refreshed exports and one stale — the split state the comment above
+    // the loop forbids. `apply:catalogue` pins its own ordering the same way.
+    const fetchLoop = command.indexOf("fetched.push");
+    const writeLoop = command.indexOf("await writeFile");
+
+    expect(fetchLoop).toBeGreaterThan(-1);
+    expect(writeLoop).toBeGreaterThan(fetchLoop);
+  });
+
   it("runs every allowlisted tab's row validation, not just the option tables'", () => {
     // `readSheetTab` checks the header and the row ceiling for both shapes,
     // but the `Disposition` vocabulary lives in `assignmentRowsFrom` alone.
