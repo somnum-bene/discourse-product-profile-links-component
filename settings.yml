@@ -27,7 +27,7 @@ profile_link_fields:
         - value: AirCurve 11 ASV (Discontinued)
           url: https://www.cpap.com/collections/bipap-machines
         - value: AirSense 10 Elite with HumidAir (Discontinued)
-          url: https://www.cpap.com/collections/airsense-10-machines
+          url: https://www.cpap.com/collections/cpap-machines
     - user_field_name: Mask
       mappings:
         - value: AirFit F10 Full Face Mask
