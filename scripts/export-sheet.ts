@@ -17,6 +17,7 @@ import {
   EXPORT_TABS,
   exportFileName,
   readSheetTab,
+  refuseColumnsPast,
   SheetExportError,
   sheetRowsFrom,
   sheetTabFor,
@@ -65,7 +66,20 @@ async function main(): Promise<void> {
       );
     }
 
-    const body = (await response.json()) as { values?: string[][] };
+    const body = (await response.json()) as {
+      valueRanges?: { values?: string[][] }[];
+    };
+
+    // `sheetValuesUrl` asks for two ranges in one `batchGet`, in this order:
+    // the export itself, then everything to the right of it. Reading them by
+    // position is why that order is pinned there rather than left to chance.
+    const [data, overflow] = body.valueRanges ?? [];
+
+    // Checked before the export is built, because it is a question about the
+    // tab rather than about the rows being exported: a tab that has grown a
+    // column is not the tab this command was written against, whatever the
+    // first eleven columns happen to say.
+    refuseColumnsPast(tab, overflow?.values ?? []);
 
     // The API omits `values` entirely for a tab with nothing in it. Turning
     // that into empty text hands it to `readSheetTab`'s emptiness guard,
@@ -73,7 +87,7 @@ async function main(): Promise<void> {
     // guard's wording is specific about which emptiness this is: a tab the
     // workbook does not have is a 400 above, so anything reaching it is a
     // tab that exists and holds nothing.
-    const csvText = valuesToCsv(tab, body.values ?? []);
+    const csvText = valuesToCsv(tab, data?.values ?? []);
 
     // Both calls validate, so the CSV is parsed twice. That costs nothing at a
     // few hundred rows and leaves each function safe to call on its own, which

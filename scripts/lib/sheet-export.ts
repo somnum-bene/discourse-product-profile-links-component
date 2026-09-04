@@ -286,15 +286,25 @@ function namedIn<T extends ExportTab>(
  * which matters: the allowlist is written in names, and the numeric gid the
  * older CSV endpoint wanted is something the workbook is free to reassign.
  *
- * The range is pinned rather than left open, but to one column *past* the
- * width the allowlist declares — `A1:F` for a five column tab. That extra
- * column is a probe, and it exists because bounding the range at the declared
- * width defeated the guard it was meant to serve. Asked for `A1:E`, a sixth
- * column never arrives, the header row matches exactly, and the export is
- * accepted while quietly no longer being the verbatim tab it claims to be.
- * Inserting a column was always caught — every header after it shifts — but
- * appending one past the end was invisible. Asking one column wider makes an
- * appended header something `valuesToCsv` can refuse.
+ * Two ranges, not one, and `values:batchGet` rather than `values.get` so they
+ * still cost a single request against a single snapshot of the workbook. The
+ * first is the export itself, pinned to exactly the width the allowlist
+ * declares. The second is everything to the right of it, and it is there
+ * because bounding the range at the declared width defeated the guard it was
+ * meant to serve: asked for `A1:E`, a sixth column never arrives, the header
+ * row matches exactly, and the export is accepted while quietly no longer
+ * being the verbatim tab it claims to be. Inserting a column was always
+ * caught — every header after it shifts — but appending one past the end was
+ * invisible.
+ *
+ * This replaces a one-column probe (`A1:F` for a five column tab), which was
+ * the same idea and did not go far enough: it proved only that the *adjacent*
+ * column was empty. A curator who leaves `F` blank and starts typing in `G`
+ * defeated it, and so did a tab whose grown columns happen not to be
+ * contiguous. Asking for the whole remainder of the row makes the check say
+ * what it always claimed to: nothing lives past the declared width. A correct
+ * tab answers with no `values` at all for that range, so the wider ask costs
+ * nothing on the runs that matter.
  */
 export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
   // Rows are bounded on the same principle, one past what the ceiling allows:
@@ -305,7 +315,21 @@ export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
   // reconstructed as CSV and parsed character by character before anything
   // objected. Not asking for it is cheaper than refusing it.
   const lastRow = MAX_DATA_ROWS + 2;
-  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}${lastRow}`;
+  const dataRange = `'${tab.tab}'!A1:${columnLetter(tab.headers.length)}${lastRow}`;
+  // Both ranges stop at the same row, one past what the ceiling allows: the
+  // header, `MAX_DATA_ROWS` of data, and one more whose arrival is what proves
+  // the ceiling was exceeded. Refusing after the fetch was already fail-closed
+  // on writing, but a tab repointed at one of the tabs holding ~124,000 real
+  // email addresses would still have been pulled into memory, reconstructed as
+  // CSV and parsed character by character before anything objected. Not asking
+  // for it is cheaper than refusing it — and it is why the overflow range is
+  // bounded by rows too, rather than being the open `L:ZZZ` that would
+  // otherwise say the same thing.
+  //
+  // `ZZZ` is past the last column a sheet can have. The API clamps a range to
+  // the grid, so this asks for "the rest of the row" without this file having
+  // to know how wide the grid is.
+  const overflowRange = `'${tab.tab}'!${columnLetter(tab.headers.length + 1)}1:ZZZ${lastRow}`;
   // `valueRenderOption` is pinned for the same reason `majorDimension` is:
   // both are defaults today, and the row-array shape everything downstream
   // reads depends on them. `FORMATTED_VALUE` is what returns strings — under
@@ -315,9 +339,13 @@ export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
     majorDimension: "ROWS",
     valueRenderOption: "FORMATTED_VALUE",
   });
+  // Order matters and is relied on by the caller: the response lists
+  // `valueRanges` in the order the ranges were asked for.
+  params.append("ranges", dataRange);
+  params.append("ranges", overflowRange);
   return (
     `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
-    `/values/${encodeURIComponent(range)}?${params}`
+    `/values:batchGet?${params}`
   );
 }
 
@@ -345,6 +373,44 @@ export function columnLetter(position: number): string {
 }
 
 /**
+ * Refuses a tab that holds anything to the right of the columns the allowlist
+ * declares. `values` is the second range `sheetValuesUrl` asks for — the whole
+ * remainder of each row — so an empty answer is proof rather than an
+ * assumption.
+ *
+ * It is separate from `valuesToCsv` because it reads a different range, and it
+ * has to be caught on the API's rows either way: by the time the export is CSV
+ * text the extra column is already gone, which is exactly how an appended
+ * column used to slip past a guard whose own message promises to catch one.
+ *
+ * A column appended to the end is the one restructure the header row cannot
+ * show, because every declared header still matches. An *inserted* column was
+ * always caught — every header after it shifts, and `sameHeaders` is an exact
+ * ordered match.
+ */
+export function refuseColumnsPast(tab: ExportTab, values: unknown[][]): void {
+  for (const [rowIndex, row] of values.entries()) {
+    // Coerced rather than type-checked: nothing in this range is ever
+    // exported, so the only question is whether a cell holds anything, and a
+    // number here has to refuse for the same reason a string does.
+    // `valuesToCsv` is where the shape of the exported cells is checked.
+    const found = row.findIndex((cell) => String(cell ?? "").trim() !== "");
+    if (found === -1) {
+      continue;
+    }
+    throw new SheetExportError(
+      `${tab.tab}: row ${rowIndex + 1} holds a value in column ` +
+        `${columnLetter(tab.headers.length + 1 + found)}, past the ` +
+        `${tab.headers.length} columns the allowlist declares. A column ` +
+        `appended to the end of the tab is the one restructure the header ` +
+        `row cannot show, because every declared header still matches. ` +
+        `Widening the export is a deliberate edit to the allowlist, not ` +
+        `something a curator does to the tab.`
+    );
+  }
+}
+
+/**
  * The API's row arrays as the CSV text the rest of this file reads, quoting
  * every field the way the old `gviz` endpoint did so the committed exports keep
  * the shape they have always had.
@@ -357,14 +423,13 @@ export function columnLetter(position: number): string {
  * declares restores the rectangle the sheet actually holds — it never invents a
  * column, because the width came from the header the guard is about to check.
  *
- * Truncating is the other half, and the reason the appended-column guard lives
- * here rather than in `readSheetTab` beside the other three. `sheetValuesUrl`
- * asks one column wider than declared; anything in that probe column is a
- * column the tab has grown and this command was not written against, so it is
- * refused rather than dropped. It has to be caught on the API's rows, because
- * by the time this function has produced CSV text the extra column is already
- * gone — which is exactly how an appended column used to slip past a guard
- * whose own message promises to catch one.
+ * Truncating is the other half. A row wider than the header cannot arrive from
+ * the API any more — `sheetValuesUrl` pins the data range to exactly the
+ * declared width and `refuseColumnsPast` owns everything to the right of it —
+ * so the check below is defence for a caller that hands this function rows
+ * from somewhere else. It stays because dropping a cell silently is the exact
+ * shape of the bug that made the appended-column guard unreachable in the
+ * first place, and a truncation that refuses is never the wrong answer.
  */
 export function valuesToCsv(tab: ExportTab, values: string[][]): string {
   for (const [rowIndex, row] of values.entries()) {

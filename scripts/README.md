@@ -81,23 +81,36 @@ overstates itself is worse than provenance that says what it is.
 
 Two details of that reconstruction are load-bearing. The tab is addressed by
 _name_, never by a numeric gid a workbook is free to reassign, because the
-allowlist is written in names. And the range is **bounded one column and one
-row past what is allowed** (`'user_machine'!A1:F2002`,
-`'collection-assignment'!A1:L2002`) rather than left open.
+allowlist is written in names. And the fetch asks for **two ranges, not one**,
+through `values:batchGet` — so they still cost a single request against a
+single snapshot of the workbook:
 
-The extra column is a **probe**. Bounding the range at the declared width was
-the obvious thing and it defeated the guard it was meant to serve: asked for
+| Range | What it is |
+| --- | --- |
+| `'user_machine'!A1:E2002` | the export, pinned to exactly the declared width and one row past the ceiling |
+| `'user_machine'!F1:ZZZ2002` | everything to the right of it, which has to come back empty |
+
+The second range is the guard. Bounding the fetch at the declared width was the
+obvious thing and it defeated the check it was meant to serve: asked only for
 `A1:E`, an appended sixth column simply never arrives, every declared header
 still matches, and the export is accepted while quietly no longer being the tab
 it claims to be. Inserting a column was always caught, because every header
-after it shifts. Appending one was invisible. Asking one column wider makes an
-appended column something `valuesToCsv` can see, and it **aborts the run**
-naming the column letter — the export is never written.
+after it shifts. Appending one was invisible. `refuseColumnsPast` **aborts the
+run** naming the column letter and row — the export is never written.
+
+This started as a one-column probe (`A1:F`) and that did not go far enough: it
+proved the _adjacent_ column was empty and nothing more, so a curator who left
+`F` blank and started typing in `G` walked straight through a guard whose
+message promised to catch exactly that. Asking for the whole remainder of the
+row is what makes the check mean what it says. It costs nothing on a correct
+tab, because the API omits `values` entirely for a range with nothing in it.
 
 The extra row is the same idea against the row ceiling: the header, the 2000
-rows allowed, and one more whose arrival proves the ceiling was passed. A tab
-repointed at one of the tabs holding personal data is then refused without
-being transferred at all, rather than after being parsed.
+rows allowed, and one more whose arrival proves the ceiling was passed. Both
+ranges stop there — an open-ended `F:ZZZ` would say the same thing about width
+while reintroducing exactly what the ceiling exists to prevent. A tab repointed
+at one of the tabs holding personal data is refused without being transferred
+at all, rather than after being parsed.
 
 Separately, the API omits trailing empty cells, so a row with no `Suggested
 URL` comes back three cells wide. `valuesToCsv` pads every row back to the

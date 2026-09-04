@@ -12,6 +12,7 @@ import {
   MAX_DATA_ROWS,
   parseCsv,
   readSheetTab,
+  refuseColumnsPast,
   SHEET_TABS,
   SheetExportError,
   sheetRowsFrom,
@@ -201,23 +202,41 @@ describe("the tab allowlist", () => {
   it("addresses a tab by name, never by the gid the workbook can reassign", () => {
     const url = sheetValuesUrl("WORKBOOK", machine);
 
-    expect(url).toContain("/v4/spreadsheets/WORKBOOK/values/");
-    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F2002"));
+    expect(url).toContain("/v4/spreadsheets/WORKBOOK/values:batchGet?");
+    // Decoded, because `URLSearchParams` percent-encodes the `!` and the
+    // quotes a Sheets range needs and the assertion is about the range.
+    expect(decodeURIComponent(url)).toContain("'user_machine'!A1:E2002");
     expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
   });
 
-  it("asks one column past the width the allowlist declares", () => {
-    // The probe column, and the reason it is not `A1:E`. Bounded at the
-    // declared width, an appended sixth column never arrives, every declared
-    // header still matches, and the export is accepted while no longer being
-    // the tab it claims to be. One column wider makes it refusable.
-    expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
-      encodeURIComponent("!A1:F")
+  it("asks for everything past the width the allowlist declares", () => {
+    // The second range, and the reason the first one is exactly `A1:E`.
+    // Bounded at the declared width with nothing else asked for, an appended
+    // sixth column never arrives, every declared header still matches, and the
+    // export is accepted while no longer being the tab it claims to be.
+    //
+    // This used to be a one-column probe (`A1:F`), which proved only that the
+    // *adjacent* column was empty: a curator who left `F` blank and typed in
+    // `G` walked straight through it. The range runs to the end of the row so
+    // the check means what it says.
+    expect(decodeURIComponent(sheetValuesUrl("WORKBOOK", machine))).toContain(
+      "!F1:ZZZ"
     );
-    expect(sheetValuesUrl("WORKBOOK", assignment)).toContain(
-      encodeURIComponent("!A1:L")
-    );
+    expect(
+      decodeURIComponent(sheetValuesUrl("WORKBOOK", assignment))
+    ).toContain("!L1:ZZZ");
+  });
+
+  it("bounds the overflow range by rows as well, like the export range", () => {
+    // Open-ended rows would say the same thing about width and reintroduce
+    // exactly what the row ceiling exists to prevent: a repointed tab pulled
+    // into memory in full before anything objects.
+    for (const tab of EXPORT_TABS) {
+      expect(decodeURIComponent(sheetValuesUrl("WORKBOOK", tab))).toContain(
+        `ZZZ${MAX_DATA_ROWS + 2}`
+      );
+    }
   });
 
   it("asks for cells as the sheet displays them, so they arrive as text", () => {
@@ -360,8 +379,8 @@ describe("EXPORT_TABS", () => {
   it("addresses the Collection Assignment by name too", () => {
     const url = sheetValuesUrl("WORKBOOK", assignment);
 
-    expect(url).toContain(
-      encodeURIComponent("'collection-assignment'!A1:L2002")
+    expect(decodeURIComponent(url)).toContain(
+      "'collection-assignment'!A1:K2002"
     );
     expect(url).not.toContain("gid=");
   });
@@ -719,6 +738,72 @@ describe("columnLetter", () => {
   });
 });
 
+describe("refuseColumnsPast", () => {
+  it("refuses a header appended past the declared width", () => {
+    // The restructure the header-row guard structurally cannot see: every
+    // column it knows about still matches, in order, under the right name.
+    const overflow = [["Notes"], ["seen"]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(SheetExportError);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column F/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+  });
+
+  it("refuses a value appended past the declared width, header or not", () => {
+    // A curator typing into the first free column without labelling it. The
+    // header row is untouched, so nothing else in the pipeline would notice.
+    const overflow = [[], ["oops"]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(
+      /past the 5 columns/
+    );
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 2/);
+  });
+
+  it("refuses a widened tab that left a blank column in between", () => {
+    // The case the old one-column probe walked straight past: `F` blank and
+    // the new column at `G`. A probe that asks only for the adjacent column
+    // proves the adjacent column is empty and nothing else, which is not what
+    // its message claimed. The range now runs to the end of the row.
+    const overflow = [
+      ["", "Notes"],
+      ["", "seen"],
+    ];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column G/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+  });
+
+  it("accepts the empty answer a correct tab gives", () => {
+    // The API omits `values` for a range with nothing in it, which the command
+    // turns into `[]`. Blank cells inside the range are the same case.
+    expect(() => refuseColumnsPast(mask, [])).not.toThrow();
+    expect(() => refuseColumnsPast(mask, [[], [], []])).not.toThrow();
+    expect(() => refuseColumnsPast(mask, [["", "  ", ""]])).not.toThrow();
+  });
+
+  it("refuses a cell that is not text, rather than throwing on `.trim`", () => {
+    // Nothing in this range is exported, so the only question is whether the
+    // cell holds anything — a number past the declared width is a widened tab
+    // for the same reason a string is.
+    const overflow: unknown[][] = [[0], [42]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column F/);
+  });
+
+  it("names the column against the width of the tab it was given", () => {
+    // Eleven declared columns, so the first column past the end is `L`, not
+    // `F`. The letter is what tells a curator which cell to open.
+    expect(() => refuseColumnsPast(assignment, [["Notes"]])).toThrow(
+      /column L/
+    );
+    expect(() => refuseColumnsPast(assignment, [["Notes"]])).toThrow(
+      /past the 11 columns/
+    );
+  });
+});
+
 describe("valuesToCsv", () => {
   // The API hands back JSON row arrays, so the committed bytes are
   // reconstructed rather than passed through. These are the properties that
@@ -746,12 +831,12 @@ describe("valuesToCsv", () => {
     ]);
   });
 
-  it("refuses a header appended past the declared width", () => {
-    // The restructure the header-row guard structurally cannot see: every
-    // column it knows about still matches, in order, under the right name.
-    // Caught here because `sheetValuesUrl` asks one column wider and this is
-    // the last place the extra cell still exists — the CSV text below has
-    // already dropped it.
+  it("refuses a row wider than the header rather than dropping the cell", () => {
+    // `sheetValuesUrl` pins the data range to the declared width, so the API
+    // cannot send this any more — `refuseColumnsPast` owns the columns to the
+    // right. It stays asserted because silently dropping the cell is the exact
+    // shape of the bug that made the appended-column guard unreachable, and
+    // this function is exported and callable on rows from anywhere.
     const widened = [
       ["Value", "Text", "URL", "Suggested Title", "Suggested URL", "Notes"],
       ["5854", "test10", "#N/A", "A Title", "https://example.com", "seen"],
@@ -762,22 +847,9 @@ describe("valuesToCsv", () => {
     expect(() => valuesToCsv(mask, widened)).toThrow(/row 1/);
   });
 
-  it("refuses a value appended past the declared width, header or not", () => {
-    // A curator typing into the first free column without labelling it. The
-    // header row is untouched, so nothing else in the pipeline would notice.
-    const stray = [
-      ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
-      ["5854", "test10", "#N/A", "A Title", "https://example.com", "oops"],
-    ];
-
-    expect(() => valuesToCsv(mask, stray)).toThrow(/past the 5 columns/);
-    expect(() => valuesToCsv(mask, stray)).toThrow(/row 2/);
-  });
-
-  it("accepts a probe column that came back present but empty", () => {
-    // The probe is one column wider than the tab, so an empty cell in it is
-    // the ordinary case, not a widening. Refusing on width alone would abort
-    // every run — a fail-closed guard firing on a correct tab.
+  it("accepts a trailing column that came back present but empty", () => {
+    // Refusing on width alone would abort every run — a fail-closed guard
+    // firing on a correct tab.
     const padded = [
       ["Value", "Text", "URL", "Suggested Title", "Suggested URL", ""],
       ["5854", "test10", "#N/A", "A Title", "https://example.com", "  "],
