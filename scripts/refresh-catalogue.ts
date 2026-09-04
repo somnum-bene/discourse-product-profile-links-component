@@ -105,6 +105,7 @@ async function main(): Promise<void> {
   const review = renderReviewDocument({
     catalogue,
     exclusions,
+    collectionLinks,
     sheetRows,
     products,
     digest,

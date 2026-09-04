@@ -862,6 +862,7 @@ describe("the review document", () => {
   const review = renderReviewDocument({
     catalogue: built.catalogue,
     exclusions: built.exclusions,
+    collectionLinks: built.collectionLinks,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -929,10 +930,52 @@ describe("the review document", () => {
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
   });
 
+  it("lists every Collection Link that will ship", () => {
+    // The document is what a human approves, and it said "every Mapping" while
+    // showing only the Resolved Products. Three of the 58 shipped Mappings
+    // were absent from it, which is worse than never mentioning them: an
+    // approver told they are seeing everything has no reason to look further.
+    const withLinks = renderReviewDocument({
+      catalogue: built.catalogue,
+      exclusions: built.exclusions,
+      collectionLinks: [
+        {
+          userFieldName: "Machine",
+          value: "DreamStation Auto CPAP Machine (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      sheetRows: SHEET_ROWS,
+      products: PRODUCTS,
+      digest: "0".repeat(64),
+    });
+
+    expect(withLinks).toContain("## Collection Links — 1");
+    expect(withLinks).toContain(
+      "DreamStation Auto CPAP Machine (Discontinued)"
+    );
+    expect(withLinks).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+    // The count line has to add up to what ships, not to one of the two files.
+    expect(withLinks).toContain(
+      `- Mappings: ${built.catalogue.length + 1} ` +
+        `(${built.catalogue.length} Resolved Products, 1 Collection Links)`
+    );
+  });
+
+  it("says so plainly when there are no Collection Links", () => {
+    // `None.` rather than an absent section: "we looked and there were none"
+    // and "nobody asked" are different facts, and only one of them is fine.
+    expect(review).toContain("## Collection Links — 0");
+    expect(review).toContain("None.");
+  });
+
   it("is the same document twice, because there is no clock in it", () => {
     const again = renderReviewDocument({
       catalogue: built.catalogue,
       exclusions: built.exclusions,
+      collectionLinks: built.collectionLinks,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -967,6 +1010,7 @@ describe("the review document", () => {
       renderReviewDocument({
         catalogue: after.catalogue,
         exclusions: after.exclusions,
+        collectionLinks: after.collectionLinks,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),

@@ -78,7 +78,7 @@ The two sinks land in **two different places**: Mappings ship in `settings.yml`,
 | `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, rewrites `data/collection-links.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
 | `pnpm build:settings --check` | fails if `settings.yml` and the two committed files disagree | **none** |
-| `pnpm verify:catalogue` | asks cpap.com whether all 55 URLs serve a page, one request at a time | **none** — it only asks for public product pages |
+| `pnpm verify:catalogue` | asks cpap.com whether all 55 catalogue URLs serve a page, one request at a time | **none** — it only asks for public product pages |
 | `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 | `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
 

@@ -124,6 +124,12 @@ export interface SurveyPage {
 export interface ReviewInput {
   catalogue: readonly ResolvedProduct[];
   exclusions: readonly ExcludedProduct[];
+  /**
+   * The Collection Links, which ship as Mappings and so belong in the document
+   * that approves what ships. Required, not optional: an approver told they
+   * are seeing every Mapping has to be seeing every Mapping.
+   */
+  collectionLinks: readonly CollectionLink[];
   sheetRows: readonly SheetRow[];
   products: readonly SurveyedProduct[];
   digest: string;
@@ -746,12 +752,18 @@ export function readResolvedProducts(text: string): ResolvedProduct[] {
  * before anything is applied, so it reports facts and does not summarise them
  * away — every Mapping, every exclusion, both directions of the disagreement.
  *
+ * "Every Mapping" includes the Collection Links. They ship in the same setting
+ * from a second file, and a document that showed 55 of 58 while saying it
+ * showed all of them would be worse than one that never mentioned them: the
+ * approver would have no reason to look.
+ *
  * There is deliberately no timestamp. A refresh that changes nothing produces
  * the same document, which is what makes a change in it worth reading.
  */
 export function renderReviewDocument({
   catalogue,
   exclusions,
+  collectionLinks,
   sheetRows,
   products,
   digest,
@@ -784,7 +796,10 @@ export function renderReviewDocument({
     [
       `- Catalogue digest: \`${digest}\``,
       `- Catalogue file: \`${CATALOGUE_FILE}\``,
-      `- Mappings: ${catalogue.length}`,
+      `- Mappings: ${catalogue.length + collectionLinks.length} ` +
+        `(${catalogue.length} Resolved Products, ` +
+        `${collectionLinks.length} Collection Links)`,
+      `- Collection Links file: \`${COLLECTION_LINKS_FILE}\``,
       `- Excluded Suggested Titles: ${exclusions.length}`,
       `- Shopify Admin API ${SHOPIFY_API_VERSION}, read-only, ${products.length} products seen`,
     ].join("\n"),
@@ -796,6 +811,7 @@ export function renderReviewDocument({
       `next. The catalogue file carries no stock and so does not move.`,
     renderCounts(fields),
     ...fields.map(renderFieldSection),
+    renderCollectionLinks(collectionLinks),
     renderExclusions(exclusions),
     renderDisagreement(exclusions, unnamed),
     renderInStockUnpublished(inStockUnpublished),
@@ -962,6 +978,45 @@ function renderFieldSection(field: FieldSummary): string {
       tableRow([entry.value, entry.url, entry.handle])
     ),
   ].join("\n");
+}
+
+/**
+ * The Collection Links section. These ship as Mappings but are not Resolved
+ * Products, so they get their own section rather than being folded into a
+ * field's table: there is no handle and no status to report, the target is a
+ * collection page rather than a product page, and the approver's question
+ * about them is a different one — is this the right collection for this
+ * equipment (ADR-0020)?
+ *
+ * Hand-seeded today. Once #37 derives them, this is the table that says which
+ * assignment each one came from.
+ */
+function renderCollectionLinks(
+  collectionLinks: readonly CollectionLink[]
+): string {
+  const heading = `## Collection Links — ${collectionLinks.length}`;
+  const description =
+    `Equipment cpap.com no longer sells. Each one ships as a Mapping with no ` +
+    `Dropdown Option, so a member who already holds the value keeps a working ` +
+    `link and nobody new can choose it (ADR-0020, ADR-0021). The ` +
+    `\`${COLLECTION_LINK_SUFFIX.trim()}\` in the value is the anchor text a ` +
+    `member reads, not bookkeeping.`;
+
+  if (collectionLinks.length === 0) {
+    return [heading, description, `None.`].join("\n\n");
+  }
+
+  return [
+    heading,
+    description,
+    [
+      tableRow([`Custom User Field`, `Value`, `Collection`]),
+      tableRow(["---", "---", "---"]),
+      ...collectionLinks.map((link) =>
+        tableRow([link.userFieldName, link.value, link.url])
+      ),
+    ].join("\n"),
+  ].join("\n\n");
 }
 
 function renderExclusions(exclusions: readonly ExcludedProduct[]): string {
