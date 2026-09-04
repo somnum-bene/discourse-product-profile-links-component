@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildCatalogue,
@@ -37,6 +38,11 @@ import {
   surveyPageFromResponse,
   TOKEN_VAR,
 } from "../../scripts/lib/catalogue-refresh";
+import {
+  exportFileName,
+  SHEET_TABS,
+  sheetRowsFrom,
+} from "../../scripts/lib/sheet-export";
 
 // The fixtures are real: the sheet rows are lines from the committed Sheet
 // Exports, and the product records are what the cpap.com Shopify catalogue
@@ -608,6 +614,34 @@ describe("the collection-links file", () => {
 
   it("round-trips every Collection Link unchanged", () => {
     expect(readCollectionLinks(collectionLinksCsv(LINKS))).toEqual(LINKS);
+  });
+
+  it("is a fixed point of the refresh that writes it", () => {
+    // The closest a test can get to running `pnpm refresh:catalogue`, which
+    // needs a Shopify token and so is never run here. The command's own
+    // sequence is read the file, hand the rows to `buildCatalogue`, format the
+    // third output, write it back — so the committed file has to come back out
+    // byte for byte, digest included. A refresh that reordered the rows,
+    // altered a value or recomputed a different digest would show up as a
+    // spurious diff on the first real run, and this is what would catch it.
+    //
+    // The sheet rows are the real committed exports rather than this file's
+    // fixtures, because the field order the sort uses comes from them.
+    const sheetRows = SHEET_TABS.flatMap((tab) =>
+      sheetRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
+    const committedText = readFileSync(COLLECTION_LINKS_FILE, "utf8");
+
+    const { collectionLinks } = buildCatalogue({
+      sheetRows,
+      products: PRODUCTS as ProductRecord[],
+      collectionLinks: readCollectionLinks(committedText),
+    });
+
+    expect(collectionLinksCsv(collectionLinks)).toBe(committedText);
   });
 
   it("reads the file this repository commits", () => {
