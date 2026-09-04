@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildCatalogue,
+  COLLECTION_LINK_SUFFIX,
+  type CollectionLink,
   type ProductRecord,
   type ResolvedProduct,
   type SheetRow,
@@ -9,6 +12,9 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINK_COLUMNS,
+  COLLECTION_LINKS_FILE,
+  collectionLinksCsv,
   curatesTitles,
   declaredDigest,
   digestOf,
@@ -21,6 +27,7 @@ import {
   mergeProducts,
   productsByHandleQuery,
   productsFromByHandleResponse,
+  readCollectionLinks,
   readResolvedProducts,
   renderReviewDocument,
   resolvedProductsCsv,
@@ -31,6 +38,11 @@ import {
   surveyPageFromResponse,
   TOKEN_VAR,
 } from "../../scripts/lib/catalogue-refresh";
+import {
+  exportFileName,
+  SHEET_TABS,
+  sheetRowsFrom,
+} from "../../scripts/lib/sheet-export";
 
 // The fixtures are real: the sheet rows are lines from the committed Sheet
 // Exports, and the product records are what the cpap.com Shopify catalogue
@@ -518,7 +530,9 @@ describe("the catalogue file", () => {
     ]);
 
     expect(resolvedProductsCsv(CATALOGUE)).toBe(first);
-    expect(declaredDigest(changed)).not.toBe(declaredDigest(first));
+    expect(declaredDigest(changed, CATALOGUE_FILE)).not.toBe(
+      declaredDigest(first, CATALOGUE_FILE)
+    );
   });
 
   it("refuses a file with no digest line", () => {
@@ -546,6 +560,19 @@ describe("the catalogue file", () => {
     ).toThrow(/unexpected header row/);
   });
 
+  it("refuses a row that is not as wide as the header says", () => {
+    // The same guard as the Collection Links reader gets, from the same
+    // helper. Both files are digested CSV read by the same three commands, and
+    // an extra column on a row is not a smaller fault in one than the other.
+    const body =
+      "user_field_name,value,handle,status,url\n" +
+      "Machine,A,a,ACTIVE,https://www.cpap.com/products/a,JUNK\n";
+
+    expect(() =>
+      readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/6 fields where the header declares 5/);
+  });
+
   it("refuses a row whose status is not a Shopify status", () => {
     const body =
       "user_field_name,value,handle,status,url\n" +
@@ -563,6 +590,243 @@ describe("the catalogue file", () => {
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
     ).toThrow(/empty field/);
+  });
+});
+
+describe("the collection-links file", () => {
+  const LINKS: CollectionLink[] = [
+    {
+      userFieldName: "Machine",
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: "https://www.cpap.com/collections/cpap-machines",
+    },
+    {
+      userFieldName: "Mask",
+      value: "DreamWear Full Face Mask (S, M, L) (Discontinued)",
+      url: "https://www.cpap.com/collections/full-face-cpap-masks",
+    },
+  ];
+
+  it("is a digest line, a header, and one row per Collection Link", () => {
+    const lines = collectionLinksCsv(LINKS).split("\n");
+
+    expect(lines[0]).toMatch(/^# sha256 [0-9a-f]{64}$/);
+    expect(lines[1]).toBe("user_field_name,value,url");
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toBe("");
+  });
+
+  it("carries no handle and no status column", () => {
+    // The two columns the catalogue has and this file does not are exactly the
+    // two facts a collection has no answer for (ADR-0021).
+    expect(COLLECTION_LINK_COLUMNS).toEqual([
+      "user_field_name",
+      "value",
+      "url",
+    ]);
+    expect(collectionLinksCsv(LINKS)).not.toContain("ACTIVE");
+  });
+
+  it("round-trips every Collection Link unchanged", () => {
+    expect(readCollectionLinks(collectionLinksCsv(LINKS))).toEqual(LINKS);
+  });
+
+  it("is a fixed point of the refresh that writes it", () => {
+    // The closest a test can get to running `pnpm refresh:catalogue`, which
+    // needs a Shopify token and so is never run here. The command's own
+    // sequence is read the file, hand the rows to `buildCatalogue`, format the
+    // third output, write it back — so the committed file has to come back out
+    // byte for byte, digest included. A refresh that reordered the rows,
+    // altered a value or recomputed a different digest would show up as a
+    // spurious diff on the first real run, and this is what would catch it.
+    //
+    // The sheet rows are the real committed exports rather than this file's
+    // fixtures, because the field order the sort uses comes from them.
+    const sheetRows = SHEET_TABS.flatMap((tab) =>
+      sheetRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
+    const committedText = readFileSync(COLLECTION_LINKS_FILE, "utf8");
+
+    const { collectionLinks } = buildCatalogue({
+      sheetRows,
+      products: PRODUCTS as ProductRecord[],
+      collectionLinks: readCollectionLinks(committedText),
+    });
+
+    expect(collectionLinksCsv(collectionLinks)).toBe(committedText);
+  });
+
+  it("reads the file this repository commits", () => {
+    const committed = readCollectionLinks(
+      readFileSync(COLLECTION_LINKS_FILE, "utf8")
+    );
+
+    expect(committed.length).toBeGreaterThan(0);
+
+    for (const link of committed) {
+      expect(link.value.endsWith(COLLECTION_LINK_SUFFIX)).toBe(true);
+      expect(link.url.startsWith("https://www.cpap.com/collections/")).toBe(
+        true
+      );
+    }
+  });
+
+  it("refuses a file with no digest line, naming this file rather than the catalogue", () => {
+    expect(() => readCollectionLinks("user_field_name,value,url\n")).toThrow(
+      new RegExp(COLLECTION_LINKS_FILE.replace(/[.]/g, "\\."))
+    );
+  });
+
+  it("refuses a file edited by hand after it was generated", () => {
+    const tampered = collectionLinksCsv(LINKS).replace(
+      "cpap-machines",
+      "bipap-machines"
+    );
+
+    expect(() => readCollectionLinks(tampered)).toThrow(
+      /does not match its own digest/
+    );
+  });
+
+  it("refuses a file whose columns are not the ones it writes", () => {
+    const body = "user_field_name,value,handle,status,url\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/unexpected header row/);
+  });
+
+  it("refuses a row with an empty field", () => {
+    const body = "user_field_name,value,url\nMachine,A (Discontinued),\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/empty field/);
+  });
+
+  it("refuses a row that is not as wide as the header says", () => {
+    // The header check cannot see this: it is the same fault one line further
+    // down. An extra field used to be discarded without a word, so a row with
+    // a stray trailing column read clean and shipped.
+    const wide =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines,JUNK\n";
+    const narrow = "user_field_name,value,url\nMachine,A (Discontinued)\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(wide)}\n${wide}`)
+    ).toThrow(/4 fields where the header declares 3/);
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(narrow)}\n${narrow}`)
+    ).toThrow(/2 fields where the header declares 3/);
+  });
+
+  it("refuses two rows carrying the same value for one field", () => {
+    // Both rows shipped, and the component then reported `duplicate-value` on
+    // every page load and resolved whichever came first — so row order decided
+    // which URL a member got, which is not a decision anyone made.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/bipap-machines\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/repeats the value/);
+  });
+
+  it("allows the same value under two different fields", () => {
+    // A Mapping is keyed within a field, not globally: Machine and Mask are
+    // separate namespaces and a value living in both is not a collision.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Mask,A (Discontinued),https://www.cpap.com/collections/nasal-cpap-masks\n";
+
+    expect(
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toHaveLength(2);
+  });
+
+  it("refuses a value that is the suffix and nothing else", () => {
+    // It passed the non-empty check and the suffix check, round-tripped
+    // through `csvLine`, and shipped a Profile Link whose anchor text was
+    // `(Discontinued)`. ADR-0020 reverses ADR-0012 on the strength of the
+    // value naming the equipment, so a value that names none is the one thing
+    // the suffix rule cannot be allowed to admit.
+    for (const value of [" (Discontinued)", "(Discontinued)"]) {
+      const body = `user_field_name,value,url\nMachine,"${value}",https://www.cpap.com/collections/cpap-machines\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
+  it("refuses a url that is not an https cpap.com collection page", () => {
+    // The only hand-entered URL in the pipeline, and the one with the widest
+    // blast radius: Discourse refuses the whole `profile_link_fields` value
+    // rather than the Mapping it dislikes (ADR-0016), so one typo here takes
+    // every Profile Link down. `not a url at all` used to read clean and reach
+    // settings.yml.
+    const refused = [
+      "not a url at all",
+      "www.cpap.com/collections/cpap-machines",
+      "http://www.cpap.com/collections/cpap-machines",
+      "https://cpap.com/collections/cpap-machines",
+      "https://www.sleeping.com/collections/cpap-machines",
+      "https://www.cpap.com/products/resmed-airsense-11-autoset",
+      "https://www.cpap.com/collections/",
+    ];
+
+    for (const url of refused) {
+      const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
+  it("accepts a collection url with a handle", () => {
+    const url = "https://www.cpap.com/collections/bipap-machines";
+    const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+    expect(readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)).toEqual([
+      { userFieldName: "Machine", value: "A (Discontinued)", url },
+    ]);
+  });
+
+  it("refuses a value that does not end in the suffix, exactly", () => {
+    // Three near misses, each of which resolves for nobody while looking right
+    // in a diff: resolution is an exact trimmed string match against what the
+    // User holds, so the leading space and the capital `D` are load-bearing.
+    for (const value of [
+      "DreamStation Auto CPAP Machine",
+      "DreamStation Auto CPAP Machine (discontinued)",
+      "DreamStation Auto CPAP Machine(Discontinued)",
+    ]) {
+      const body = `user_field_name,value,url\nMachine,"${value}",https://www.cpap.com/collections/cpap-machines\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/does not end in " \(Discontinued\)"/);
+    }
+  });
+
+  it("accepts the suffix and nothing more than the suffix", () => {
+    const body = `user_field_name,value,url\nMachine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n`;
+
+    expect(readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)).toEqual([
+      {
+        userFieldName: "Machine",
+        value: "A (Discontinued)",
+        url: "https://www.cpap.com/collections/cpap-machines",
+      },
+    ]);
   });
 });
 
@@ -593,10 +857,12 @@ describe("the review document", () => {
   const built = buildCatalogue({
     sheetRows: SHEET_ROWS,
     products: PRODUCTS as ProductRecord[],
+    collectionLinks: [],
   });
   const review = renderReviewDocument({
     catalogue: built.catalogue,
     exclusions: built.exclusions,
+    collectionLinks: built.collectionLinks,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -664,10 +930,52 @@ describe("the review document", () => {
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
   });
 
+  it("lists every Collection Link that will ship", () => {
+    // The document is what a human approves, and it said "every Mapping" while
+    // showing only the Resolved Products. Three of the 58 shipped Mappings
+    // were absent from it, which is worse than never mentioning them: an
+    // approver told they are seeing everything has no reason to look further.
+    const withLinks = renderReviewDocument({
+      catalogue: built.catalogue,
+      exclusions: built.exclusions,
+      collectionLinks: [
+        {
+          userFieldName: "Machine",
+          value: "DreamStation Auto CPAP Machine (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      sheetRows: SHEET_ROWS,
+      products: PRODUCTS,
+      digest: "0".repeat(64),
+    });
+
+    expect(withLinks).toContain("## Collection Links — 1");
+    expect(withLinks).toContain(
+      "DreamStation Auto CPAP Machine (Discontinued)"
+    );
+    expect(withLinks).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+    // The count line has to add up to what ships, not to one of the two files.
+    expect(withLinks).toContain(
+      `- Mappings: ${built.catalogue.length + 1} ` +
+        `(${built.catalogue.length} Resolved Products, 1 Collection Links)`
+    );
+  });
+
+  it("says so plainly when there are no Collection Links", () => {
+    // `None.` rather than an absent section: "we looked and there were none"
+    // and "nobody asked" are different facts, and only one of them is fine.
+    expect(review).toContain("## Collection Links — 0");
+    expect(review).toContain("None.");
+  });
+
   it("is the same document twice, because there is no clock in it", () => {
     const again = renderReviewDocument({
       catalogue: built.catalogue,
       exclusions: built.exclusions,
+      collectionLinks: built.collectionLinks,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -682,6 +990,7 @@ describe("the review document", () => {
     const after = buildCatalogue({
       sheetRows: SHEET_ROWS,
       products: [archived, ...PRODUCTS.slice(1)] as ProductRecord[],
+      collectionLinks: [],
     });
 
     const before = resolvedProductsCsv(built.catalogue).split("\n");
@@ -701,6 +1010,7 @@ describe("the review document", () => {
       renderReviewDocument({
         catalogue: after.catalogue,
         exclusions: after.exclusions,
+        collectionLinks: after.collectionLinks,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),
@@ -751,8 +1061,21 @@ describe("what each file is allowed to do", () => {
     // Where the two files go is part of what the pipeline is, not part of
     // writing them: `build` and `apply` read the catalogue by the same constant.
     expect(command).not.toContain(CATALOGUE_FILE);
+    expect(command).not.toContain(COLLECTION_LINKS_FILE);
     expect(command).not.toContain(REVIEW_FILE);
     expect(command).toContain("writeFile(CATALOGUE_FILE, csv)");
+    expect(command).toContain("writeFile(COLLECTION_LINKS_FILE, linksCsv)");
     expect(command).toContain("writeFile(REVIEW_FILE, review)");
+  });
+
+  it("reads the Collection Links through the reader that verifies their digest", () => {
+    // The file is hand-seeded and committed, so a refresh re-reads it through
+    // the same guards that will check it back in rather than parsing the CSV
+    // again — the suffix check included. The write loop itself is the one part
+    // of this pipeline no test covers, so which reader and which writer the
+    // command reaches for is asserted here.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("collectionLinksCsv(collectionLinks)");
+    expect(command).toContain("collectionLinks: seededCollectionLinks");
   });
 });

@@ -9,10 +9,10 @@ The commands and what each one is allowed to touch:
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
-| `pnpm refresh:catalogue` | `data/` Sheet Exports, Shopify Admin API | `data/resolved-products.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
-| `pnpm build:settings`    | `data/resolved-products.csv`             | `settings.yml`                                         | none, so it runs in CI                                              |
+| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
-| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `settings.yml` | one Discourse instance                             | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml` | one Discourse instance         | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
@@ -213,17 +213,31 @@ it happens.
 No token caching or refresh: the command gets one read-only token, fetches a
 handful of tabs, and exits well inside the hour.
 
-## The Catalogue Refresh writes one file to ship and one file to read
+## The Catalogue Refresh writes files to ship and one file to read
 
 `refresh:catalogue` is the only command that touches Shopify, and the only one
-that turns a curated title into a link. It writes two things, and they are not
-the same kind of thing:
+that turns a curated title into a link. It writes three things, and they are not
+all the same kind of thing:
 
-- **`data/resolved-products.csv` is the record.** It is committed, it is the only
-  input to `build` and `apply`, and it holds nothing but the Mappings that
-  resolved. Its first line is a `# sha256 …` digest of the rest, so a later
+- **`data/resolved-products.csv` is the record.** It is committed, it is an
+  input to `build` and `apply`, and it holds nothing but the product Mappings
+  that resolved. Its first line is a `# sha256 …` digest of the rest, so a later
   command can say which catalogue it is working from, and a file edited by hand
   after it was generated is refused rather than used.
+- **`data/collection-links.csv` is its sibling, not part of it.** It holds the
+  **Collection Links**: equipment cpap.com no longer sells, pointing at a
+  collection page, with ` (Discontinued)` on the value so the anchor text says
+  what the link is. Three columns rather than five, because a collection has no
+  product handle and no product status — which is exactly why widening the
+  catalogue file was rejected (ADR-0021). It carries its own digest, and its
+  reader refuses a value whose suffix is not those exact bytes. Its rows are
+  hand-seeded today; deriving them from the Excluded Products and the Collection
+  Assignment is a later step, so this refresh reads the file and writes it back.
+
+  Both files feed the Mappings. Only `data/resolved-products.csv` feeds the
+  Dropdown Options, and that asymmetry is the feature: `dropdownOptionsFor` is
+  handed the products alone, so it cannot offer a discontinued machine to a User
+  choosing theirs.
 - **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
   ignored, because it is regenerated on every refresh: every Mapping per field,
   every excluded Suggested Title under the reason it was excluded, and both
@@ -313,8 +327,10 @@ Mapping has a URL, not that the URL is one. URL syntax is the schema's
 `validations: url: true`, enforced server-side by Ruby, on an administrator's
 input — a generated `default:` never passes through it during development. And a
 single refusal invalidates the entire `profile_link_fields` value rather than the
-one offending Mapping (ADR-0006), so one bad URL takes all 55 Profile Links down
-with it.
+one offending Mapping (ADR-0006), so one bad URL takes all 58 Profile Links down
+with it — the 55 from the catalogue and the three Collection Links alike. That
+is why `readCollectionLinks` checks the shape of a collection URL where it
+reads it: it is the only URL here anyone types by hand.
 
 So `settings-schema.ts` mirrors `UrlHelper.is_valid_url?`, which is the method
 that validation reaches. The Ruby is quoted in the module, the expectations were
@@ -428,7 +444,9 @@ replans against whatever the instance now holds.
 ## The reachability pass is the one check that is not a gate
 
 `pnpm verify:catalogue` asks cpap.com whether each of the 55 catalogue URLs
-serves a page. It is in no pre-commit hook and no CI step, unlike every other
+serves a page. It reads the catalogue file alone, so the three collection URLs
+are not among them — whether Shopify admits a collection is asked on refresh
+(ADR-0020), and #37 owns it. It is in no pre-commit hook and no CI step, unlike every other
 check here, and unit tests read `package.json`, `.pre-commit-config.yaml` and
 `.github/workflows/ci.yml` to keep it that way — including inside another npm
 script, because anything `pnpm build:settings` called would gate CI just as

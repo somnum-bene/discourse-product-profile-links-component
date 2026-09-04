@@ -1,7 +1,8 @@
-// The Catalogue Refresh. Reads the committed Sheet Exports, asks the cpap.com
-// Shopify Admin API about every product they name plus everything those
-// divisions currently sell, and writes the Resolved Product Catalogue and the
-// review document. Run it with `pnpm refresh:catalogue`.
+// The Catalogue Refresh. Reads the committed Sheet Exports and Collection
+// Links, asks the cpap.com Shopify Admin API about every product the exports
+// name plus everything those divisions currently sell, and writes the Resolved
+// Product Catalogue, the Collection Links and the review document. Run it with
+// `pnpm refresh:catalogue`.
 //
 // This is the only command that needs a Shopify token, and the only one that
 // needs the network at all after the exports are committed. Everything it
@@ -15,6 +16,8 @@ import { buildCatalogue } from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINKS_FILE,
+  collectionLinksCsv,
   curatesTitles,
   declaredDigest,
   type Division,
@@ -26,6 +29,7 @@ import {
   mergeProducts,
   productsByHandleQuery,
   productsFromByHandleResponse,
+  readCollectionLinks,
   renderReviewDocument,
   resolvedProductsCsv,
   REVIEW_FILE,
@@ -60,6 +64,16 @@ async function main(): Promise<void> {
   const sheetRows = await readSheetExports();
   const handles = handlesFromSheetRows(sheetRows);
 
+  // Read through the file's own reader, digest and suffix checks included, for
+  // the same reason the Sheet Exports are re-read: it is hand-seeded and
+  // committed, so a refresh and a review have to be looking at the same rows.
+  // Today the refresh hands these straight back out; when derivation lands it
+  // is `buildCatalogue` that fills them in, and this read becomes the seed for
+  // the curated ones rather than all of them.
+  const seededCollectionLinks = readCollectionLinks(
+    await readFile(COLLECTION_LINKS_FILE, "utf8")
+  );
+
   process.stdout.write(
     `${sheetRows.length} sheet rows naming ${handles.length} product handles\n`
   );
@@ -80,12 +94,18 @@ async function main(): Promise<void> {
   }
 
   const products = mergeProducts(...fetched);
-  const { catalogue, exclusions } = buildCatalogue({ sheetRows, products });
+  const { catalogue, exclusions, collectionLinks } = buildCatalogue({
+    sheetRows,
+    products,
+    collectionLinks: seededCollectionLinks,
+  });
   const csv = resolvedProductsCsv(catalogue);
-  const digest = declaredDigest(csv);
+  const linksCsv = collectionLinksCsv(collectionLinks);
+  const digest = declaredDigest(csv, CATALOGUE_FILE);
   const review = renderReviewDocument({
     catalogue,
     exclusions,
+    collectionLinks,
     sheetRows,
     products,
     digest,
@@ -93,10 +113,13 @@ async function main(): Promise<void> {
 
   await mkdir(dirname(CATALOGUE_FILE), { recursive: true });
   await writeFile(CATALOGUE_FILE, csv);
+  await writeFile(COLLECTION_LINKS_FILE, linksCsv);
   await writeFile(REVIEW_FILE, review);
 
   process.stdout.write(
     `\n${CATALOGUE_FILE}: ${catalogue.length} Mappings, ${exclusions.length} excluded\n` +
+      `${COLLECTION_LINKS_FILE}: ${collectionLinks.length} Collection Links — ` +
+      `Mappings too, and never Dropdown Options\n` +
       `${REVIEW_FILE}: the review document — read this before applying anything\n` +
       `digest: ${digest}\n`
   );

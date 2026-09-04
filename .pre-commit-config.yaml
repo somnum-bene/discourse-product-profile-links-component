@@ -78,19 +78,20 @@ repos:
         files: ^(javascripts|scripts|spec|types)/.*\.(ts|gts|d\.ts)$|^tsconfig\.json$
 
       # settings.yml and data/ are triggers because tests read them: the shipped
-      # profile_link_fields default is fed through readLinkConfig, and the
-      # Resolved Product Catalogue is what both sinks are generated from. A
-      # change to either can break a test with no source file touched.
-      # The same drift gate CI runs. It is cheap — two file reads, no network —
+      # profile_link_fields default is fed through readLinkConfig, the Resolved
+      # Product Catalogue is what both sinks are generated from, and the
+      # Collection Links are the Mappings sink's second input. A change to any
+      # of them can break a test with no source file touched.
+      # The same drift gate CI runs. It is cheap — three file reads, no network —
       # and catching a stale settings.yml before the commit exists is the whole
       # point: the generated region is where the shipped Mappings and the
       # catalogue they came from drift apart.
       - id: build-settings
-        name: settings.yml matches the catalogue
+        name: settings.yml matches the catalogue and the Collection Links
         entry: pnpm build:settings --check
         language: system
         pass_filenames: false
-        files: ^settings\.yml$|^data/resolved-products\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
+        files: ^settings\.yml$|^data/(resolved-products|collection-links)\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
 
       - id: vitest
         name: unit tests

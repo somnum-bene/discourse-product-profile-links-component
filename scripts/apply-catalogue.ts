@@ -24,7 +24,12 @@ import {
   dropdownOptionsFor,
   renderFieldMappings,
 } from "./lib/build-catalogue.ts";
-import { recordedDigest, SETTINGS_FILE } from "./lib/build-settings.ts";
+import {
+  driftReport,
+  recordedDigest,
+  SETTINGS_FILE,
+  settingsWithCatalogue,
+} from "./lib/build-settings.ts";
 import {
   API_KEY_VAR,
   API_USERNAME_VAR,
@@ -52,10 +57,12 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINKS_FILE,
   declaredDigest,
+  readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
-import { planApply, PlanApplyError } from "./lib/plan-apply.ts";
+import { MANAGED_FIELDS, planApply, PlanApplyError } from "./lib/plan-apply.ts";
 import { SheetExportError } from "./lib/sheet-export.ts";
 
 /** The API key goes in here and nowhere else. */
@@ -87,16 +94,54 @@ async function main(): Promise<void> {
   // than pushed to a live site.
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
-  const declared = declaredDigest(catalogueText);
+  const declared = declaredDigest(catalogueText, CATALOGUE_FILE);
+
+  // Read for the drift comparison below and for nothing else. The Dropdown
+  // Options this command writes come from `dropdownOptionsFor(catalogue)`,
+  // which is never handed a Collection Link — that is the point of the two
+  // arrays (ADR-0021).
+  const collectionLinks = readCollectionLinks(
+    await readFile(COLLECTION_LINKS_FILE, "utf8")
+  );
   const targets = dropdownOptionsFor(catalogue);
 
+  const settingsText = await readFile(SETTINGS_FILE, "utf8");
   const disagreement = digestDisagreement(
-    recordedDigest(await readFile(SETTINGS_FILE, "utf8")),
+    recordedDigest(settingsText),
     declared
   );
 
   if (disagreement) {
     throw new CatalogueApplyError(disagreement);
+  }
+
+  // The digest above correlates the Dropdown Options this command writes with
+  // the products they came from, and that is all it can do: it records the
+  // catalogue's digest alone, on purpose, because a combined digest would blur
+  // what it means (see `DIGEST_LABEL`). Collection Links are therefore outside
+  // it, and `settings.yml` ships them as of #34.
+  //
+  // So a links file that was edited and re-digested without a rebuild left
+  // this command comparing a live instance against Mappings that were never
+  // shipped, with the digest guard passing throughout. This asks the question
+  // the digest cannot: is the committed file what a fresh build from both
+  // inputs would write? Same comparison `pnpm build:settings --check` runs,
+  // which apply cannot assume anyone ran.
+  const stale = driftReport(
+    settingsText,
+    settingsWithCatalogue(
+      settingsText,
+      renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS),
+      declared
+    )
+  );
+
+  if (stale) {
+    throw new CatalogueApplyError(
+      `${stale}\nRun \`pnpm build:settings\` and commit the result before ` +
+        `applying: this command pushes Dropdown Options to a live site and ` +
+        `reports drift against the Mappings in this file.`
+    );
   }
 
   process.stdout.write(
@@ -120,9 +165,15 @@ async function main(): Promise<void> {
   const lookup = findComponent(
     await request("GET", themesUrl(origin), credentials)
   );
+  // Against both arrays, because `settings.yml` ships both: comparing an
+  // instance's live Mappings against the products alone would report every
+  // Collection Link as drift on every run.
   const drift =
     lookup.kind === "one"
-      ? componentDrift(lookup.component.fields, renderFieldMappings(catalogue))
+      ? componentDrift(
+          lookup.component.fields,
+          renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)
+        )
       : [];
 
   process.stdout.write(`${renderComponent(lookup, drift)}\n`);

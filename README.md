@@ -41,7 +41,7 @@ A value that matches no Mapping renders nothing. An empty configuration is valid
 >
 > **And there is no undo.** Discourse exposes no route that deletes a Setting Override — the admin API only writes one. Removing it takes a settings migration, or deleting and reinstalling the component. `migrations/settings/0002` removes an *empty* one, because that can only be an accident; a populated one is somebody's configuration and is kept.
 >
-> Change `data/resolved-products.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run — though only once the override differs from what the repository shipped, since nothing readable from outside distinguishes "no override" from "an override that agrees".
+> Change `data/resolved-products.csv` or `data/collection-links.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run — though only once the override differs from what the repository shipped, since nothing readable from outside distinguishes "no override" from "an override that agrees".
 
 ### `profile_link_debug_mode`
 
@@ -66,15 +66,19 @@ So: check the console once after updating. See [ADR-0006](docs/adr/0006-a-settin
 
 ## 🗂 The cpap.com product catalogue
 
-The Mappings and the Custom User Fields' **Dropdown Options** are generated from one committed file, `data/resolved-products.csv`, because a Dropdown Option with no matching Mapping value resolves nothing and logs nothing ([ADR-0011](docs/adr/0011-dropdown-options-are-a-second-sink-applied-per-site.md)). They land in **two different places**, though: Mappings ship in `settings.yml`, and Dropdown Options are Discourse site data that no commit can reach — so the last step runs once per instance.
+The Custom User Fields' **Dropdown Options** are generated from one committed file, `data/resolved-products.csv`, because a Dropdown Option with no matching Mapping value resolves nothing and logs nothing ([ADR-0011](docs/adr/0011-dropdown-options-are-a-second-sink-applied-per-site.md)). The Mappings are generated from that file **and** from `data/collection-links.csv`, which holds equipment cpap.com no longer sells, pointing at a collection page with ` (Discontinued)` on the value ([ADR-0021](docs/adr/0021-a-collection-link-is-a-mapping-with-no-option.md)).
+
+So there are deliberately fewer Dropdown Options than Mappings. A **Collection Link** resolves for a User who already holds the value and is never offered to a User choosing one, and that is structural rather than a rule anyone has to remember: the function that renders the options is handed the products alone and never sees a Collection Link. What has no failure mode is a Mapping without an Option — nobody can select a value that is not offered. The reverse is the one that hurts, and it is still checked.
+
+The two sinks land in **two different places**: Mappings ship in `settings.yml`, and Dropdown Options are Discourse site data that no commit can reach — so the last step runs once per instance.
 
 | Command | What it does | Credentials it needs |
 |---|---|---|
 | `pnpm export:sheet` | re-exports the three allowlisted Sheet tabs to `data/user_machine.csv`, `data/user_mask.csv` and `data/collection-assignment.csv` | `SHEET_WORKBOOK_ID`, plus the three `GOOGLE_SERVICE_ACCOUNT_*` variables |
-| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
+| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, rewrites `data/collection-links.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
-| `pnpm build:settings --check` | fails if `settings.yml` and the catalogue disagree | **none** |
-| `pnpm verify:catalogue` | asks cpap.com whether all 55 URLs serve a page, one request at a time | **none** — it only asks for public product pages |
+| `pnpm build:settings --check` | fails if `settings.yml` and the two committed files disagree | **none** |
+| `pnpm verify:catalogue` | asks cpap.com whether all 55 catalogue URLs serve a page, one request at a time | **none** — it only asks for public product pages |
 | `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 | `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
 
