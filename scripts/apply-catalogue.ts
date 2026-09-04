@@ -57,7 +57,7 @@ import {
   readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
-import { planApply, PlanApplyError } from "./lib/plan-apply.ts";
+import { MANAGED_FIELDS, planApply, PlanApplyError } from "./lib/plan-apply.ts";
 import { SheetExportError } from "./lib/sheet-export.ts";
 
 /** The API key goes in here and nowhere else. */
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
     lookup.kind === "one"
       ? componentDrift(
           lookup.component.fields,
-          renderFieldMappings(catalogue, collectionLinks)
+          renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)
         )
       : [];
 

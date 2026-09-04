@@ -29,6 +29,7 @@ import {
   readCollectionLinks,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh";
+import { MANAGED_FIELDS } from "../../scripts/lib/plan-apply";
 import { refusedUrls } from "../../scripts/lib/settings-schema";
 import { SHEET_TABS } from "../../scripts/lib/sheet-export";
 
@@ -367,7 +368,7 @@ describe("the settings.yml this repository ships", () => {
     expect(
       settingsWithCatalogue(
         settingsText,
-        renderFieldMappings(catalogue, collectionLinks),
+        renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS),
         declaredDigest(catalogueText)
       )
     ).toBe(settingsText);

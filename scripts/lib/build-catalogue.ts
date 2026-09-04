@@ -437,9 +437,15 @@ export function buildCatalogue({
   exclusions.sort(byFieldThenValue);
 
   // Sorted on the way through rather than trusted as given, so the order the
-  // Mappings ship in is decided here for both arrays by the same rule. A field
-  // the sheet never presented ranks 0, which is the same fallback the other two
-  // outputs get.
+  // Mappings ship in is decided here for both arrays by the same rule.
+  //
+  // Only this output can reach the `?? 0` fallback above: `catalogue` and
+  // `exclusions` take their field names from the same `sheetRows` that built
+  // `fieldOrder`, so their names are always ranked. A Collection Link is read
+  // from a hand-seeded file and can name a field the sheet never presented,
+  // which ranks 0 and ties with the first field. It is `renderFieldMappings`
+  // that decides where such a field's Mappings land, from the order it is
+  // handed.
   const sortedCollectionLinks = [...collectionLinks].sort(byFieldThenValue);
 
   return { catalogue, exclusions, collectionLinks: sortedCollectionLinks };
@@ -487,7 +493,14 @@ function groupByField<Entry extends MappingEntry>(
  * already-ordered lists is an order anyone can predict from the inputs
  * (ADR-0021).
  *
- * Both parameters are required, and the second deliberately has no default. A
+ * `fieldOrder` decides the order of the fields themselves, and it has to be
+ * passed in because this module reaches for nothing — the option-table
+ * allowlist lives in `sheet-export.ts` and importing it here would cost the
+ * purity the three commands rely on. Without it, grouping a concatenation puts
+ * every product-backed field ahead of a field carrying only Collection Links,
+ * which is the one case this sink newly supports.
+ *
+ * All three parameters are required, and the second deliberately has no default. A
  * default of `[]` would let a caller who forgot the argument drop every
  * Collection Link with no type error — which is the same "guarantee turned into
  * a habit" that ADR-0021 rejected a `kind` discriminator for. A caller that
@@ -495,17 +508,34 @@ function groupByField<Entry extends MappingEntry>(
  */
 export function renderFieldMappings(
   catalogue: readonly ResolvedProduct[],
-  collectionLinks: readonly CollectionLink[]
+  collectionLinks: readonly CollectionLink[],
+  fieldOrder: readonly string[]
 ): FieldMapping[] {
-  return groupByField<MappingEntry>([...catalogue, ...collectionLinks]).map(
-    (group) => ({
+  const groups = groupByField<MappingEntry>([...catalogue, ...collectionLinks]);
+  const rankOf = (userFieldName: string): number => {
+    const rank = fieldOrder.indexOf(userFieldName);
+
+    // A field nobody declared sorts after every field somebody did, rather
+    // than tying at 0 and interleaving with them. It should not happen — both
+    // sinks are fed from the option-table allowlist — and if it does, the
+    // Mapping still ships and lands somewhere predictable.
+    return rank === -1 ? fieldOrder.length : rank;
+  };
+
+  return groups
+    .map((group, index) => ({ group, index }))
+    .sort(
+      (a, b) =>
+        rankOf(a.group.userFieldName) - rankOf(b.group.userFieldName) ||
+        a.index - b.index
+    )
+    .map(({ group }) => ({
       user_field_name: group.userFieldName,
       mappings: group.entries.map((entry) => ({
         value: entry.value,
         url: entry.url,
       })),
-    })
-  );
+    }));
 }
 
 /**

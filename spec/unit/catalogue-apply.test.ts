@@ -32,7 +32,11 @@ import {
   CATALOGUE_FILE,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh.ts";
-import { type FieldWrite, planApply } from "../../scripts/lib/plan-apply.ts";
+import {
+  type FieldWrite,
+  MANAGED_FIELDS,
+  planApply,
+} from "../../scripts/lib/plan-apply.ts";
 
 const LIB_FILE = "scripts/lib/catalogue-apply.ts";
 const COMMAND_FILE = "scripts/apply-catalogue.ts";
@@ -652,7 +656,10 @@ describe("how far the instance's component is from the catalogue", () => {
     // catalogue on disk carries 55 Mappings. Writing the Dropdown Options now
     // would produce an Unmatched Value for every one of them.
     const catalogue = realCatalogue();
-    const notes = componentDrift([], renderFieldMappings(catalogue, []));
+    const notes = componentDrift(
+      [],
+      renderFieldMappings(catalogue, [], MANAGED_FIELDS)
+    );
 
     expect(notes.map((note) => note.user_field_name)).toEqual([
       "Machine",

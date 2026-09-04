@@ -23,6 +23,7 @@ import {
   readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
+import { MANAGED_FIELDS } from "./lib/plan-apply.ts";
 
 /** Report drift and change nothing. The gate CI and the pre-commit hook run. */
 const CHECK_FLAG = "--check";
@@ -52,7 +53,11 @@ async function main(): Promise<void> {
   const collectionLinks = readCollectionLinks(
     await readFile(COLLECTION_LINKS_FILE, "utf8")
   );
-  const fields = renderFieldMappings(catalogue, collectionLinks);
+  const fields = renderFieldMappings(
+    catalogue,
+    collectionLinks,
+    MANAGED_FIELDS
+  );
 
   const committed = await readFile(SETTINGS_FILE, "utf8");
   const built = settingsWithCatalogue(committed, fields, digest);
