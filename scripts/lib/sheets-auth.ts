@@ -103,8 +103,9 @@ export function credentialsFrom(
 
   const privateKey = unescapeNewlines(rawKey as string);
 
+  let key;
   try {
-    createPrivateKey(privateKey);
+    key = createPrivateKey(privateKey);
   } catch {
     // The key itself is not reported, and neither is the underlying error,
     // which can quote the material it failed to parse.
@@ -113,6 +114,27 @@ export function credentialsFrom(
         `usual cause is newline escaping: a PEM holds real newlines, .env ` +
         `holds them as a literal backslash-n, and only the ones written that ` +
         `way survive being unescaped here.`
+    );
+  }
+
+  // Parsing is not enough: the assertion is signed `RS256`, and only an RSA
+  // key can carry that. The two ways a non-RSA key fails are both worse than a
+  // refusal here. An Ed25519 key parses and then throws
+  // `ERR_CRYPTO_UNSUPPORTED_OPERATION` out of `createSign`, which is not a
+  // `SheetExportError` and so escapes as a stack trace with no "Nothing was
+  // written." line. An EC key is worse still: it *signs*, and the assertion
+  // goes out claiming `RS256` over an ECDSA signature, so Google answers
+  // `invalid_grant` and the diagnostic sends the operator to the impersonated
+  // user, the key's ownership, or the clock — never to the key's type.
+  //
+  // The type name is not key material, so naming it is safe and is the whole
+  // difference between this and half an hour in the Admin Console.
+  if (key.asymmetricKeyType !== "rsa") {
+    throw new SheetExportError(
+      `${SERVICE_ACCOUNT_KEY_VAR} is a ${key.asymmetricKeyType} key, and the ` +
+        `assertion is signed RS256, which needs an RSA one. A Google service ` +
+        `account key is RSA; a key of another type is a key from somewhere ` +
+        `else.`
     );
   }
 

@@ -3,6 +3,7 @@ import {
   createPublicKey,
   createVerify,
   generateKeyPairSync,
+  type KeyObject,
 } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SheetExportError } from "../../scripts/lib/sheet-export";
@@ -106,6 +107,36 @@ describe("credentialsFrom", () => {
     expect(() => credentialsFrom(flattened)).toThrow(/newline escaping/);
   });
 
+  it("refuses a key that parses but cannot carry an RS256 signature", () => {
+    // Both non-RSA types reach here, and neither fails usefully downstream.
+    // Ed25519 throws ERR_CRYPTO_UNSUPPORTED_OPERATION out of `createSign` —
+    // not a SheetExportError, so it escapes as a stack trace. EC signs
+    // successfully, and the assertion then goes out claiming RS256 over an
+    // ECDSA signature; Google answers `invalid_grant`, whose diagnostic talks
+    // about the impersonated user and the clock, never about the key's type.
+    const pem = (key: KeyObject) =>
+      key.export({ type: "pkcs8", format: "pem" }).toString();
+
+    const keys = [
+      ["ed25519", generateKeyPairSync("ed25519").privateKey],
+      [
+        "ec",
+        generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey,
+      ],
+    ] as const;
+
+    for (const [type, key] of keys) {
+      const wrong = {
+        ...ENV,
+        [SERVICE_ACCOUNT_KEY_VAR]: pem(key).replace(/\n/g, "\\n"),
+      };
+
+      expect(() => credentialsFrom(wrong)).toThrow(SheetExportError);
+      expect(() => credentialsFrom(wrong)).toThrow(/needs an RSA one/);
+      expect(() => credentialsFrom(wrong)).toThrow(new RegExp(`a ${type} key`));
+    }
+  });
+
   it("refuses anything else that is not a private key", () => {
     const nonsense = { ...ENV, [SERVICE_ACCOUNT_KEY_VAR]: "not-a-key" };
 
@@ -117,9 +148,22 @@ describe("credentialsFrom", () => {
     const broken = { ...ENV, [SERVICE_ACCOUNT_KEY_VAR]: truncated };
     const body = privateKey.split("\n")[1];
 
-    expect(() => credentialsFrom(broken)).toThrow(
-      new RegExp(`^(?!.*${body})`, "s")
-    );
+    // Compared as a string, never as a pattern. Built into a `RegExp` this
+    // assertion was checking for a different string than the one it holds:
+    // base64 contains `+`, which is a quantifier, so a negative lookahead
+    // around a body line containing one matched even when the literal key
+    // material was present. Roughly a fifth of generated keys, and a fresh key
+    // per run, so it never failed and quietly stopped asserting.
+    let refusal = "";
+    try {
+      credentialsFrom(broken);
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+
+    expect(refusal).not.toBe("");
+    expect(refusal).not.toContain(body);
+    expect(refusal).not.toContain("PRIVATE KEY");
   });
 });
 

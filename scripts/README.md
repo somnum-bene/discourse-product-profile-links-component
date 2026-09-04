@@ -36,15 +36,19 @@ runs while the danger is visible is a guard you find out about too late.
   withheld for a weaker reason than it used to be, and still withheld.)
 - **The allowlist is the only way through.** `SHEET_TABS` names the two option
   tables and, for each, the exact header row and the two columns read from it;
-  `ASSIGNMENT_TABS` names the Collection Assignment and its eleven. A name becomes a URL
-  only via `tabNamed` or `assignmentTabNamed`, each of which refuses anything
-  unlisted, and the command itself contains no tab name and builds no URL — a
-  test enforces both, because an allowlist you can go around is a convention.
+  `ASSIGNMENT_TABS` names the Collection Assignment and its eleven. The command
+  iterates `EXPORT_TABS` and never handles a tab name at all, so an unlisted tab
+  has nothing to travel on; a name reaching this from outside becomes a tab only
+  via `tabNamed` or `assignmentTabNamed`, each of which refuses anything
+  unlisted. The command contains no tab name and builds no URL — a test enforces
+  both, because an allowlist you can go around is a convention.
 - **Three independent guards, all fail-closed.** The header row must match
   exactly; the row count must stay under a ceiling these tabs are nowhere near
   and the personal-data tabs are far above; no cell may look like an email
   address. Each catches a restructured workbook the other two would miss. A
-  surprise stops the run — skipping it is not safe.
+  surprise stops the run — skipping it is not safe. The Collection Assignment
+  has a fourth of its own: every `Disposition` cell must hold one of the four
+  words the schema allows.
 - **Nothing is written until every tab passes.** A partial run would leave one
   refreshed export beside a stale one, which is worse than leaving both.
 
@@ -77,15 +81,28 @@ overstates itself is worse than provenance that says what it is.
 
 Two details of that reconstruction are load-bearing. The tab is addressed by
 _name_, never by a numeric gid a workbook is free to reassign, because the
-allowlist is written in names. And the range is **pinned to the width the
-allowlist declares** (`'user_machine'!A1:E`, `'collection-assignment'!A1:K`)
-rather than left open, for two reasons: asked for an open range the API returns
-whatever width the data happens to occupy, so a twelfth column on an
-eleven-column tab would join the export under a header the guard never checked;
-and the API omits trailing empty cells, so a row with no `Suggested URL` comes
-back three cells wide. `valuesToCsv` pads every row back to the declared width
-— which never invents a column, because the width came from the header row the
-guard is about to check.
+allowlist is written in names. And the range is **bounded one column and one
+row past what is allowed** (`'user_machine'!A1:F2002`,
+`'collection-assignment'!A1:L2002`) rather than left open.
+
+The extra column is a **probe**. Bounding the range at the declared width was
+the obvious thing and it defeated the guard it was meant to serve: asked for
+`A1:E`, an appended sixth column simply never arrives, every declared header
+still matches, and the export is accepted while quietly no longer being the tab
+it claims to be. Inserting a column was always caught, because every header
+after it shifts. Appending one was invisible. Asking one column wider makes an
+appended column something `valuesToCsv` can see, and it **aborts the run**
+naming the column letter — the export is never written.
+
+The extra row is the same idea against the row ceiling: the header, the 2000
+rows allowed, and one more whose arrival proves the ceiling was passed. A tab
+repointed at one of the tabs holding personal data is then refused without
+being transferred at all, rather than after being parsed.
+
+Separately, the API omits trailing empty cells, so a row with no `Suggested
+URL` comes back three cells wide. `valuesToCsv` pads every row back to the
+declared width — which never invents a column, because the width came from the
+header row the guard is about to check.
 
 ## Reading the Sheet needs a credential, not a sharing setting
 

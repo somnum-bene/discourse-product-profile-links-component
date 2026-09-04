@@ -30,9 +30,12 @@ export type { SheetRow };
 
 /**
  * The workbook is identified by an environment variable rather than a constant.
- * It is a public link to a workbook containing real customer email addresses,
- * and this repository is public, so committing the id would publish the link.
- * The variable lives in the ignored `.env` alongside the API credentials.
+ * It names a private internal workbook holding no member data — the inherited
+ * spreadsheet it replaced was the one that was a public link to real customer
+ * email addresses. The id is still withheld: this repository is public, and
+ * committing it would publish which Sheet to go and ask for. A weaker reason
+ * than it used to be, and still a reason. The variable lives in the ignored
+ * `.env` alongside the API credentials.
  */
 export const WORKBOOK_ID_VAR = "SHEET_WORKBOOK_ID";
 
@@ -249,6 +252,21 @@ export function sheetTabFor(tab: ExportTab): SheetTab | null {
   return SHEET_TABS.find((candidate) => candidate.tab === tab.tab) ?? null;
 }
 
+/**
+ * The Collection Assignment counterpart to `sheetTabFor`, and it exists for
+ * the same reason: the export loop holds an `ExportTab` and needs the trusted
+ * allowlist entry back, not an answer about the object it already has.
+ *
+ * Without it there was no way to reach `assignmentRowsFrom` from a loop over
+ * `EXPORT_TABS` — `assignmentTabNamed` takes a name, and the loop has objects
+ * — so the Disposition check ran only in the test suite. A tab validates
+ * against the header row and the row ceiling either way; what was missing was
+ * the check that every `Disposition` cell holds one of the four words.
+ */
+export function assignmentTabFor(tab: ExportTab): AssignmentTab | null {
+  return ASSIGNMENT_TABS.find((candidate) => candidate.tab === tab.tab) ?? null;
+}
+
 function namedIn<T extends ExportTab>(
   allowlist: readonly T[],
   name: string
@@ -279,8 +297,24 @@ function namedIn<T extends ExportTab>(
  * appended header something `valuesToCsv` can refuse.
  */
 export function sheetValuesUrl(workbookId: string, tab: ExportTab): string {
-  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}`;
-  const params = new URLSearchParams({ majorDimension: "ROWS" });
+  // Rows are bounded on the same principle, one past what the ceiling allows:
+  // the header, `MAX_DATA_ROWS` of data, and one more whose arrival is what
+  // proves the ceiling was exceeded. Refusing after the fetch was already
+  // fail-closed on writing, but a tab repointed at one of the tabs holding
+  // ~124,000 real email addresses would still have been pulled into memory,
+  // reconstructed as CSV and parsed character by character before anything
+  // objected. Not asking for it is cheaper than refusing it.
+  const lastRow = MAX_DATA_ROWS + 2;
+  const range = `'${tab.tab}'!A1:${columnLetter(tab.headers.length + 1)}${lastRow}`;
+  // `valueRenderOption` is pinned for the same reason `majorDimension` is:
+  // both are defaults today, and the row-array shape everything downstream
+  // reads depends on them. `FORMATTED_VALUE` is what returns strings — under
+  // `UNFORMATTED_VALUE` a numeric PNum arrives as a JSON number, and the first
+  // thing to touch it calls `.trim()` on it.
+  const params = new URLSearchParams({
+    majorDimension: "ROWS",
+    valueRenderOption: "FORMATTED_VALUE",
+  });
   return (
     `https://sheets.googleapis.com/v4/spreadsheets/${workbookId}` +
     `/values/${encodeURIComponent(range)}?${params}`
@@ -334,6 +368,22 @@ export function columnLetter(position: number): string {
  */
 export function valuesToCsv(tab: ExportTab, values: string[][]): string {
   for (const [rowIndex, row] of values.entries()) {
+    // The command casts the response body to `string[][]` on the strength of
+    // the parameters the URL pins, and a cast is a promise rather than a
+    // check. Verifying it here costs one pass and turns "the API answered a
+    // shape we did not expect" from a `TypeError` thrown out of `.trim()`,
+    // several frames from anything explanatory, into a refusal that names the
+    // cell.
+    const notText = row.findIndex((cell) => typeof cell !== "string");
+    if (notText !== -1) {
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 1}, column ` +
+          `${columnLetter(notText + 1)} came back as ` +
+          `${typeof row[notText]}, not text. Every cell is exported as the ` +
+          `sheet displays it, which is what the request asks for.`
+      );
+    }
+
     const appended = row
       .slice(tab.headers.length)
       .findIndex((cell) => cell.trim() !== "");
@@ -489,9 +539,11 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
 
   if (dataRows.length > MAX_DATA_ROWS) {
     throw new SheetExportError(
-      `${tab.tab}: ${dataRows.length} data rows exceeds the ${MAX_DATA_ROWS}-row ` +
-        `ceiling. The tabs holding personal data are far larger than any ` +
-        `exported one, so a jump this size is a restructured workbook.`
+      `${tab.tab}: at least ${dataRows.length} data rows exceeds the ` +
+        `${MAX_DATA_ROWS}-row ceiling. The tabs holding personal data are far ` +
+        `larger than any exported one, so a jump this size is a restructured ` +
+        `workbook. "At least" because the fetch is bounded at the ceiling — ` +
+        `the tab may be far larger than this number, which is the point.`
     );
   }
 

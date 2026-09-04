@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ASSIGNMENT_TABS,
   assignmentRowsFrom,
+  assignmentTabFor,
   assignmentTabNamed,
   columnLetter,
   DISPOSITIONS,
@@ -201,7 +202,7 @@ describe("the tab allowlist", () => {
     const url = sheetValuesUrl("WORKBOOK", machine);
 
     expect(url).toContain("/v4/spreadsheets/WORKBOOK/values/");
-    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F"));
+    expect(url).toContain(encodeURIComponent("'user_machine'!A1:F2002"));
     expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
   });
@@ -217,6 +218,51 @@ describe("the tab allowlist", () => {
     expect(sheetValuesUrl("WORKBOOK", assignment)).toContain(
       encodeURIComponent("!A1:L")
     );
+  });
+
+  it("asks for cells as the sheet displays them, so they arrive as text", () => {
+    // `majorDimension` and `valueRenderOption` are both API defaults, and both
+    // are what make the `string[][]` the command casts to true. Unpinned, a
+    // change of default turns a numeric PNum into a JSON number and the first
+    // thing to touch it calls `.trim()`.
+    expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
+      "valueRenderOption=FORMATTED_VALUE"
+    );
+  });
+
+  it("refuses a cell that did not come back as text", () => {
+    const numeric = [["4872", 6092, "", "", ""]] as unknown as string[][];
+
+    expect(() => valuesToCsv(machine, numeric)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/column B came back/);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/not text/);
+  });
+
+  it("asks one row past the ceiling, so an oversized tab is never fetched", () => {
+    // The row bound is the column probe's twin. Refusing after the fetch was
+    // already fail-closed on writing, but a tab repointed at one of the
+    // ~124,000-row personal-data tabs would have been transferred, rebuilt as
+    // CSV and parsed before anything objected. `MAX_DATA_ROWS + 2` is the
+    // header, the rows allowed, and the one whose arrival proves the ceiling
+    // was passed — so the 2000/2001 refusal boundary is unchanged.
+    for (const tab of EXPORT_TABS) {
+      expect(sheetValuesUrl("WORKBOOK", tab)).toContain(
+        encodeURIComponent(`${MAX_DATA_ROWS + 2}`)
+      );
+    }
+
+    const header = ASSIGNMENT_HEADER;
+    const row = ASSIGNMENT_CSV.split("\n")[1];
+    const atCeiling = [header, ...Array(MAX_DATA_ROWS).fill(row)].join("\n");
+    const overCeiling = [header, ...Array(MAX_DATA_ROWS + 1).fill(row)].join(
+      "\n"
+    );
+
+    expect(readSheetTab(assignment, atCeiling)).toHaveLength(MAX_DATA_ROWS);
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(
+      SheetExportError
+    );
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(/at least/);
   });
 
   it("names each export after its tab, so the file says where it came from", () => {
@@ -297,10 +343,26 @@ describe("EXPORT_TABS", () => {
     expect(sheetTabFor({ ...noTitleTab, tab: "user_machine_" })).toBeNull();
   });
 
+  it("selects the Collection Assignment on the same terms", () => {
+    // The counterpart the export loop needs to reach `assignmentRowsFrom`,
+    // and it partitions `EXPORT_TABS` against `sheetTabFor` exactly.
+    expect(
+      EXPORT_TABS.map(assignmentTabFor).map((tab) => tab?.tab ?? null)
+    ).toEqual([null, null, "collection-assignment"]);
+
+    const impostor = { tab: "collection-assignment", headers: ["PNum"] };
+
+    expect(assignmentTabFor(impostor)).toBe(assignment);
+    expect(assignmentTabFor(impostor)).not.toBe(impostor);
+    expect(assignmentTabFor({ ...noTitleTab, tab: "user_machine" })).toBeNull();
+  });
+
   it("addresses the Collection Assignment by name too", () => {
     const url = sheetValuesUrl("WORKBOOK", assignment);
 
-    expect(url).toContain(encodeURIComponent("'collection-assignment'!A1:L"));
+    expect(url).toContain(
+      encodeURIComponent("'collection-assignment'!A1:L2002")
+    );
     expect(url).not.toContain("gid=");
   });
 });
@@ -799,6 +861,31 @@ describe("what each file is allowed to do", () => {
     expect(command).toContain("EXPORT_TABS");
   });
 
+  it("validates every tab before it writes any of them", () => {
+    // The one decision this command owns and no library can make for it, and
+    // the only mistake a shell can make on its own: writing inside the fetch
+    // loop instead of after it. Every guard would still pass, every test would
+    // still be green, and a refusal on the last tab would leave `data/` with
+    // two refreshed exports and one stale — the split state the comment above
+    // the loop forbids. `apply:catalogue` pins its own ordering the same way.
+    const fetchLoop = command.indexOf("fetched.push");
+    const writeLoop = command.indexOf("await writeFile");
+
+    expect(fetchLoop).toBeGreaterThan(-1);
+    expect(writeLoop).toBeGreaterThan(fetchLoop);
+  });
+
+  it("runs every allowlisted tab's row validation, not just the option tables'", () => {
+    // `readSheetTab` checks the header and the row ceiling for both shapes,
+    // but the `Disposition` vocabulary lives in `assignmentRowsFrom` alone.
+    // Left uncalled it validated nothing the command wrote, and a curated word
+    // outside the four reached `data/` under a success line.
+    expect(command).toContain("assignmentTabFor");
+    expect(command).toContain("assignmentRowsFrom");
+    expect(command).toContain("sheetTabFor");
+    expect(command).toContain("sheetRowsFrom");
+  });
+
   it("keeps the credential out of the repository and out of every message", () => {
     // The private key is a bearer credential for everything the service
     // account can read. A refusal that quoted it would put it in a terminal
@@ -825,8 +912,9 @@ describe("what each file is allowed to do", () => {
   });
 
   it("keeps the workbook id out of the repository", () => {
-    // The workbook is a public link to real customer email addresses and this
-    // repository is public, so the id is configuration, not a constant.
+    // The workbook is private and holds no member data, but this repository is
+    // public and the id would say which Sheet to go and ask for. Configuration,
+    // not a constant.
     expect(WORKBOOK_ID_VAR).toBe("SHEET_WORKBOOK_ID");
     expect(lib).not.toMatch(/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/);
     expect(command).not.toContain(WORKBOOK_ID_VAR);
