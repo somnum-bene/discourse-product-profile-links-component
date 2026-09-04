@@ -558,6 +558,19 @@ describe("the catalogue file", () => {
     ).toThrow(/unexpected header row/);
   });
 
+  it("refuses a row that is not as wide as the header says", () => {
+    // The same guard as the Collection Links reader gets, from the same
+    // helper. Both files are digested CSV read by the same three commands, and
+    // an extra column on a row is not a smaller fault in one than the other.
+    const body =
+      "user_field_name,value,handle,status,url\n" +
+      "Machine,A,a,ACTIVE,https://www.cpap.com/products/a,JUNK\n";
+
+    expect(() =>
+      readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/6 fields where the header declares 5/);
+  });
+
   it("refuses a row whose status is not a Shopify status", () => {
     const body =
       "user_field_name,value,handle,status,url\n" +
@@ -690,6 +703,23 @@ describe("the collection-links file", () => {
     expect(() =>
       readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
     ).toThrow(/empty field/);
+  });
+
+  it("refuses a row that is not as wide as the header says", () => {
+    // The header check cannot see this: it is the same fault one line further
+    // down. An extra field used to be discarded without a word, so a row with
+    // a stray trailing column read clean and shipped.
+    const wide =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines,JUNK\n";
+    const narrow = "user_field_name,value,url\nMachine,A (Discontinued)\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(wide)}\n${wide}`)
+    ).toThrow(/4 fields where the header declares 3/);
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(narrow)}\n${narrow}`)
+    ).toThrow(/2 fields where the header declares 3/);
   });
 
   it("refuses two rows carrying the same value for one field", () => {

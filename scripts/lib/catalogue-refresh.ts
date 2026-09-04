@@ -538,8 +538,17 @@ function verifiedBody(text: string, file: string): string {
 
 /**
  * A digested file's data rows, having checked its header is exactly the columns
- * expected. The header check is what stops a column being added, renamed or
- * reordered from silently shifting what every field below it means.
+ * expected and that every row below it is that wide and fully populated.
+ *
+ * The header check stops a column being added, renamed or reordered from
+ * silently shifting what every field below it means. It cannot stop a column
+ * added to a *row*, which is the same fault one line further down: an extra
+ * field used to be discarded without a word, so `Machine,A (Discontinued),
+ * https://…/x,JUNK` read clean. Both readers wanted both checks and each had
+ * written the second one itself, in the same words.
+ *
+ * What stays with the callers is what only they know: the status enum for the
+ * catalogue, the suffix and the collection URL for the Collection Links.
  */
 function dataRowsOf(
   text: string,
@@ -561,7 +570,24 @@ function dataRowsOf(
     );
   }
 
-  return dataRows;
+  return dataRows.map((row, index) => {
+    const where = `${file} row ${index + 2}`;
+
+    if (row.length !== columns.length) {
+      throw new CatalogueRefreshError(
+        `${where} has ${row.length} fields where the header declares ` +
+          `${columns.length}: ${JSON.stringify(row)}`
+      );
+    }
+
+    if (row.some((field) => !field)) {
+      throw new CatalogueRefreshError(
+        `${where} has an empty field: ${JSON.stringify(row)}`
+      );
+    }
+
+    return row;
+  });
 }
 
 const COLLECTION_URL_ORIGIN = "https://www.cpap.com";
@@ -640,12 +666,6 @@ export function readCollectionLinks(text: string): CollectionLink[] {
     const [userFieldName, value, url] = row;
     const where = `${COLLECTION_LINKS_FILE} row ${index + 2}`;
 
-    if (!userFieldName || !value || !url) {
-      throw new CatalogueRefreshError(
-        `${where} has an empty field: ${JSON.stringify(row)}`
-      );
-    }
-
     if (value.trim() === COLLECTION_LINK_SUFFIX.trim()) {
       throw new CatalogueRefreshError(
         `${where} has the value ${JSON.stringify(value)}, which is the ` +
@@ -702,12 +722,6 @@ export function readResolvedProducts(text: string): ResolvedProduct[] {
   return dataRows.map((row, index) => {
     const [userFieldName, value, handle, status, url] = row;
     const where = `${CATALOGUE_FILE} row ${index + 2}`;
-
-    if (!userFieldName || !value || !handle || !url) {
-      throw new CatalogueRefreshError(
-        `${where} has an empty field: ${JSON.stringify(row)}`
-      );
-    }
 
     if (!isStatus(status)) {
       throw new CatalogueRefreshError(
