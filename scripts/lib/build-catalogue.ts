@@ -318,9 +318,9 @@ export function buildCatalogue({
         handle: handleFromSuggestedUrl(row.suggestedUrl),
         reason: "discontinued-suffix",
         detail:
-          "the Suggested Title is a legacy catch-all for equipment with no " +
-          "current equivalent, and links to a category page rather than a " +
-          "product (ADR-0012)",
+          "the Suggested Title is a legacy catch-all naming no equipment, so " +
+          "it is retired as a value. The row's own legacy name earns a " +
+          "Collection Link instead (ADR-0020, superseding ADR-0012)",
       });
       continue;
     }

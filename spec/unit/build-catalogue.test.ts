@@ -224,7 +224,11 @@ describe("buildCatalogue", () => {
     const excluded = exclusionFor(exclusions, "CPAP Machines (Discontinued)");
 
     expect(excluded.reason).toBe("discontinued-suffix");
-    expect(excluded.detail).toContain("category page");
+    // The detail is a reviewer's only account of why a title was dropped, and
+    // this reason no longer means the title gets no Profile Link — ADR-0020
+    // supersedes ADR-0012 and sends it on as a Collection Link.
+    expect(excluded.detail).toContain("naming no equipment");
+    expect(excluded.detail).toContain("ADR-0020");
   });
 
   it("collapses a repeated Suggested Title to one entry", () => {

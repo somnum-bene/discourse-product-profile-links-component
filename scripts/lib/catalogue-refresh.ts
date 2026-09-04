@@ -190,7 +190,7 @@ const REASON_DESCRIPTIONS: Record<ExclusionReason, string> = {
   "blank-title":
     "The spreadsheet row has no Suggested Title. Nothing to map, and nothing to fix here — the row exists for the legacy value in its `Value` column.",
   "discontinued-suffix":
-    "The Suggested Title ends in `(Discontinued)`. These are legacy catch-alls for equipment with no current equivalent, and they link to a category page rather than a product, so they are out of scope for Profile Links (ADR-0012).",
+    "The Suggested Title ends in `(Discontinued)`. These are legacy catch-alls naming no equipment at all, so the title is retired as a value and the row takes its own legacy name instead. Exclusion here no longer means no Profile Link: this reason earns a Collection Link (ADR-0020, superseding ADR-0012), which #37 derives.",
   "no-matching-product":
     "Neither the handle in the Suggested URL nor the Suggested Title itself found a product in the Shopify catalogue. Either the product is gone, or the curated title has drifted from the one Shopify carries.",
   "ambiguous-title-match":
