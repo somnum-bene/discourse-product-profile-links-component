@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   // it was approved is refused rather than shipped.
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
-  const digest = declaredDigest(catalogueText);
+  const digest = declaredDigest(catalogueText, CATALOGUE_FILE);
 
   // The second input. Both sinks used to come from one file; the Mappings now
   // come from two and the Dropdown Options still come from one, which is the

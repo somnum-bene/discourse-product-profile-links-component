@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   const catalogue = readResolvedProducts(catalogueText);
 
   process.stdout.write(
-    `catalogue: ${declaredDigest(catalogueText)}\n` +
+    `catalogue: ${declaredDigest(catalogueText, CATALOGUE_FILE)}\n` +
       `${catalogue.length} URLs, one request at a time, ${PACE_MS}ms apart, ` +
       `up to ${MAX_ATTEMPTS} attempts each\n\n`
   );

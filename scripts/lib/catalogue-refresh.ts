@@ -495,11 +495,17 @@ export function collectionLinksCsv(
 }
 
 /**
- * The digest a digested file declares, without reading the rest of it. The file
- * name is only ever used to say which file the message is about — the catalogue
- * by default, since that is the one three commands ask about.
+ * The digest a digested file declares, without reading the rest of it.
+ *
+ * `file` says which file a failure is about, and it is required. It used to
+ * default to the catalogue, which was fine while the catalogue was the only
+ * digested file and became a trap the moment it was not: `declaredDigest(
+ * linksCsv)` type-checks and then blames `data/resolved-products.csv` for a
+ * fault in `data/collection-links.csv`. That is the same defaulted-parameter
+ * footgun `renderFieldMappings` and `CatalogueInput` both refuse, in the same
+ * module, so it does not get an exception here.
  */
-export function declaredDigest(text: string, file = CATALOGUE_FILE): string {
+export function declaredDigest(text: string, file: string): string {
   const firstLine = text.split("\n", 1)[0] ?? "";
   const match = DIGEST_LINE.exec(firstLine);
 

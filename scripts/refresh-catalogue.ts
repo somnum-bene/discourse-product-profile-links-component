@@ -101,7 +101,7 @@ async function main(): Promise<void> {
   });
   const csv = resolvedProductsCsv(catalogue);
   const linksCsv = collectionLinksCsv(collectionLinks);
-  const digest = declaredDigest(csv);
+  const digest = declaredDigest(csv, CATALOGUE_FILE);
   const review = renderReviewDocument({
     catalogue,
     exclusions,

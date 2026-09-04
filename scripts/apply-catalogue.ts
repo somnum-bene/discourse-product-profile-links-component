@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   // than pushed to a live site.
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
-  const declared = declaredDigest(catalogueText);
+  const declared = declaredDigest(catalogueText, CATALOGUE_FILE);
 
   // Read for the drift comparison below and for nothing else. The Dropdown
   // Options this command writes come from `dropdownOptionsFor(catalogue)`,

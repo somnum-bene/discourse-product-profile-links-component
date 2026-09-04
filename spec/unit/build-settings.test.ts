@@ -369,7 +369,7 @@ describe("the settings.yml this repository ships", () => {
       settingsWithCatalogue(
         settingsText,
         renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS),
-        declaredDigest(catalogueText)
+        declaredDigest(catalogueText, CATALOGUE_FILE)
       )
     ).toBe(settingsText);
   });
@@ -415,7 +415,9 @@ describe("the settings.yml this repository ships", () => {
     // The two sinks have to come from one catalogue (ADR-0011). This is what
     // lets the apply step notice it is about to push Dropdown Options derived
     // from a different one than the shipped Mappings were built from.
-    expect(recordedDigest(settingsText)).toBe(declaredDigest(catalogueText));
+    expect(recordedDigest(settingsText)).toBe(
+      declaredDigest(catalogueText, CATALOGUE_FILE)
+    );
   });
 
   it("keeps the rest of the file, so Debug Mode still exists", () => {

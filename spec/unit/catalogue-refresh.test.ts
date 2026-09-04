@@ -530,7 +530,9 @@ describe("the catalogue file", () => {
     ]);
 
     expect(resolvedProductsCsv(CATALOGUE)).toBe(first);
-    expect(declaredDigest(changed)).not.toBe(declaredDigest(first));
+    expect(declaredDigest(changed, CATALOGUE_FILE)).not.toBe(
+      declaredDigest(first, CATALOGUE_FILE)
+    );
   });
 
   it("refuses a file with no digest line", () => {
