@@ -692,6 +692,21 @@ describe("the collection-links file", () => {
     ).toThrow(/empty field/);
   });
 
+  it("refuses a value that is the suffix and nothing else", () => {
+    // It passed the non-empty check and the suffix check, round-tripped
+    // through `csvLine`, and shipped a Profile Link whose anchor text was
+    // `(Discontinued)`. ADR-0020 reverses ADR-0012 on the strength of the
+    // value naming the equipment, so a value that names none is the one thing
+    // the suffix rule cannot be allowed to admit.
+    for (const value of [" (Discontinued)", "(Discontinued)"]) {
+      const body = `user_field_name,value,url\nMachine,"${value}",https://www.cpap.com/collections/cpap-machines\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
   it("refuses a url that is not an https cpap.com collection page", () => {
     // The only hand-entered URL in the pipeline, and the one with the widest
     // blast radius: Discourse refuses the whole `profile_link_fields` value

@@ -645,6 +645,16 @@ export function readCollectionLinks(text: string): CollectionLink[] {
       );
     }
 
+    if (value.trim() === COLLECTION_LINK_SUFFIX.trim()) {
+      throw new CatalogueRefreshError(
+        `${where} has the value ${JSON.stringify(value)}, which is the ` +
+          `suffix and nothing else. ADR-0020 accepts a category link only ` +
+          `because the value names the equipment it replaced — it is both the ` +
+          `join key and the anchor text a User reads, so a bare suffix tells ` +
+          `them nothing and matches nobody.`
+      );
+    }
+
     if (!value.endsWith(COLLECTION_LINK_SUFFIX)) {
       throw new CatalogueRefreshError(
         `${where} has the value ${JSON.stringify(value)}, which does not end ` +
