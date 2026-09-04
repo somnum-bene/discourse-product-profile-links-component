@@ -564,6 +564,60 @@ function dataRowsOf(
   return dataRows;
 }
 
+const COLLECTION_URL_ORIGIN = "https://www.cpap.com";
+const COLLECTION_URL_PREFIX = "/collections/";
+
+/**
+ * Refuses anything that is not an `https://www.cpap.com/collections/…` URL.
+ *
+ * This is the only hand-entered URL in the pipeline. A Resolved Product's URL
+ * is Shopify's own `onlineStoreUrl` (ADR-0009) and so is a URL by
+ * construction; a Collection Link's is typed by a curator into a committed
+ * file. It also has the widest blast radius of any string here, because
+ * Discourse refuses the whole `profile_link_fields` value rather than the one
+ * Mapping it dislikes (ADR-0016) — one typo takes every Profile Link down, not
+ * just this one.
+ *
+ * Shape only, and deliberately not existence: whether Shopify admits the
+ * collection is a different question, asked on refresh against Shopify itself
+ * (ADR-0020, and #37's "a collection Shopify does not admit is reported rather
+ * than shipped"). This check is the cheap, offline half, and it is the half
+ * that runs on every read.
+ */
+function assertCollectionUrl(url: string, where: string): void {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new CatalogueRefreshError(
+      `${where} has the url ${JSON.stringify(url)}, which is not a URL.`
+    );
+  }
+
+  if (parsed.origin !== COLLECTION_URL_ORIGIN) {
+    throw new CatalogueRefreshError(
+      `${where} has the url ${JSON.stringify(url)}, whose origin is ` +
+        `${JSON.stringify(parsed.origin)} rather than ` +
+        `${JSON.stringify(COLLECTION_URL_ORIGIN)}. A Profile Link points at ` +
+        `cpap.com over https or it is somebody else's store.`
+    );
+  }
+
+  if (
+    !parsed.pathname.startsWith(COLLECTION_URL_PREFIX) ||
+    parsed.pathname === COLLECTION_URL_PREFIX
+  ) {
+    throw new CatalogueRefreshError(
+      `${where} has the url ${JSON.stringify(url)}, whose path is ` +
+        `${JSON.stringify(parsed.pathname)} rather than ` +
+        `${JSON.stringify(COLLECTION_URL_PREFIX)} and a collection handle. A ` +
+        `Collection Link that points at a product page is a Resolved Product ` +
+        `in the wrong file (ADR-0021).`
+    );
+  }
+}
+
 /**
  * The Collection Links a file holds, refusing anything that is not exactly what
  * `collectionLinksCsv` writes.
@@ -599,6 +653,8 @@ export function readCollectionLinks(text: string): CollectionLink[] {
           `anchor text a User reads (ADR-0020).`
       );
     }
+
+    assertCollectionUrl(url, where);
 
     return { userFieldName, value, url };
   });

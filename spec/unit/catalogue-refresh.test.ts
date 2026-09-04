@@ -692,6 +692,40 @@ describe("the collection-links file", () => {
     ).toThrow(/empty field/);
   });
 
+  it("refuses a url that is not an https cpap.com collection page", () => {
+    // The only hand-entered URL in the pipeline, and the one with the widest
+    // blast radius: Discourse refuses the whole `profile_link_fields` value
+    // rather than the Mapping it dislikes (ADR-0016), so one typo here takes
+    // every Profile Link down. `not a url at all` used to read clean and reach
+    // settings.yml.
+    const refused = [
+      "not a url at all",
+      "www.cpap.com/collections/cpap-machines",
+      "http://www.cpap.com/collections/cpap-machines",
+      "https://cpap.com/collections/cpap-machines",
+      "https://www.sleeping.com/collections/cpap-machines",
+      "https://www.cpap.com/products/resmed-airsense-11-autoset",
+      "https://www.cpap.com/collections/",
+    ];
+
+    for (const url of refused) {
+      const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
+  it("accepts a collection url with a handle", () => {
+    const url = "https://www.cpap.com/collections/bipap-machines";
+    const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+    expect(readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)).toEqual([
+      { userFieldName: "Machine", value: "A (Discontinued)", url },
+    ]);
+  });
+
   it("refuses a value that does not end in the suffix, exactly", () => {
     // Three near misses, each of which resolves for nobody while looking right
     // in a diff: resolution is an exact trimmed string match against what the
