@@ -1,16 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  ASSIGNMENT_TABS,
+  assignmentRowsFrom,
+  assignmentTabFor,
+  assignmentTabNamed,
+  columnLetter,
+  DISPOSITIONS,
+  EXPORT_TABS,
   exportFileName,
   MAX_DATA_ROWS,
   parseCsv,
   readSheetTab,
+  refuseColumnsPast,
   SHEET_TABS,
-  sheetCsvUrl,
   SheetExportError,
   sheetRowsFrom,
   type SheetTab,
+  sheetTabFor,
+  sheetValuesUrl,
   tabNamed,
+  valuesToCsv,
   WORKBOOK_ID_VAR,
 } from "../../scripts/lib/sheet-export";
 
@@ -52,8 +62,38 @@ const NO_TITLE_CSV = [
   `"24","HC150 Heated Humidifier With Hose, 2 Chambers and Stand","https://www.sleeping.com/search?q=humidifiers&options%5Bprefix%5D=last"`,
 ].join("\n");
 
+// The curation tab, in the column order locked on #26. The first row is a real
+// seeded one; the second exercises the two columns that make this tab not a
+// SheetTab — a filled `Override` sitting beside a `Recommended Collection URL`
+// it disagrees with, under a `Disposition` that is not `undecided`. Both hold
+// values that could really be on the tab: 6402/6404/6407/6414 are dropped
+// outright per #32 and never reach it, so a fixture using them would encode a
+// row the schema forbids.
+const ASSIGNMENT_HEADER = [
+  "Field",
+  "Legacy PNum(s)",
+  "Legacy Text",
+  "Base Name Source",
+  "Profile Link Value",
+  "Recommended Collection Title",
+  "Recommended Collection URL",
+  "Confidence",
+  "Rationale",
+  "Override",
+  "Disposition",
+]
+  .map((header) => `"${header}"`)
+  .join(",");
+
+const ASSIGNMENT_CSV = [
+  ASSIGNMENT_HEADER,
+  `"Machine","6391","REFURB AirCurve 11 BiPAP ASV","Suggested Title","AirCurve 11 BiPAP ASV (Discontinued)","BiPAP Machines","https://www.cpap.com/collections/bipap-machines","High","No active Shopify product; BiPAP is the nearest live collection.","","undecided"`,
+  `"Mask","5854, 5794","Legacy Full Face Masks, all sizes","Text","Legacy Full Face Masks, all sizes (Discontinued)","Full Face Masks","https://www.cpap.com/collections/full-face-cpap-masks","Medium","A catch-all naming no one product.","https://www.cpap.com/collections/cpap-full-face-masks","collection"`,
+].join("\n");
+
 const machine = tabNamed("user_machine");
 const mask = tabNamed("user_mask");
+const assignment = assignmentTabNamed("collection-assignment");
 const noTitleTab: SheetTab = {
   tab: "user_no_title",
   userFieldName: "NoTitle",
@@ -105,6 +145,22 @@ describe("parseCsv", () => {
     expect(parseCsv(`"a"\n"b"\n`)).toHaveLength(2);
   });
 
+  it("ignores a byte order mark at the start of the text", () => {
+    // Google Sheets' File → Download → CSV writes one; the `gviz` endpoint does
+    // not. A BOM is an encoding marker rather than data, and leaving it in
+    // makes the first header cell `\ufeffValue`, which fails the header guard
+    // with a message about a renamed column — a true refusal for a false
+    // reason, on a file that is in fact exactly right.
+    expect(parseCsv(`\ufeff"a","b"`)).toEqual([["a", "b"]]);
+    expect(parseCsv(`\ufeffa,b`)).toEqual([["a", "b"]]);
+  });
+
+  it("keeps a byte order mark that is not at the start", () => {
+    // Only the leading one is an encoding marker. Anywhere else it is a
+    // character the sheet holds, and this parser does not edit cell contents.
+    expect(parseCsv(`"a","\ufeffb"`)).toEqual([["a", "\ufeffb"]]);
+  });
+
   it("refuses text that ends inside a quoted field", () => {
     expect(() => parseCsv(`"a","unterminated`)).toThrow(SheetExportError);
     expect(() => parseCsv(`"a","unterminated`)).toThrow(/quoted field/);
@@ -144,19 +200,189 @@ describe("the tab allowlist", () => {
   });
 
   it("addresses a tab by name, never by the gid the workbook can reassign", () => {
-    const url = sheetCsvUrl("WORKBOOK", machine);
+    const url = sheetValuesUrl("WORKBOOK", machine);
 
-    expect(url).toContain("/spreadsheets/d/WORKBOOK/gviz/tq");
-    expect(url).toContain("sheet=user_machine");
-    expect(url).toContain("tqx=out%3Acsv");
+    expect(url).toContain("/v4/spreadsheets/WORKBOOK/values:batchGet?");
+    // Decoded, because `URLSearchParams` percent-encodes the `!` and the
+    // quotes a Sheets range needs and the assertion is about the range.
+    expect(decodeURIComponent(url)).toContain("'user_machine'!A1:E2002");
+    expect(url).toContain("majorDimension=ROWS");
     expect(url).not.toContain("gid=");
   });
 
+  it("asks for everything past the width the allowlist declares", () => {
+    // The second range, and the reason the first one is exactly `A1:E`.
+    // Bounded at the declared width with nothing else asked for, an appended
+    // sixth column never arrives, every declared header still matches, and the
+    // export is accepted while no longer being the tab it claims to be.
+    //
+    // This used to be a one-column probe (`A1:F`), which proved only that the
+    // *adjacent* column was empty: a curator who left `F` blank and typed in
+    // `G` walked straight through it. The range runs to the end of the row so
+    // the check means what it says.
+    expect(decodeURIComponent(sheetValuesUrl("WORKBOOK", machine))).toContain(
+      "!F1:ZZZ"
+    );
+    expect(
+      decodeURIComponent(sheetValuesUrl("WORKBOOK", assignment))
+    ).toContain("!L1:ZZZ");
+  });
+
+  it("bounds the overflow range by rows as well, like the export range", () => {
+    // Open-ended rows would say the same thing about width and reintroduce
+    // exactly what the row ceiling exists to prevent: a repointed tab pulled
+    // into memory in full before anything objects.
+    for (const tab of EXPORT_TABS) {
+      expect(decodeURIComponent(sheetValuesUrl("WORKBOOK", tab))).toContain(
+        `ZZZ${MAX_DATA_ROWS + 2}`
+      );
+    }
+  });
+
+  it("asks for cells as the sheet displays them, so they arrive as text", () => {
+    // `majorDimension` and `valueRenderOption` are both API defaults, and both
+    // are what make the `string[][]` the command casts to true. Unpinned, a
+    // change of default turns a numeric PNum into a JSON number and the first
+    // thing to touch it calls `.trim()`.
+    expect(sheetValuesUrl("WORKBOOK", machine)).toContain(
+      "valueRenderOption=FORMATTED_VALUE"
+    );
+  });
+
+  it("refuses a cell that did not come back as text", () => {
+    const numeric = [["4872", 6092, "", "", ""]] as unknown as string[][];
+
+    expect(() => valuesToCsv(machine, numeric)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/column B came back/);
+    expect(() => valuesToCsv(machine, numeric)).toThrow(/not text/);
+  });
+
+  it("asks one row past the ceiling, so an oversized tab is never fetched", () => {
+    // The row bound is the column probe's twin. Refusing after the fetch was
+    // already fail-closed on writing, but a tab repointed at one of the
+    // ~124,000-row personal-data tabs would have been transferred, rebuilt as
+    // CSV and parsed before anything objected. `MAX_DATA_ROWS + 2` is the
+    // header, the rows allowed, and the one whose arrival proves the ceiling
+    // was passed — so the 2000/2001 refusal boundary is unchanged.
+    for (const tab of EXPORT_TABS) {
+      expect(sheetValuesUrl("WORKBOOK", tab)).toContain(
+        encodeURIComponent(`${MAX_DATA_ROWS + 2}`)
+      );
+    }
+
+    const header = ASSIGNMENT_HEADER;
+    const row = ASSIGNMENT_CSV.split("\n")[1];
+    const atCeiling = [header, ...Array(MAX_DATA_ROWS).fill(row)].join("\n");
+    const overCeiling = [header, ...Array(MAX_DATA_ROWS + 1).fill(row)].join(
+      "\n"
+    );
+
+    expect(readSheetTab(assignment, atCeiling)).toHaveLength(MAX_DATA_ROWS);
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(
+      SheetExportError
+    );
+    expect(() => readSheetTab(assignment, overCeiling)).toThrow(/at least/);
+  });
+
   it("names each export after its tab, so the file says where it came from", () => {
-    expect(SHEET_TABS.map(exportFileName)).toEqual([
+    expect(EXPORT_TABS.map(exportFileName)).toEqual([
       "user_machine.csv",
       "user_mask.csv",
+      "collection-assignment.csv",
     ]);
+  });
+});
+
+describe("the Collection Assignment allowlist", () => {
+  it("holds exactly the collection-assignment tab", () => {
+    expect(ASSIGNMENT_TABS.map((tab) => tab.tab)).toEqual([
+      "collection-assignment",
+    ]);
+  });
+
+  it("carries the eleven columns of #26's locked schema, in order", () => {
+    expect(assignment.headers).toEqual([
+      "Field",
+      "Legacy PNum(s)",
+      "Legacy Text",
+      "Base Name Source",
+      "Profile Link Value",
+      "Recommended Collection Title",
+      "Recommended Collection URL",
+      "Confidence",
+      "Rationale",
+      "Override",
+      "Disposition",
+    ]);
+  });
+
+  it("refuses a tab that is not the Collection Assignment, including an option table", () => {
+    for (const forbidden of [
+      "Discourse",
+      "user-list-260410-001810",
+      "collection_assignment",
+      "user_machine",
+    ]) {
+      expect(() => assignmentTabNamed(forbidden)).toThrow(SheetExportError);
+      expect(() => assignmentTabNamed(forbidden)).toThrow(
+        /not in the allowlist/
+      );
+    }
+  });
+
+  it("keeps the two lookups apart, so neither returns the other's shape", () => {
+    expect(() => tabNamed("collection-assignment")).toThrow(SheetExportError);
+  });
+});
+
+describe("EXPORT_TABS", () => {
+  it("is every tab the command fetches, option tables then assignment", () => {
+    expect(EXPORT_TABS.map((tab) => tab.tab)).toEqual([
+      "user_machine",
+      "user_mask",
+      "collection-assignment",
+    ]);
+  });
+
+  it("says which of them contribute rows to the catalogue", () => {
+    expect(EXPORT_TABS.map(sheetTabFor).map((tab) => tab?.tab ?? null)).toEqual(
+      ["user_machine", "user_mask", null]
+    );
+  });
+
+  it("hands back the allowlist entry, never the object it was asked about", () => {
+    // The reason this returns a tab rather than answering yes about one. An
+    // impostor carrying an allowlisted name would pass any `tab is SheetTab`
+    // predicate and then be read as a row of empty strings, because the
+    // `titleColumn` the narrowing promised is not there.
+    const impostor = { tab: "user_machine", headers: ["Value"] };
+
+    expect(sheetTabFor(impostor)).toBe(machine);
+    expect(sheetTabFor(impostor)).not.toBe(impostor);
+    expect(sheetTabFor({ ...noTitleTab, tab: "user_machine_" })).toBeNull();
+  });
+
+  it("selects the Collection Assignment on the same terms", () => {
+    // The counterpart the export loop needs to reach `assignmentRowsFrom`,
+    // and it partitions `EXPORT_TABS` against `sheetTabFor` exactly.
+    expect(
+      EXPORT_TABS.map(assignmentTabFor).map((tab) => tab?.tab ?? null)
+    ).toEqual([null, null, "collection-assignment"]);
+
+    const impostor = { tab: "collection-assignment", headers: ["PNum"] };
+
+    expect(assignmentTabFor(impostor)).toBe(assignment);
+    expect(assignmentTabFor(impostor)).not.toBe(impostor);
+    expect(assignmentTabFor({ ...noTitleTab, tab: "user_machine" })).toBeNull();
+  });
+
+  it("addresses the Collection Assignment by name too", () => {
+    const url = sheetValuesUrl("WORKBOOK", assignment);
+
+    expect(decodeURIComponent(url)).toContain(
+      "'collection-assignment'!A1:K2002"
+    );
+    expect(url).not.toContain("gid=");
   });
 });
 
@@ -214,11 +440,13 @@ describe("readSheetTab", () => {
     );
   });
 
-  it("aborts on an empty response, which is how a renamed tab presents", () => {
-    // The endpoint answers 200 with no body for a tab it cannot find, so an
-    // empty response is indistinguishable from success unless it is refused.
+  it("aborts on a tab with nothing in it, header row included", () => {
+    // Nothing is indistinguishable from success unless it is refused. The
+    // refusal says the tab is empty rather than missing: the Sheets API
+    // rejects a range naming a tab the workbook does not have, so a renamed
+    // tab never reaches this guard.
     expect(() => readSheetTab(machine, "")).toThrow(SheetExportError);
-    expect(() => readSheetTab(machine, "   \n ")).toThrow(/renamed or removed/);
+    expect(() => readSheetTab(machine, "   \n ")).toThrow(/the tab is empty/);
   });
 
   it("aborts when a tab has grown to a size these tabs never reach", () => {
@@ -329,12 +557,362 @@ describe("sheetRowsFrom", () => {
   });
 });
 
+describe("readSheetTab, on the Collection Assignment", () => {
+  // The Collection Assignment sits in the same workbook as the option tables and is
+  // edited by hand rather than generated, so it gets the same three guards and
+  // no weaker version of any of them.
+  it("accepts the locked header row and returns only the data rows", () => {
+    expect(readSheetTab(assignment, ASSIGNMENT_CSV)).toHaveLength(2);
+  });
+
+  it("aborts when a curator renames, adds or reorders a column", () => {
+    const renamed = ASSIGNMENT_CSV.replace(`"Override"`, `"Curator Override"`);
+    const added = ASSIGNMENT_CSV.replace(
+      ASSIGNMENT_HEADER,
+      `${ASSIGNMENT_HEADER},"Notes"`
+    );
+    const reordered = ASSIGNMENT_CSV.replace(
+      `"Override","Disposition"`,
+      `"Disposition","Override"`
+    );
+
+    for (const broken of [renamed, added, reordered]) {
+      expect(() => readSheetTab(assignment, broken)).toThrow(SheetExportError);
+      expect(() => readSheetTab(assignment, broken)).toThrow(
+        /unexpected header row/
+      );
+    }
+  });
+
+  it("aborts on a tab with nothing in it, header row included", () => {
+    expect(() => readSheetTab(assignment, "")).toThrow(/the tab is empty/);
+  });
+
+  it("aborts when the tab has grown to a size it never reaches", () => {
+    const row = new Array(assignment.headers.length).fill(`"x"`).join(",");
+    const oversized = [
+      ASSIGNMENT_HEADER,
+      ...Array.from({ length: MAX_DATA_ROWS + 1 }, () => row),
+    ].join("\n");
+
+    expect(() => readSheetTab(assignment, oversized)).toThrow(/exceeds the/);
+  });
+
+  it("aborts when a cell holds something shaped like an email address", () => {
+    // `Rationale` is free text a curator types, which makes it the likeliest
+    // place in the workbook for a person's address to arrive by accident.
+    const contaminated = ASSIGNMENT_CSV.replace(
+      "A catch-all naming no one product.",
+      "Confirmed by someone@example.com"
+    );
+
+    expect(() => readSheetTab(assignment, contaminated)).toThrow(
+      /shaped like an email address/
+    );
+    expect(() => readSheetTab(assignment, contaminated)).toThrow(
+      /^(?!.*someone@example\.com)/s
+    );
+  });
+});
+
+describe("assignmentRowsFrom", () => {
+  it("names every column, and passes each value through verbatim", () => {
+    expect(assignmentRowsFrom(assignment, ASSIGNMENT_CSV)[0]).toEqual({
+      field: "Machine",
+      legacyPnums: "6391",
+      legacyText: "REFURB AirCurve 11 BiPAP ASV",
+      baseNameSource: "Suggested Title",
+      profileLinkValue: "AirCurve 11 BiPAP ASV (Discontinued)",
+      recommendedCollectionTitle: "BiPAP Machines",
+      recommendedCollectionUrl:
+        "https://www.cpap.com/collections/bipap-machines",
+      confidence: "High",
+      rationale:
+        "No active Shopify product; BiPAP is the nearest live collection.",
+      override: "",
+      disposition: "undecided",
+    });
+  });
+
+  it("leaves an Override unapplied and a Disposition unjudged", () => {
+    // Both are the transform's decisions (#37/#38). Resolving either here
+    // would put a policy in the file whose whole job is to have none.
+    const [, overridden] = assignmentRowsFrom(assignment, ASSIGNMENT_CSV);
+
+    expect(overridden.recommendedCollectionUrl).toBe(
+      "https://www.cpap.com/collections/full-face-cpap-masks"
+    );
+    expect(overridden.override).toBe(
+      "https://www.cpap.com/collections/cpap-full-face-masks"
+    );
+    expect(overridden.disposition).toBe("collection");
+  });
+
+  it("keeps a comma inside Legacy PNum(s) as one field", () => {
+    const [, multiple] = assignmentRowsFrom(assignment, ASSIGNMENT_CSV);
+
+    expect(multiple.legacyPnums).toBe("5854, 5794");
+  });
+
+  it("accepts every disposition the table is allowed to express", () => {
+    // Including `resolves-to-product`, which is the state the curated table
+    // gained once two rows turned out to name products the store still sells
+    // (#35). Without it those rows can only be `undecided`, and #38's release
+    // gate would block for ever on rows that are already decided.
+    expect(DISPOSITIONS).toEqual([
+      "collection",
+      "plain-text",
+      "resolves-to-product",
+      "undecided",
+    ]);
+
+    for (const disposition of DISPOSITIONS) {
+      const row = ASSIGNMENT_CSV.replace(`,"undecided"`, `,"${disposition}"`);
+
+      expect(assignmentRowsFrom(assignment, row)[0].disposition).toBe(
+        disposition
+      );
+    }
+  });
+
+  it("refuses a disposition the table cannot express", () => {
+    // The silent one. A typo here survives every other guard — the header row
+    // is untouched, the width is right, the cell holds a plausible word — and
+    // then no transform recognises the row.
+    const typo = ASSIGNMENT_CSV.replace(`,"undecided"`, `,"colection"`);
+
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      SheetExportError
+    );
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      /unrecognised Disposition "colection"/
+    );
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(/row 2/);
+  });
+
+  it("refuses an empty Disposition rather than reading it as undecided", () => {
+    // `undecided` is a curator saying nobody has looked yet. A blank cell
+    // cannot say even that, and treating the two alike would let a row skip
+    // the pass entirely by being emptier than the state that blocks the ship.
+    const blank = ASSIGNMENT_CSV.replace(`,"undecided"`, `,""`);
+
+    expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
+      /an empty Disposition/
+    );
+    expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
+      /not the same as "undecided"/
+    );
+  });
+
+  it("reads by header, so it refuses the columns in a different order", () => {
+    const reordered = ASSIGNMENT_CSV.replace(
+      `"Confidence","Rationale"`,
+      `"Rationale","Confidence"`
+    );
+
+    expect(() => assignmentRowsFrom(assignment, reordered)).toThrow(
+      /unexpected header row/
+    );
+  });
+});
+
+describe("columnLetter", () => {
+  it("names the column at a 1-based position", () => {
+    expect(columnLetter(1)).toBe("A");
+    expect(columnLetter(5)).toBe("E");
+    expect(columnLetter(11)).toBe("K");
+    expect(columnLetter(26)).toBe("Z");
+  });
+
+  it("keeps counting past the letter no tab here reaches", () => {
+    expect(columnLetter(27)).toBe("AA");
+    expect(columnLetter(28)).toBe("AB");
+    expect(columnLetter(52)).toBe("AZ");
+    expect(columnLetter(53)).toBe("BA");
+  });
+
+  it("refuses a position that is not a column", () => {
+    for (const nonsense of [0, -1, 1.5]) {
+      expect(() => columnLetter(nonsense)).toThrow(SheetExportError);
+    }
+  });
+});
+
+describe("refuseColumnsPast", () => {
+  it("refuses a header appended past the declared width", () => {
+    // The restructure the header-row guard structurally cannot see: every
+    // column it knows about still matches, in order, under the right name.
+    const overflow = [["Notes"], ["seen"]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(SheetExportError);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column F/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+  });
+
+  it("refuses a value appended past the declared width, header or not", () => {
+    // A curator typing into the first free column without labelling it. The
+    // header row is untouched, so nothing else in the pipeline would notice.
+    const overflow = [[], ["oops"]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(
+      /past the 5 columns/
+    );
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 2/);
+  });
+
+  it("refuses a widened tab that left a blank column in between", () => {
+    // The case the old one-column probe walked straight past: `F` blank and
+    // the new column at `G`. A probe that asks only for the adjacent column
+    // proves the adjacent column is empty and nothing else, which is not what
+    // its message claimed. The range now runs to the end of the row.
+    const overflow = [
+      ["", "Notes"],
+      ["", "seen"],
+    ];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column G/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+  });
+
+  it("accepts the empty answer a correct tab gives", () => {
+    // The API omits `values` for a range with nothing in it, which the command
+    // turns into `[]`. Blank cells inside the range are the same case.
+    expect(() => refuseColumnsPast(mask, [])).not.toThrow();
+    expect(() => refuseColumnsPast(mask, [[], [], []])).not.toThrow();
+    expect(() => refuseColumnsPast(mask, [["", "  ", ""]])).not.toThrow();
+  });
+
+  it("refuses a cell that is not text, rather than throwing on `.trim`", () => {
+    // Nothing in this range is exported, so the only question is whether the
+    // cell holds anything — a number past the declared width is a widened tab
+    // for the same reason a string is.
+    const overflow: unknown[][] = [[0], [42]];
+
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/row 1/);
+    expect(() => refuseColumnsPast(mask, overflow)).toThrow(/column F/);
+  });
+
+  it("names the column against the width of the tab it was given", () => {
+    // Eleven declared columns, so the first column past the end is `L`, not
+    // `F`. The letter is what tells a curator which cell to open.
+    expect(() => refuseColumnsPast(assignment, [["Notes"]])).toThrow(
+      /column L/
+    );
+    expect(() => refuseColumnsPast(assignment, [["Notes"]])).toThrow(
+      /past the 11 columns/
+    );
+  });
+});
+
+describe("valuesToCsv", () => {
+  // The API hands back JSON row arrays, so the committed bytes are
+  // reconstructed rather than passed through. These are the properties that
+  // make the reconstruction faithful.
+  it("round-trips through parseCsv unchanged", () => {
+    const values = parseCsv(MASK_CSV);
+
+    expect(parseCsv(valuesToCsv(mask, values))).toEqual(values);
+  });
+
+  it("pads a row the API truncated back to the declared width", () => {
+    // The API omits trailing empty cells, so a row with no Suggested URL comes
+    // back short. Left ragged, a blank final column reads as a missing one.
+    const truncated = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
+      ["5854", "test10", "#N/A"],
+    ];
+
+    expect(parseCsv(valuesToCsv(mask, truncated))[1]).toEqual([
+      "5854",
+      "test10",
+      "#N/A",
+      "",
+      "",
+    ]);
+  });
+
+  it("refuses a row wider than the header rather than dropping the cell", () => {
+    // `sheetValuesUrl` pins the data range to the declared width, so the API
+    // cannot send this any more — `refuseColumnsPast` owns the columns to the
+    // right. It stays asserted because silently dropping the cell is the exact
+    // shape of the bug that made the appended-column guard unreachable, and
+    // this function is exported and callable on rows from anywhere.
+    const widened = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL", "Notes"],
+      ["5854", "test10", "#N/A", "A Title", "https://example.com", "seen"],
+    ];
+
+    expect(() => valuesToCsv(mask, widened)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(mask, widened)).toThrow(/column F/);
+    expect(() => valuesToCsv(mask, widened)).toThrow(/row 1/);
+  });
+
+  it("accepts a trailing column that came back present but empty", () => {
+    // Refusing on width alone would abort every run — a fail-closed guard
+    // firing on a correct tab.
+    const padded = [
+      ["Value", "Text", "URL", "Suggested Title", "Suggested URL", ""],
+      ["5854", "test10", "#N/A", "A Title", "https://example.com", "  "],
+    ];
+
+    expect(parseCsv(valuesToCsv(mask, padded))[1]).toHaveLength(5);
+  });
+
+  it("quotes every field, the way the committed exports already look", () => {
+    expect(valuesToCsv(noTitleTab, [["a", "b", "c"]])).toBe(`"a","b","c"`);
+  });
+
+  it("doubles a quote that a cell really holds", () => {
+    const round = valuesToCsv(noTitleTab, [['6" hose', "b", "c"]]);
+
+    expect(round).toBe(`"6"" hose","b","c"`);
+    expect(parseCsv(round)[0][0]).toBe(`6" hose`);
+  });
+
+  it("keeps a comma and a newline that sit inside a cell", () => {
+    const round = valuesToCsv(noTitleTab, [["a, b", "two\nlines", "c"]]);
+
+    expect(parseCsv(round)[0]).toEqual(["a, b", "two\nlines", "c"]);
+  });
+
+  it("uses LF endings and emits no final newline", () => {
+    const round = valuesToCsv(noTitleTab, [
+      ["a", "b", "c"],
+      ["d", "e", "f"],
+    ]);
+
+    expect(round).toBe(`"a","b","c"\n"d","e","f"`);
+    expect(round).not.toContain("\r");
+    expect(round.endsWith("\n")).toBe(false);
+  });
+
+  it("makes a tab with no values present as the emptiness readSheetTab refuses", () => {
+    expect(valuesToCsv(mask, [])).toBe("");
+    expect(() => readSheetTab(mask, valuesToCsv(mask, []))).toThrow(
+      /the tab is empty/
+    );
+  });
+
+  it("refuses a column the tab never declared rather than dropping it", () => {
+    // This test used to assert the opposite, and asserting it was the defect:
+    // dropping the cell silently is what let an appended column produce a
+    // committed export that no longer matched its tab, under a header row
+    // where every declared column still lined up. The range now asks one
+    // column wider precisely so this arrives and can be refused.
+    const widened = [["a", "b", "c", "smuggled"]];
+
+    expect(() => valuesToCsv(noTitleTab, widened)).toThrow(SheetExportError);
+    expect(() => valuesToCsv(noTitleTab, widened)).toThrow(/column D/);
+  });
+});
+
 describe("what each file is allowed to do", () => {
   // Read relative to the repository root, which is vitest's working directory.
   // `import.meta.url` would be the obvious way to resolve these and does not
   // typecheck here — the shared Discourse tsconfig builds to CommonJS output,
   // where the meta-property is not allowed.
   const lib = readFileSync("scripts/lib/sheet-export.ts", "utf8");
+  const auth = readFileSync("scripts/lib/sheets-auth.ts", "utf8");
   const command = readFileSync("scripts/export-sheet.ts", "utf8");
 
   it("keeps the allowlist module free of network and filesystem access", () => {
@@ -347,17 +925,68 @@ describe("what each file is allowed to do", () => {
   it("leaves the command unable to name a tab or build a URL of its own", () => {
     // Not style. If the command could write a tab name or a sheet URL itself,
     // the allowlist would be a convention rather than the only way through.
-    for (const tab of SHEET_TABS) {
+    for (const tab of EXPORT_TABS) {
       expect(command).not.toContain(tab.tab);
     }
     expect(command).not.toContain("gviz");
     expect(command).not.toContain("docs.google.com");
-    expect(command).toContain("SHEET_TABS");
+    expect(command).toContain("EXPORT_TABS");
+  });
+
+  it("validates every tab before it writes any of them", () => {
+    // The one decision this command owns and no library can make for it, and
+    // the only mistake a shell can make on its own: writing inside the fetch
+    // loop instead of after it. Every guard would still pass, every test would
+    // still be green, and a refusal on the last tab would leave `data/` with
+    // two refreshed exports and one stale — the split state the comment above
+    // the loop forbids. `apply:catalogue` pins its own ordering the same way.
+    const fetchLoop = command.indexOf("fetched.push");
+    const writeLoop = command.indexOf("await writeFile");
+
+    expect(fetchLoop).toBeGreaterThan(-1);
+    expect(writeLoop).toBeGreaterThan(fetchLoop);
+  });
+
+  it("runs every allowlisted tab's row validation, not just the option tables'", () => {
+    // `readSheetTab` checks the header and the row ceiling for both shapes,
+    // but the `Disposition` vocabulary lives in `assignmentRowsFrom` alone.
+    // Left uncalled it validated nothing the command wrote, and a curated word
+    // outside the four reached `data/` under a success line.
+    expect(command).toContain("assignmentTabFor");
+    expect(command).toContain("assignmentRowsFrom");
+    expect(command).toContain("sheetTabFor");
+    expect(command).toContain("sheetRowsFrom");
+  });
+
+  it("keeps the credential out of the repository and out of every message", () => {
+    // The private key is a bearer credential for everything the service
+    // account can read. A refusal that quoted it would put it in a terminal
+    // and a CI transcript, which are the repository's neighbours.
+    expect(auth).not.toMatch(/-----BEGIN [A-Z ]*PRIVATE KEY-----/);
+    expect(auth).not.toMatch(/\bconsole\./);
+    expect(auth).not.toMatch(/process\.std(out|err)/);
+    expect(auth).not.toMatch(
+      /\$\{\s*(privateKey|rawKey|credentials\.privateKey)/
+    );
+    expect(auth).not.toMatch(/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/);
+
+    // Read from the environment it is handed, never from the ambient one, so
+    // a test can hand it a fixture and the command owns where values come from.
+    expect(auth).not.toContain("process.env");
+  });
+
+  it("asks for a read-only scope, named in one place", () => {
+    expect(auth).toContain(
+      "https://www.googleapis.com/auth/spreadsheets.readonly"
+    );
+    expect(auth).not.toContain('auth/spreadsheets"');
+    expect(auth).not.toContain("auth/drive");
   });
 
   it("keeps the workbook id out of the repository", () => {
-    // The workbook is a public link to real customer email addresses and this
-    // repository is public, so the id is configuration, not a constant.
+    // The workbook is private and holds no member data, but this repository is
+    // public and the id would say which Sheet to go and ask for. Configuration,
+    // not a constant.
     expect(WORKBOOK_ID_VAR).toBe("SHEET_WORKBOOK_ID");
     expect(lib).not.toMatch(/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/);
     expect(command).not.toContain(WORKBOOK_ID_VAR);

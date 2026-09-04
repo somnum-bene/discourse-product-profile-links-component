@@ -57,8 +57,12 @@ The setting that logs Unmatched Values to the console. Config Problems are repor
 _Avoid_: verbose mode, logging, dev mode
 
 **Sheet Export**:
-A verbatim export of one tab of the migration spreadsheet, committed for provenance. Its `Suggested Title` and `Suggested URL` columns are the only ones that matter; the rest describe the legacy bulletin board it was written for. Never read by the component.
+A verbatim export of one tab of the migration spreadsheet, committed for provenance. Never read by the component. Two kinds, held to the same fail-closed guards and not to the same shape: an **Option Table** export (`user_machine`, `user_mask`), where the `Suggested Title` and `Suggested URL` columns are the only ones that matter and the rest describe the legacy bulletin board it was written for; and the **Collection Assignment** export, which reduces to no such pair.
 _Avoid_: the sheet, product CSV, source CSV
+
+**Collection Assignment**:
+The curated table a person fills in to decide which retired titles become Collection Links — one row per retired title someone put into the table, not one per option-table row, carrying its legacy values, its proposed `Profile Link Value`, a recommended collection with a `Confidence` and a `Rationale`, a curator-editable `Override`, and a Disposition. **Not every row is a Collection Link candidate.** A row whose title turns out to resolve to a live product carries `n/a` in both its `Base Name Source` and its `Profile Link Value`, and is a record of that decision rather than a candidate — so a consumer has to read the row before treating it as one. A person edits it; this pipeline only reads it. The recommendation is a proposal rather than a resolved value, which is why it is exported as its own shape rather than as an Option Table with two of its eleven columns picked out.
+_Avoid_: assignment sheet, collection tab, mapping table
 
 **Suggested Title**:
 The curated display name for a product, taken from a Sheet Export. For a Resolved Product it becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree. For a Collection Link it supplies the base name the ` (Discontinued)` suffix is appended to — except on the four retired legacy catch-all titles, which name no equipment, where the base name comes from the Sheet Export's `Text` column instead (ADR-0020).
@@ -77,8 +81,8 @@ A Suggested Title left out of the Resolved Product Catalogue, reported with its 
 _Avoid_: missing product, failed product, dead link
 
 **Disposition**:
-What the curated collection table says should happen to one Collection Link candidate — `collection`, `plain-text`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021).
-_Avoid_: status, state, decision, resolution
+What the curated collection table says should happen to one of its rows — `collection`, `plain-text`, `resolves-to-product`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021). `resolves-to-product` is the row that was never a Collection Link candidate: the title names a product the store still sells, so the legacy value becomes an ordinary product Mapping. It is a decision, not an absence of one, and it does **not** mean the row is dropped — the legacy identifier is still one a member can be holding, so it still carries a value downstream. An empty cell is none of the four and is refused: `undecided` is a curator saying nobody has looked yet, and a blank is a row that cannot say even that.
+_Avoid_: status, state, decision, resolution, `not-a-candidate`
 
 **Catalogue Refresh**:
 Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.

@@ -1,24 +1,31 @@
-// Fetch the `user_*` tabs of the migration spreadsheet and commit them
-// verbatim as the Sheet Exports. Run it with `pnpm export:sheet`.
+// Fetch the exported tabs of the migration spreadsheet and commit them as the
+// Sheet Exports. Run it with `pnpm export:sheet`.
 //
-// The shell is deliberately thin: it fetches, validates, and writes. Every
-// decision about what is allowed lives in `lib/sheet-export.ts`, which is pure
-// and therefore actually tested. This file contains no tab names and builds no
-// URLs of its own — it can only ask the allowlist what to fetch.
+// The shell is deliberately thin: it authenticates, fetches, validates, and
+// writes. Every decision about what is allowed lives in `lib/sheet-export.ts`,
+// which is pure and therefore actually tested, and everything about the
+// credential lives in `lib/sheets-auth.ts`. This file contains no tab names and
+// builds no URLs of its own — it can only ask the allowlist what to fetch.
 
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import {
+  assignmentRowsFrom,
+  assignmentTabFor,
+  EXPORT_TABS,
   exportFileName,
   readSheetTab,
-  SHEET_TABS,
-  sheetCsvUrl,
+  refuseColumnsPast,
   SheetExportError,
   sheetRowsFrom,
+  sheetTabFor,
+  sheetValuesUrl,
+  valuesToCsv,
   WORKBOOK_ID_VAR,
 } from "./lib/sheet-export.ts";
+import { accessTokenFor, credentialsFrom } from "./lib/sheets-auth.ts";
 
 const OUTPUT_DIR = "data";
 
@@ -27,38 +34,90 @@ async function main(): Promise<void> {
   if (!workbookId) {
     throw new SheetExportError(
       `${WORKBOOK_ID_VAR} is not set. It lives in the ignored .env — the ` +
-        `workbook is a public link to real customer data and this repository ` +
-        `is public, so the id is not committed.`
+        `workbook is not public and this repository is, so the id is not ` +
+        `committed.`
     );
   }
+
+  // One token for the whole run. It is read-only, it lasts an hour, and this
+  // command fetches a handful of tabs and exits, so there is nothing to cache
+  // and no refresh to get wrong.
+  const accessToken = await accessTokenFor(credentialsFrom(process.env));
 
   // Fetch and validate everything before writing anything. A run that aborts
   // half way through would leave `data/` holding one refreshed export and a
   // stale one, which is worse than leaving both alone.
   const fetched = [];
-  for (const tab of SHEET_TABS) {
-    const response = await fetch(sheetCsvUrl(workbookId, tab));
+  for (const tab of EXPORT_TABS) {
+    const response = await fetch(sheetValuesUrl(workbookId, tab), {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+
     if (!response.ok) {
+      // 400 here is how a missing tab presents: the range names it, and a
+      // range naming a tab the workbook does not have cannot be parsed.
+      // `statusText` is not reported — HTTP/2 has no reason phrase, so it is
+      // empty in practice and reads as a truncated sentence.
       throw new SheetExportError(
-        `${tab.tab}: the sheet answered ${response.status} ${response.statusText}`
+        `${tab.tab}: the sheet answered ${response.status}. A 400 means the ` +
+          `range could not be parsed, which is what a renamed or absent tab ` +
+          `looks like; a 403 means the impersonated user cannot open this ` +
+          `workbook.`
       );
     }
+
+    const body = (await response.json()) as {
+      valueRanges?: { values?: string[][] }[];
+    };
+
+    // `sheetValuesUrl` asks for two ranges in one `batchGet`, in this order:
+    // the export itself, then everything to the right of it. Reading them by
+    // position is why that order is pinned there rather than left to chance.
+    const [data, overflow] = body.valueRanges ?? [];
+
+    // Checked before the export is built, because it is a question about the
+    // tab rather than about the rows being exported: a tab that has grown a
+    // column is not the tab this command was written against, whatever the
+    // first eleven columns happen to say.
+    refuseColumnsPast(tab, overflow?.values ?? []);
+
+    // The API omits `values` entirely for a tab with nothing in it. Turning
+    // that into empty text hands it to `readSheetTab`'s emptiness guard,
+    // rather than inventing a second way to say the same thing here. That
+    // guard's wording is specific about which emptiness this is: a tab the
+    // workbook does not have is a 400 above, so anything reaching it is a
+    // tab that exists and holds nothing.
+    const csvText = valuesToCsv(tab, data?.values ?? []);
 
     // Both calls validate, so the CSV is parsed twice. That costs nothing at a
     // few hundred rows and leaves each function safe to call on its own, which
     // is worth more than the saving.
-    const csvText = await response.text();
     const dataRows = readSheetTab(tab, csvText);
-    const sheetRows = sheetRowsFrom(tab, csvText);
+    // Only the option tables feed the catalogue. The Collection Assignment is
+    // fetched, validated and committed on the same terms and contributes no
+    // rows, which is a fact about the tab rather than a special case for it.
+    const optionTable = sheetTabFor(tab);
+    const sheetRows = optionTable ? sheetRowsFrom(optionTable, csvText) : [];
+
+    // The Collection Assignment's rows are read for the same reason, and the
+    // result is discarded on purpose: `assignmentRowsFrom` is where the
+    // `Disposition` vocabulary is enforced, and a curated word outside it has
+    // to stop the run here rather than reach `data/`. Nothing downstream
+    // consumes these rows yet — the checking is the point.
+    const assignment = assignmentTabFor(tab);
+    if (assignment) {
+      assignmentRowsFrom(assignment, csvText);
+    }
+
     fetched.push({ tab, csvText, dataRows, sheetRows });
   }
 
   await mkdir(OUTPUT_DIR, { recursive: true });
 
   for (const { tab, csvText, dataRows, sheetRows } of fetched) {
-    // Written byte for byte as the endpoint returned it, LF endings and absent
-    // final newline included. `data/` is exempt from the whitespace-fixing
-    // pre-commit hooks for exactly this reason.
+    // Every field quoted, LF endings, no final newline — `valuesToCsv` writes
+    // the shape the old CSV endpoint returned, and `data/` is exempt from the
+    // whitespace-fixing pre-commit hooks so it survives being committed.
     const path = join(OUTPUT_DIR, exportFileName(tab));
     await writeFile(path, csvText);
     process.stdout.write(
