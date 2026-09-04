@@ -1,4 +1,4 @@
-# sha256 c3c3c7d9c7c25e7f16fe08ea83dca4ff367510b7b09cc0c647de8670e9df31b6
+# sha256 258391ccfeaa66a7366cc35d79deb9cd2ad3c65934259cdc2b7bad1056e062c2
 user_field_name,value,handle,status,url
 Machine,AirCurve 10 VAuto BiLevel Machine,aircurve-10-vauto-bilevel-machine,ACTIVE,https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine
 Machine,AirCurve 11 VAuto with HumidAir,resmed-aircurve-11-vauto-bilevel-machine-with-humidair,ACTIVE,https://www.cpap.com/products/resmed-aircurve-11-vauto-bilevel-machine-with-humidair
@@ -6,8 +6,7 @@ Machine,AirMini AutoSet Travel CPAP Machine,resmed-airmini-autoset-travel-cpap-m
 Machine,AirSense 10 AutoSet with HumidAir,resmed-airsense-10-autoset-cpap-machine-with-humidair-heated-humidifier-and-climateline,ACTIVE,https://www.cpap.com/products/resmed-airsense-10-autoset-cpap-machine-with-humidair-heated-humidifier-and-climateline
 Machine,AirSense 11 AutoSet,resmed-airsense-11-autoset,ACTIVE,https://www.cpap.com/products/resmed-airsense-11-autoset
 Machine,Luna G3 BPAP 25A Bi-Level CPAP Machine,luna-g3-bpap-25a-bi-level-cpap-machine,ACTIVE,https://www.cpap.com/products/luna-g3-bpap-25a-bi-level-cpap-machine
-Machine,Luna G3 BPAP 30VT Bi-Level CPAP Machine,luna-g3-bpap-30vt-bi-level-cpap-machine,ACTIVE,https://www.cpap.com/products/luna-g3-bpap-30vt-bi-level-cpap-machine
-Machine,Transcend Micro Auto Travel CPAP Machine,transcend-micro-auto-travel-cpap-machine,ACTIVE,https://www.cpap.com/products/transcend-micro-auto-travel-cpap-machine
+Machine,React Health G3 X Auto CPAP Machine,react-health-g3-x-auto-cpap-machine,ACTIVE,https://www.cpap.com/products/react-health-g3-x-auto-cpap-machine
 Mask,AirFit F10 Full Face Mask,resmed-airfit-f10-full-face-cpap-mask,ACTIVE,https://www.cpap.com/products/resmed-airfit-f10-full-face-cpap-mask
 Mask,AirFit F20 Full Face CPAP Mask,resmed-airfit-f20-full-face-cpap-mask,ACTIVE,https://www.cpap.com/products/resmed-airfit-f20-full-face-cpap-mask
 Mask,AirFit F30 + AirMini Mask Setup Pack Bundle,resmed-airfit-f30-complete-mask-airmini-mask-setup-pack-bundle,ACTIVE,https://www.cpap.com/products/resmed-airfit-f30-complete-mask-airmini-mask-setup-pack-bundle

@@ -12,8 +12,13 @@
 
 import { createHash } from "node:crypto";
 import {
+  assignedCollectionUrl,
   COLLECTION_LINK_SUFFIX,
+  collectionHandleFromUrl,
   type CollectionLink,
+  type CollectionLinkFault,
+  type CollectionLinkProblem,
+  earnsCollectionLink,
   type ExcludedProduct,
   type ExclusionReason,
   handleFromSuggestedUrl,
@@ -23,7 +28,7 @@ import {
   type ResolvedProduct,
   type SheetRow,
 } from "./build-catalogue.ts";
-import { parseCsv, SHEET_TABS } from "./sheet-export.ts";
+import { type AssignmentRow, parseCsv, SHEET_TABS } from "./sheet-export.ts";
 
 /** The shop to query. A bare host — `example.myshopify.com`, no scheme, no path. */
 export const SHOP_DOMAIN_VAR = "SHOPIFY_SHOP_DOMAIN";
@@ -52,8 +57,9 @@ export const CATALOGUE_FILE = "data/resolved-products.csv";
  * neither, so widening the catalogue file would mean relaxing its reader for
  * every row (ADR-0021).
  *
- * Hand-seeded today. When derivation lands it is written by the same refresh
- * that writes the catalogue, which is why it already carries a digest.
+ * Written by the same refresh that writes the catalogue, and derived from the
+ * Excluded Products and the Collection Assignment rather than hand-authored,
+ * which is why it carries a digest of its own.
  */
 export const COLLECTION_LINKS_FILE = "data/collection-links.csv";
 
@@ -130,6 +136,13 @@ export interface ReviewInput {
    * are seeing every Mapping has to be seeing every Mapping.
    */
   collectionLinks: readonly CollectionLink[];
+  /**
+   * The Collection Links that could not be derived. Required for the same
+   * reason as the ones that could, and more sharply: these are the values a
+   * member is holding that would resolve to nothing, and a document reporting
+   * only the successes would read best exactly when it matters most.
+   */
+  collectionFaults: readonly CollectionLinkFault[];
   sheetRows: readonly SheetRow[];
   products: readonly SurveyedProduct[];
   digest: string;
@@ -190,7 +203,7 @@ const REASON_DESCRIPTIONS: Record<ExclusionReason, string> = {
   "blank-title":
     "The spreadsheet row has no Suggested Title. Nothing to map, and nothing to fix here — the row exists for the legacy value in its `Value` column.",
   "discontinued-suffix":
-    "The Suggested Title ends in `(Discontinued)`. These are legacy catch-alls naming no equipment at all, so the title is retired as a value and the row takes its own legacy name instead. Exclusion here no longer means no Profile Link: this reason earns a Collection Link (ADR-0020, superseding ADR-0012), which #37 derives.",
+    "The Suggested Title ends in `(Discontinued)`. These are legacy catch-alls naming no equipment at all, so the title is retired as a value and each row takes its own legacy name instead. Exclusion here does not mean no Profile Link: this reason earns a Collection Link (ADR-0020, superseding ADR-0012), and one per row rather than one per title — the four titles below stand for every member bucketed under them.",
   "no-matching-product":
     "Neither the handle in the Suggested URL nor the Suggested Title itself found a product in the Shopify catalogue. Either the product is gone, or the curated title has drifted from the one Shopify carries.",
   "ambiguous-title-match":
@@ -285,28 +298,116 @@ export function shopifyEndpoint(shopDomain: string): string {
 }
 
 /**
- * One request asking for every product in a batch by handle, each under its own
- * alias. `productByIdentifier` answers `null` for a handle that does not exist,
- * which is the answer the transform needs — it reports the miss with the title
- * it was looking for, and this file does not have to.
+ * One request asking a `…ByIdentifier` field about a batch of handles, each
+ * under its own alias.
+ *
+ * Both by-handle queries this file sends have exactly this shape, and both need
+ * the same guard on an empty batch — a GraphQL document with no selections is a
+ * syntax error, so an empty batch would spend a request to be told so. The
+ * alias prefix is what the paired reader walks, so the two are handed the same
+ * `Lookup` rather than each spelling `p` or `c` in two places.
  */
-export function productsByHandleQuery(handles: readonly string[]): string {
+interface Lookup {
+  /** The operation name, for Shopify's logs and for a readable failure. */
+  operation: string;
+  /** The `…ByIdentifier` root field to ask. */
+  field: string;
+  /** The alias prefix each handle's result is returned under. */
+  prefix: string;
+  /** The selection set, already indented for the body of an alias. */
+  selection: string;
+  /** What this batch is, for the empty-batch refusal. */
+  what: string;
+}
+
+const PRODUCT_LOOKUP: Lookup = {
+  operation: "ProductsByHandle",
+  field: "productByIdentifier",
+  prefix: "p",
+  selection: PRODUCT_FIELDS,
+  what: "by-handle",
+};
+
+/**
+ * Only the handle is asked for. Whether the collection's public page serves is
+ * a different question with a different answer — a collection can exist in the
+ * admin, be unpublished to the Online Store, and still 404 for a member — and
+ * that question is Catalogue Verify's, deliberately (ADR-0017). This one asks
+ * the narrow thing it can answer honestly: does the collection exist.
+ */
+const COLLECTION_LOOKUP: Lookup = {
+  operation: "CollectionsByHandle",
+  field: "collectionByIdentifier",
+  prefix: "c",
+  selection: "handle",
+  what: "collection",
+};
+
+function byHandleQuery(lookup: Lookup, handles: readonly string[]): string {
   if (handles.length === 0) {
     throw new CatalogueRefreshError(
-      "refusing to send a by-handle query with no handles in it"
+      `refusing to send a ${lookup.what} query with no handles in it`
     );
   }
 
   const lookups = handles
     .map(
       (handle, index) =>
-        `  p${index}: productByIdentifier(identifier: { handle: ${JSON.stringify(
-          handle
-        )} }) {\n    ${PRODUCT_FIELDS}\n  }`
+        `  ${lookup.prefix}${index}: ${lookup.field}(identifier: { handle: ` +
+        `${JSON.stringify(handle)} }) {\n    ${lookup.selection}\n  }`
     )
     .join("\n");
 
-  return `query ProductsByHandle {\n${lookups}\n}\n`;
+  return `query ${lookup.operation} {\n${lookups}\n}\n`;
+}
+
+/**
+ * Each handle in a batch that came back as something, paired with the alias it
+ * came back under. The misses are dropped, so the result is shorter than the
+ * batch and its indices mean nothing — which is why the handle and the alias
+ * travel with the node rather than being looked up again by position. A caller
+ * indexing `handles` by the position of a surviving node would name the wrong
+ * handle in its own failure message, and would do it only once a miss had
+ * happened, which is the one moment the message matters.
+ *
+ * `productByIdentifier` and `collectionByIdentifier` both answer `null` for a
+ * handle that does not exist, which is the answer the callers need — the
+ * transform reports the miss with the title it was looking for, and this file
+ * does not have to. A missing *alias* is a different thing entirely: the
+ * response is not the shape the query asked for, and that stops the run.
+ */
+function nodesFromByHandleResponse(
+  lookup: Lookup,
+  body: unknown,
+  handles: readonly string[]
+): { alias: string; handle: string; node: unknown }[] {
+  const data = dataOf(body, `the ${lookup.what} query`);
+  const found: { alias: string; handle: string; node: unknown }[] = [];
+
+  for (const [index, handle] of handles.entries()) {
+    const alias = `${lookup.prefix}${index}`;
+
+    if (!(alias in data)) {
+      throw new CatalogueRefreshError(
+        `the ${lookup.what} response has no "${alias}" for handle ` +
+          `"${handle}". Shopify answered something other than the query that ` +
+          `was sent.`
+      );
+    }
+
+    const node = data[alias];
+
+    if (node !== null) {
+      found.push({ alias, handle, node });
+    }
+  }
+
+  return found;
+}
+
+/** One request asking for every product in a batch by handle. */
+export function productsByHandleQuery(handles: readonly string[]): string {
+  return byHandleQuery(PRODUCT_LOOKUP, handles);
 }
 
 /**
@@ -335,39 +436,81 @@ export function divisionSurveyQuery(
   );
 }
 
-/**
- * The products in a by-handle response, in the order the handles were asked
- * for. A missing product is `null` and simply absent from the result; a missing
- * *alias* is a different thing — the response is not the shape this query asked
- * for — and stops the run.
- */
+/** The products in a by-handle response, in the order the handles were asked for. */
 export function productsFromByHandleResponse(
   body: unknown,
   handles: readonly string[]
 ): SurveyedProduct[] {
-  const data = dataOf(body, "the by-handle query");
-  const products: SurveyedProduct[] = [];
+  return nodesFromByHandleResponse(PRODUCT_LOOKUP, body, handles).map(
+    ({ alias, handle, node }) => productFrom(node, `${alias} ("${handle}")`)
+  );
+}
 
-  for (const [index, handle] of handles.entries()) {
-    const alias = `p${index}`;
+/**
+ * Every collection handle the Collection Link join will look for, deduplicated
+ * and sorted. The sibling of `handlesFromSheetRows`, and sorted for the same
+ * reason: the request order decides nothing, and an unstable one makes two runs
+ * needlessly hard to compare.
+ *
+ * Only `collection` rows are asked about. The other three dispositions produce
+ * no link, so a request for their collections would spend a Shopify call on an
+ * answer nothing reads — and the `resolves-to-product` rows carry prose in that
+ * column rather than a URL, which is the shape of thing this quietly skips.
+ *
+ * Nothing here refuses a malformed handle, and that is the difference from the
+ * product side. A Suggested URL that yields a non-handle is a Sheet Export
+ * defect that would otherwise be reported as an ordinary miss, so it stops the
+ * run; a curated collection that Shopify will not admit is exactly what
+ * `unadmitted-collection` exists to report, and reporting one link is better
+ * than aborting the other eighty (ADR-0020).
+ */
+export function collectionHandlesFrom(
+  assignments: readonly AssignmentRow[]
+): string[] {
+  const handles = new Set<string>();
 
-    if (!(alias in data)) {
-      throw new CatalogueRefreshError(
-        `the by-handle response has no "${alias}" for handle "${handle}". ` +
-          `Shopify answered something other than the query that was sent.`
-      );
-    }
-
-    const node = data[alias];
-
-    if (node === null) {
+  for (const assignment of assignments) {
+    if (assignment.disposition !== "collection") {
       continue;
     }
 
-    products.push(productFrom(node, `${alias} ("${handle}")`));
+    const handle = collectionHandleFromUrl(assignedCollectionUrl(assignment));
+
+    if (handle && HANDLE_SHAPE.test(handle)) {
+      handles.add(handle);
+    }
   }
 
-  return products;
+  return [...handles].sort();
+}
+
+/** One request asking whether Shopify admits each collection in a batch. */
+export function collectionsByHandleQuery(handles: readonly string[]): string {
+  return byHandleQuery(COLLECTION_LOOKUP, handles);
+}
+
+/**
+ * The handles Shopify admitted, out of the batch that was asked about.
+ *
+ * The handle is read back out of the response rather than echoed from the
+ * request, so an answer naming a different collection than the one asked for
+ * would not be admitted under the asked-for name.
+ */
+export function collectionsFromByHandleResponse(
+  body: unknown,
+  handles: readonly string[]
+): string[] {
+  return nodesFromByHandleResponse(COLLECTION_LOOKUP, body, handles).map(
+    ({ alias, handle, node }) => {
+      if (!isRecord(node) || typeof node["handle"] !== "string") {
+        throw new CatalogueRefreshError(
+          `${alias} ("${handle}") came back without a string "handle"`
+        );
+      }
+
+      return node["handle"];
+    }
+  );
 }
 
 /** One page of a division survey, with the products tagged as belonging to it. */
@@ -618,9 +761,10 @@ const COLLECTION_URL_PREFIX = "/collections/";
  *
  * Shape only, and deliberately not existence: whether Shopify admits the
  * collection is a different question, asked on refresh against Shopify itself
- * (ADR-0020, and #37's "a collection Shopify does not admit is reported rather
- * than shipped"). This check is the cheap, offline half, and it is the half
- * that runs on every read.
+ * and reported as `unadmitted-collection` rather than shipped (ADR-0020). This
+ * check is the cheap, offline half, and it is the half that runs on every
+ * read — `build` and `apply` have no network and would otherwise take a
+ * curated URL entirely on trust.
  */
 function assertCollectionUrl(url: string, where: string): void {
   let parsed: URL;
@@ -764,6 +908,7 @@ export function renderReviewDocument({
   catalogue,
   exclusions,
   collectionLinks,
+  collectionFaults,
   sheetRows,
   products,
   digest,
@@ -801,6 +946,7 @@ export function renderReviewDocument({
         `${collectionLinks.length} Collection Links)`,
       `- Collection Links file: \`${COLLECTION_LINKS_FILE}\``,
       `- Excluded Suggested Titles: ${exclusions.length}`,
+      `- Collection Links that could not be derived: ${collectionFaults.length}`,
       `- Shopify Admin API ${SHOPIFY_API_VERSION}, read-only, ${products.length} products seen`,
     ].join("\n"),
     `Regenerating this document from unchanged inputs produces an identical ` +
@@ -812,6 +958,7 @@ export function renderReviewDocument({
     renderCounts(fields),
     ...fields.map(renderFieldSection),
     renderCollectionLinks(collectionLinks),
+    renderCollectionFaults(collectionFaults),
     renderExclusions(exclusions),
     renderDisagreement(exclusions, unnamed),
     renderInStockUnpublished(inStockUnpublished),
@@ -988,8 +1135,10 @@ function renderFieldSection(field: FieldSummary): string {
  * about them is a different one — is this the right collection for this
  * equipment (ADR-0020)?
  *
- * Hand-seeded today. Once #37 derives them, this is the table that says which
- * assignment each one came from.
+ * Every row here is derived: from an Excluded Product whose reason earns a
+ * link, and from the Collection Assignment row that says where it points. None
+ * of it is hand-authored any more, so a value in this table that looks wrong is
+ * a curation fix in the Sheet rather than an edit to a file.
  */
 function renderCollectionLinks(
   collectionLinks: readonly CollectionLink[]
@@ -1019,11 +1168,105 @@ function renderCollectionLinks(
   ].join("\n\n");
 }
 
+/**
+ * What each Collection Link problem means, in a shape the compiler checks — the
+ * same arrangement as `REASON_DESCRIPTIONS`, and for the same reason: a problem
+ * nobody explained here is a problem nobody reading the document can act on,
+ * and adding one to the union without explaining it is a type error.
+ */
+const PROBLEM_DESCRIPTIONS: Record<CollectionLinkProblem, string> = {
+  "unassigned-legacy-value":
+    "The Suggested Title was excluded for a reason that earns a Collection Link, and no Collection Assignment row claims the legacy value. Nobody decided against a link here — the row was never put in front of anyone. Add it to the assignment tab and re-export.",
+  "undecided-disposition":
+    "The Collection Assignment row is still `undecided`. That is an absence of evidence rather than a preference, so it blocks the link rather than quietly resolving to none (ADR-0021). Set a `Disposition` in the Sheet and re-export.",
+  "unadmitted-collection":
+    "The assigned collection is one Shopify does not hold, or the cell names no collection at all. Which collection a piece of retired equipment belongs to is an editorial judgement; whether that collection exists is Shopify's answer, and this is Shopify saying no (ADR-0009, ADR-0020). Note this is existence in the admin catalogue, not that the public page serves — that is Catalogue Verify's question (ADR-0017).",
+  "no-base-name":
+    "Stripping the suffix left no name behind, so the value would have been ` (Discontinued)` and nothing else. A Collection Link is accepted only because its value names the equipment it replaced — it is both the join key and the anchor text a member reads (ADR-0020).",
+  "curation-disagreement":
+    "The value this refresh derives and the `Profile Link Value` the assignment row carries are different strings. They are two applications of one rule — ADR-0020's — so exactly one of them is wrong, and this document cannot say which. Nothing is shipped for the row until they agree.",
+  "conflicting-collection":
+    "Two or more legacy values derive the same Collection Link value and were assigned to different collections. They collapse to one Mapping, and a Mapping has one URL — shipping either would be picking one by row order, which is not a decision anyone made.",
+};
+
+/** Every Collection Link problem, in the order the review document reports it. */
+export const COLLECTION_LINK_PROBLEMS: readonly CollectionLinkProblem[] =
+  Object.keys(PROBLEM_DESCRIPTIONS) as CollectionLinkProblem[];
+
+/**
+ * The Collection Links that were owed and not derived.
+ *
+ * This is the section that has to be readable when it is not empty, which is
+ * why every problem gets its own subsection with its own explanation even when
+ * there is nothing under it. A refresh that ships eighty-one links and silently
+ * drops one is the failure ADR-0020 reversed ADR-0012 to prevent, arriving one
+ * value at a time instead of all at once.
+ */
+function renderCollectionFaults(
+  faults: readonly CollectionLinkFault[]
+): string {
+  const sections = COLLECTION_LINK_PROBLEMS.map((problem) => {
+    const matching = faults.filter((fault) => fault.problem === problem);
+    const heading = `### \`${problem}\` — ${matching.length}`;
+    const description = PROBLEM_DESCRIPTIONS[problem];
+
+    if (matching.length === 0) {
+      return [heading, description, `None.`].join("\n\n");
+    }
+
+    return [
+      heading,
+      description,
+      [
+        tableRow([
+          `Custom User Field`,
+          `Legacy value`,
+          `Value it would have shipped`,
+          `What happened`,
+        ]),
+        tableRow(["---", "---", "---", "---"]),
+        ...matching.map((fault) =>
+          tableRow([
+            fault.userFieldName,
+            fault.legacyValues.join(", "),
+            fault.value,
+            fault.detail,
+          ])
+        ),
+      ].join("\n"),
+    ].join("\n\n");
+  });
+
+  return [
+    `## Collection Links not derived — ${faults.length}`,
+    `Each row here is a legacy value a member can be holding whose Suggested ` +
+      `Title was excluded for one of the five reasons that earns a Collection ` +
+      `Link, and which did not get one. The link is reported rather than ` +
+      `shipped: a Profile Link pointing at a collection that does not exist, ` +
+      `or carrying a value nobody agrees on, is worse than the missing link ` +
+      `it would replace. Every one of these is fixed in the Sheet and picked ` +
+      `up by the next export.`,
+    `The two exclusion reasons that earn no link — \`blank-title\` and ` +
+      `\`ambiguous-title-match\` — are not faults and are not here. They are ` +
+      `reported as exclusions below, which is where they end (ADR-0020).`,
+    ...sections,
+  ].join("\n\n");
+}
+
 function renderExclusions(exclusions: readonly ExcludedProduct[]): string {
   const sections = EXCLUSION_REASONS.map((reason) => {
     const matching = exclusions.filter((entry) => entry.reason === reason);
     const heading = `### \`${reason}\` — ${matching.length}`;
-    const description = REASON_DESCRIPTIONS[reason];
+    // Said per reason rather than only in the prose above, because "excluded"
+    // has meant two opposite things since ADR-0020 and the section heading
+    // cannot tell them apart: five of these reasons send the title on to a
+    // Collection Link, and two end here. Asked of the transform rather than
+    // restated, so the document cannot disagree with what shipped.
+    const description = `${REASON_DESCRIPTIONS[reason]}${
+      earnsCollectionLink(reason)
+        ? ` **Earns a Collection Link.**`
+        : ` **Earns no Collection Link — these titles end here.**`
+    }`;
 
     if (matching.length === 0) {
       return [heading, description, `None.`].join("\n\n");

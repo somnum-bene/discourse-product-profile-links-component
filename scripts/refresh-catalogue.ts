@@ -1,7 +1,8 @@
 // The Catalogue Refresh. Reads the committed Sheet Exports and Collection
-// Links, asks the cpap.com Shopify Admin API about every product the exports
-// name plus everything those divisions currently sell, and writes the Resolved
-// Product Catalogue, the Collection Links and the review document. Run it with
+// Assignment, asks the cpap.com Shopify Admin API about every product the
+// exports name, everything those divisions currently sell, and every collection
+// the assignment table points at, and writes the Resolved Product Catalogue,
+// the Collection Links and the review document. Run it with
 // `pnpm refresh:catalogue`.
 //
 // This is the only command that needs a Shopify token, and the only one that
@@ -17,7 +18,10 @@ import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
   COLLECTION_LINKS_FILE,
+  collectionHandlesFrom,
   collectionLinksCsv,
+  collectionsByHandleQuery,
+  collectionsFromByHandleResponse,
   curatesTitles,
   declaredDigest,
   type Division,
@@ -29,7 +33,6 @@ import {
   mergeProducts,
   productsByHandleQuery,
   productsFromByHandleResponse,
-  readCollectionLinks,
   renderReviewDocument,
   resolvedProductsCsv,
   REVIEW_FILE,
@@ -40,6 +43,9 @@ import {
   TOKEN_VAR,
 } from "./lib/catalogue-refresh.ts";
 import {
+  ASSIGNMENT_TABS,
+  type AssignmentRow,
+  assignmentRowsFrom,
   exportFileName,
   SHEET_TABS,
   SheetExportError,
@@ -64,18 +70,19 @@ async function main(): Promise<void> {
   const sheetRows = await readSheetExports();
   const handles = handlesFromSheetRows(sheetRows);
 
-  // Read through the file's own reader, digest and suffix checks included, for
-  // the same reason the Sheet Exports are re-read: it is hand-seeded and
-  // committed, so a refresh and a review have to be looking at the same rows.
-  // Today the refresh hands these straight back out; when derivation lands it
-  // is `buildCatalogue` that fills them in, and this read becomes the seed for
-  // the curated ones rather than all of them.
-  const seededCollectionLinks = readCollectionLinks(
-    await readFile(COLLECTION_LINKS_FILE, "utf8")
-  );
+  // The Collection Assignment, re-validated on the way in like the option
+  // tables beside it. It is the curated half of every Collection Link — the
+  // Excluded Products are the derived half — and nothing about it is read here
+  // beyond which collections to ask Shopify about. What a row *means* is the
+  // transform's, so `Override` precedence and the four dispositions are decided
+  // there and never here.
+  const assignments = await readCollectionAssignment();
+  const collectionHandles = collectionHandlesFrom(assignments);
 
   process.stdout.write(
-    `${sheetRows.length} sheet rows naming ${handles.length} product handles\n`
+    `${sheetRows.length} sheet rows naming ${handles.length} product handles\n` +
+      `${assignments.length} assignment rows naming ` +
+      `${collectionHandles.length} collections\n`
   );
 
   const fetched: SurveyedProduct[][] = [];
@@ -89,16 +96,29 @@ async function main(): Promise<void> {
     );
   }
 
+  const admittedCollections: string[] = [];
+
+  for (const batch of handleBatches(collectionHandles)) {
+    const body = await post(endpoint, token, collectionsByHandleQuery(batch));
+    const found = collectionsFromByHandleResponse(body, batch);
+    admittedCollections.push(...found);
+    process.stdout.write(
+      `  collections: Shopify admits ${found.length} of ${batch.length}\n`
+    );
+  }
+
   for (const division of DIVISIONS) {
     fetched.push(await surveyDivision(endpoint, token, division));
   }
 
   const products = mergeProducts(...fetched);
-  const { catalogue, exclusions, collectionLinks } = buildCatalogue({
-    sheetRows,
-    products,
-    collectionLinks: seededCollectionLinks,
-  });
+  const { catalogue, exclusions, collectionLinks, collectionFaults } =
+    buildCatalogue({
+      sheetRows,
+      products,
+      assignments,
+      admittedCollections,
+    });
   const csv = resolvedProductsCsv(catalogue);
   const linksCsv = collectionLinksCsv(collectionLinks);
   const digest = declaredDigest(csv, CATALOGUE_FILE);
@@ -106,6 +126,7 @@ async function main(): Promise<void> {
     catalogue,
     exclusions,
     collectionLinks,
+    collectionFaults,
     sheetRows,
     products,
     digest,
@@ -123,6 +144,36 @@ async function main(): Promise<void> {
       `${REVIEW_FILE}: the review document — read this before applying anything\n` +
       `digest: ${digest}\n`
   );
+
+  // Said on stderr and counted, because a fault is a legacy value someone is
+  // holding that will now resolve to nothing.
+  //
+  // Reported, and deliberately not fatal — neither the write nor the exit code.
+  // The files are still written because what did derive is correct and the
+  // review document is where these are explained one at a time; refusing to
+  // write would take the report away along with the fault. The exit stays zero
+  // because a refresh goes red on catalogue drift it did not cause and cannot
+  // fix: a product retiring at Shopify creates one of these, which is the
+  // standing mechanism working, and a command that failed every time the
+  // catalogue moved is a command people stop reading. Blocking a release on an
+  // uncurated value is a gate's job, on the committed files, and it is #38's.
+  if (collectionFaults.length > 0) {
+    const counts = new Map<string, number>();
+
+    for (const fault of collectionFaults) {
+      counts.set(fault.problem, (counts.get(fault.problem) ?? 0) + 1);
+    }
+
+    process.stderr.write(
+      `\n${collectionFaults.length} Collection Links were owed and not ` +
+        `derived: ${[...counts]
+          .map(([problem, count]) => `${count} ${problem}`)
+          .join(", ")}.\n` +
+        `They are reported rather than shipped — see "Collection Links not ` +
+        `derived" in ${REVIEW_FILE}. Each one is a legacy value someone can be ` +
+        `holding whose Profile Link is now missing.\n`
+    );
+  }
 
   for (const division of DIVISIONS) {
     const mappings = catalogue.filter(
@@ -153,6 +204,24 @@ async function readSheetExports(): Promise<SheetRow[]> {
     const path = join(EXPORT_DIR, exportFileName(tab));
     const csvText = await readFile(path, "utf8");
     rows.push(...sheetRowsFrom(tab, csvText));
+  }
+
+  return rows;
+}
+
+/**
+ * The Collection Assignment, re-validated on the way in. Committed for the same
+ * reason the option tables are, and read here for the first time: until this
+ * command derived Collection Links from it, the export was written and nothing
+ * consumed it.
+ */
+async function readCollectionAssignment(): Promise<AssignmentRow[]> {
+  const rows: AssignmentRow[] = [];
+
+  for (const tab of ASSIGNMENT_TABS) {
+    const path = join(EXPORT_DIR, exportFileName(tab));
+    const csvText = await readFile(path, "utf8");
+    rows.push(...assignmentRowsFrom(tab, csvText));
   }
 
   return rows;

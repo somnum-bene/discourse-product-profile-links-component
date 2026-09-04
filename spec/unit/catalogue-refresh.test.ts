@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assignedCollectionUrl,
   buildCatalogue,
   COLLECTION_LINK_SUFFIX,
+  collectionHandleFromUrl,
   type CollectionLink,
   type ProductRecord,
   type ResolvedProduct,
@@ -14,7 +16,10 @@ import {
   CatalogueRefreshError,
   COLLECTION_LINK_COLUMNS,
   COLLECTION_LINKS_FILE,
+  collectionHandlesFrom,
   collectionLinksCsv,
+  collectionsByHandleQuery,
+  collectionsFromByHandleResponse,
   curatesTitles,
   declaredDigest,
   digestOf,
@@ -39,6 +44,8 @@ import {
   TOKEN_VAR,
 } from "../../scripts/lib/catalogue-refresh";
 import {
+  ASSIGNMENT_TABS,
+  assignmentRowsFrom,
   exportFileName,
   SHEET_TABS,
   sheetRowsFrom,
@@ -56,6 +63,8 @@ const MASKS_TAG = "Catalog-Merchant-Division-Masks";
 const SHEET_ROWS: SheetRow[] = [
   {
     userFieldName: "Machine",
+    legacyValue: "4872",
+    legacyText: "AirCurve 10 VAuto with HumidAir",
     suggestedTitle: "AirCurve 10 VAuto BiLevel Machine",
     suggestedUrl:
       "https://www.sleeping.com/products/aircurve-10-vauto-bilevel-machine",
@@ -64,12 +73,16 @@ const SHEET_ROWS: SheetRow[] = [
     // The same product again under a second legacy value. The sheet is a
     // migration map, so this is the common case rather than the odd one.
     userFieldName: "Machine",
+    legacyValue: "6092",
+    legacyText: "AirCurve 10 Vauto USA C2C CO",
     suggestedTitle: "AirCurve 10 VAuto BiLevel Machine",
     suggestedUrl:
       "https://www.sleeping.com/products/aircurve-10-vauto-bilevel-machine",
   },
   {
     userFieldName: "Machine",
+    legacyValue: "6240",
+    legacyText: "Aircurve 11 asv",
     suggestedTitle: "AirCurve 11 ASV",
     suggestedUrl: "https://www.sleeping.com/products/aircurve-11-asv",
   },
@@ -77,18 +90,24 @@ const SHEET_ROWS: SheetRow[] = [
     // A real row, and the reason handles cannot simply be assumed: its
     // Suggested URL is a search results page, not a product.
     userFieldName: "Machine",
+    legacyValue: "5213",
+    legacyText: "ResMed AirCurve 10 ASV",
     suggestedTitle: "ResMed AirCurve 10 ASV BiLevel Machine",
     suggestedUrl:
       "https://www.sleeping.com/search?q=resmed+aircurve&_pos=4&_psq=resmed+air&_ss=e&_v=1.0",
   },
   {
     userFieldName: "Mask",
+    legacyValue: "3301",
+    legacyText: "Amara Full Face Mask",
     suggestedTitle: "Amara Full Face CPAP Mask",
     suggestedUrl:
       "https://www.sleeping.com/products/amara-full-face-cpap-mask-with-headgear",
   },
   {
     userFieldName: "Mask",
+    legacyValue: "3002",
+    legacyText: "Morf Nasal Mask",
     suggestedTitle: "Morf Nasal Mask",
     suggestedUrl: "https://www.sleeping.com/products/morf-nasal-mask",
   },
@@ -235,6 +254,8 @@ describe("handlesFromSheetRows", () => {
       handlesFromSheetRows([
         {
           userFieldName: "Machine",
+          legacyValue: "9999",
+          legacyText: "Something legacy",
           suggestedTitle: "Something",
           suggestedUrl: "https://www.sleeping.com/products/Not A Handle",
         },
@@ -332,6 +353,180 @@ describe("the queries it sends", () => {
     expect(divisionSurveyQuery(DIVISIONS[0], "cursor-abc")).toContain(
       'after: "cursor-abc"'
     );
+  });
+
+  it("asks for each collection under its own alias, and only for its handle", () => {
+    const query = collectionsByHandleQuery(["bipap-machines", "apap-machines"]);
+
+    expect(query).toContain(
+      'c0: collectionByIdentifier(identifier: { handle: "bipap-machines" })'
+    );
+    expect(query).toContain(
+      'c1: collectionByIdentifier(identifier: { handle: "apap-machines" })'
+    );
+    // Existence, and deliberately not reachability: whether the public page
+    // serves is Catalogue Verify's question (ADR-0017), and asking for
+    // anything more here would invite this command to answer it badly.
+    expect(query).not.toContain("onlineStoreUrl");
+    expect(query).not.toContain("products");
+  });
+
+  it("refuses to send a collection query with nothing to ask about", () => {
+    // A GraphQL document with no selections is a syntax error, so an empty
+    // batch would spend a request to be told so.
+    expect(() => collectionsByHandleQuery([])).toThrow(CatalogueRefreshError);
+    expect(() => collectionsByHandleQuery([])).toThrow(/collection query/);
+  });
+});
+
+describe("reading a collection response", () => {
+  /** A collection response as Shopify sends it, aliases and all. */
+  function collectionResponse(
+    nodes: readonly (Record<string, unknown> | null)[]
+  ): unknown {
+    const data: Record<string, unknown> = {};
+
+    for (const [index, node] of nodes.entries()) {
+      data[`c${index}`] = node;
+    }
+
+    return { data };
+  }
+
+  it("admits the collections Shopify holds and drops the ones it does not", () => {
+    const admitted = collectionsFromByHandleResponse(
+      collectionResponse([
+        { handle: "bipap-machines" },
+        null,
+        { handle: "nasal-cpap-masks" },
+      ]),
+      ["bipap-machines", "machines-that-never-were", "nasal-cpap-masks"]
+    );
+
+    expect(admitted).toEqual(["bipap-machines", "nasal-cpap-masks"]);
+  });
+
+  it("reads the handle back out of the answer rather than echoing the request", () => {
+    // An answer naming a different collection than the one asked for must not
+    // be admitted under the asked-for name, or a curated URL would be verified
+    // by a collection that is not the one it points at.
+    expect(
+      collectionsFromByHandleResponse(
+        collectionResponse([{ handle: "something-else" }]),
+        ["bipap-machines"]
+      )
+    ).toEqual(["something-else"]);
+  });
+
+  it("stops when an alias the query asked for is missing entirely", () => {
+    expect(() =>
+      collectionsFromByHandleResponse(collectionResponse([]), [
+        "bipap-machines",
+      ])
+    ).toThrow(/has no "c0" for handle "bipap-machines"/);
+  });
+
+  it("names the handle it was actually asking about when a node is malformed", () => {
+    // The misses are dropped on the way through, so the surviving nodes no
+    // longer line up with the batch by position. A reader that recovered the
+    // handle by index would name the wrong collection here — and only ever
+    // after a miss, which is the one moment the message has to be right.
+    expect(() =>
+      collectionsFromByHandleResponse(
+        collectionResponse([null, { handle: 7 }]),
+        ["gone-collection", "bipap-machines"]
+      )
+    ).toThrow(/c1 \("bipap-machines"\) came back without a string "handle"/);
+  });
+
+  it("has nothing to admit when the batch came back entirely empty", () => {
+    expect(
+      collectionsFromByHandleResponse(collectionResponse([null]), ["gone"])
+    ).toEqual([]);
+  });
+});
+
+describe("collectionHandlesFrom", () => {
+  it("asks about exactly the collections the derivation will look for", () => {
+    const assignments = ASSIGNMENT_TABS.flatMap((tab) =>
+      assignmentRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
+
+    const handles = collectionHandlesFrom(assignments);
+
+    expect(handles.length).toBeGreaterThan(0);
+    expect(handles).toEqual([...handles].sort());
+    expect(new Set(handles).size).toBe(handles.length);
+
+    // Every handle the derivation will check admission against is one this
+    // asked Shopify about. A command that worked the handles out some other way
+    // could admit a collection the transform never consults, or miss one it
+    // does.
+    for (const assignment of assignments) {
+      if (assignment.disposition !== "collection") {
+        continue;
+      }
+
+      expect(handles).toContain(
+        collectionHandleFromUrl(assignedCollectionUrl(assignment))
+      );
+    }
+  });
+
+  it("skips the dispositions that produce no link", () => {
+    // The `resolves-to-product` rows carry prose in the URL column rather than
+    // a URL, which is the shape of thing this quietly skips — and asking about
+    // a collection nothing will link to would spend a request on an answer
+    // nothing reads.
+    const assignments = ASSIGNMENT_TABS.flatMap((tab) =>
+      assignmentRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
+    const undisposed = assignments.filter(
+      (row) => row.disposition !== "collection"
+    );
+
+    expect(undisposed.length).toBeGreaterThan(0);
+    expect(collectionHandlesFrom(undisposed)).toEqual([]);
+  });
+});
+
+describe("collectionHandleFromUrl", () => {
+  it("names the handle a curated collection URL identifies", () => {
+    expect(
+      collectionHandleFromUrl("https://www.cpap.com/collections/bipap-machines")
+    ).toBe("bipap-machines");
+  });
+
+  it("ignores a query string and a fragment", () => {
+    expect(
+      collectionHandleFromUrl(
+        "https://www.cpap.com/collections/apap-machines?page=2#top"
+      )
+    ).toBe("apap-machines");
+  });
+
+  it("returns nothing for a cell that names no collection", () => {
+    // The `resolves-to-product` rows hold exactly this, and an empty answer is
+    // what turns into an `unadmitted-collection` fault rather than a request.
+    expect(collectionHandleFromUrl("n/a — same as existing value 5232")).toBe(
+      ""
+    );
+    expect(collectionHandleFromUrl("")).toBe("");
+  });
+
+  it("does not mistake a product URL for a collection", () => {
+    // A Collection Link pointing at a product page is a Resolved Product in the
+    // wrong file (ADR-0021), and this is the half of that guard that runs
+    // before Shopify is asked anything.
+    expect(
+      collectionHandleFromUrl("https://www.cpap.com/products/aircurve-11-asv")
+    ).toBe("");
   });
 });
 
@@ -631,31 +826,73 @@ describe("the collection-links file", () => {
     expect(readCollectionLinks(collectionLinksCsv(LINKS))).toEqual(LINKS);
   });
 
-  it("is a fixed point of the refresh that writes it", () => {
+  it("is what a refresh derives from the committed exports", () => {
     // The closest a test can get to running `pnpm refresh:catalogue`, which
-    // needs a Shopify token and so is never run here. The command's own
-    // sequence is read the file, hand the rows to `buildCatalogue`, format the
-    // third output, write it back — so the committed file has to come back out
-    // byte for byte, digest included. A refresh that reordered the rows,
-    // altered a value or recomputed a different digest would show up as a
-    // spurious diff on the first real run, and this is what would catch it.
+    // needs a Shopify token and so is never run here. No row of this file is
+    // hand-authored any more: a refresh derives every one from the committed
+    // option tables and the committed Collection Assignment, so the file has to
+    // come back out byte for byte, digest included. A derivation that reordered
+    // the rows, altered a value or recomputed a different digest would show up
+    // as a spurious diff on the next real run, and this is what catches it.
     //
-    // The sheet rows are the real committed exports rather than this file's
-    // fixtures, because the field order the sort uses comes from them.
+    // Two substitutions stand in for the two things only a live run knows.
+    //
+    // The products are rebuilt from the committed Resolved Product Catalogue,
+    // which is the record of what the last real run found Shopify holding.
+    // That is what makes the same titles resolve here as resolved there, and
+    // therefore the same ones fall through to a Collection Link.
+    //
+    // `admittedCollections` is every handle the table names, which is what the
+    // 2026-09-04 verification of all nine found. Admission is asked of Shopify
+    // on a real run; here it is granted, so that this test measures derivation
+    // and the admission check is measured on its own.
     const sheetRows = SHEET_TABS.flatMap((tab) =>
       sheetRowsFrom(
         tab,
         readFileSync(join("data", exportFileName(tab)), "utf8")
       )
     );
+    const assignments = ASSIGNMENT_TABS.flatMap((tab) =>
+      assignmentRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
     const committedText = readFileSync(COLLECTION_LINKS_FILE, "utf8");
+    const products: ProductRecord[] = readResolvedProducts(
+      readFileSync(CATALOGUE_FILE, "utf8")
+    ).map((entry) => ({
+      handle: entry.handle,
+      title: entry.value,
+      status: entry.status,
+      tags: [],
+      onlineStoreUrl: entry.url,
+    }));
 
-    const { collectionLinks } = buildCatalogue({
+    const { collectionLinks, collectionFaults } = buildCatalogue({
       sheetRows,
-      products: PRODUCTS as ProductRecord[],
-      collectionLinks: readCollectionLinks(committedText),
+      products,
+      assignments,
+      admittedCollections: collectionHandlesFrom(assignments),
     });
 
+    // Nothing was blocked by a collection Shopify would not admit, by a
+    // disagreement with the curated value, or by an undecided row. Those are
+    // the faults that would mean the committed file is missing a row it should
+    // hold, and none of them survives a correct derivation.
+    //
+    // `unassigned-legacy-value` is deliberately not asserted away. Five of them
+    // are real as of the 2026-09-04 refresh: three products retired at Shopify
+    // after the curation pass, so five legacy values now earn a Collection Link
+    // that nobody has assigned one to yet. That is the standing mechanism
+    // working — a product that retires in six months does exactly this — and it
+    // is reported in the review document rather than fixed here.
+    expect(
+      collectionFaults.filter(
+        (fault) => fault.problem !== "unassigned-legacy-value"
+      )
+    ).toEqual([]);
+    expect(collectionLinks.length).toBeGreaterThan(50);
     expect(collectionLinksCsv(collectionLinks)).toBe(committedText);
   });
 
@@ -857,12 +1094,14 @@ describe("the review document", () => {
   const built = buildCatalogue({
     sheetRows: SHEET_ROWS,
     products: PRODUCTS as ProductRecord[],
-    collectionLinks: [],
+    assignments: [],
+    admittedCollections: [],
   });
   const review = renderReviewDocument({
     catalogue: built.catalogue,
     exclusions: built.exclusions,
     collectionLinks: built.collectionLinks,
+    collectionFaults: built.collectionFaults,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -945,6 +1184,7 @@ describe("the review document", () => {
           url: "https://www.cpap.com/collections/cpap-machines",
         },
       ],
+      collectionFaults: [],
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -976,6 +1216,7 @@ describe("the review document", () => {
       catalogue: built.catalogue,
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
+      collectionFaults: built.collectionFaults,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -990,7 +1231,8 @@ describe("the review document", () => {
     const after = buildCatalogue({
       sheetRows: SHEET_ROWS,
       products: [archived, ...PRODUCTS.slice(1)] as ProductRecord[],
-      collectionLinks: [],
+      assignments: [],
+      admittedCollections: [],
     });
 
     const before = resolvedProductsCsv(built.catalogue).split("\n");
@@ -1011,6 +1253,7 @@ describe("the review document", () => {
         catalogue: after.catalogue,
         exclusions: after.exclusions,
         collectionLinks: after.collectionLinks,
+        collectionFaults: after.collectionFaults,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),
@@ -1068,14 +1311,15 @@ describe("what each file is allowed to do", () => {
     expect(command).toContain("writeFile(REVIEW_FILE, review)");
   });
 
-  it("reads the Collection Links through the reader that verifies their digest", () => {
-    // The file is hand-seeded and committed, so a refresh re-reads it through
-    // the same guards that will check it back in rather than parsing the CSV
-    // again — the suffix check included. The write loop itself is the one part
-    // of this pipeline no test covers, so which reader and which writer the
-    // command reaches for is asserted here.
-    expect(command).toContain("readCollectionLinks(");
+  it("derives the Collection Links rather than reading them back in", () => {
+    // The file used to be hand-seeded, and the refresh read it through
+    // `readCollectionLinks` and handed the rows straight back out. Nothing is
+    // seeded now: the command reads the Collection Assignment instead and the
+    // transform derives every row. Reading the output file as an input again
+    // would make a stale row survive a refresh that no longer derives it, which
+    // is the whole failure this ticket removed.
+    expect(command).not.toContain("readCollectionLinks");
+    expect(command).toContain("assignmentRowsFrom(tab, csvText)");
     expect(command).toContain("collectionLinksCsv(collectionLinks)");
-    expect(command).toContain("collectionLinks: seededCollectionLinks");
   });
 });
