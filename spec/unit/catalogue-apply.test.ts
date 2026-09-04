@@ -979,6 +979,29 @@ describe("what this step is not allowed to do", () => {
     expect(command).not.toContain('split("\\n")');
   });
 
+  it("reads the Collection Links and compares drift against both arrays", () => {
+    // `settings.yml` ships both, so comparing an instance's live Mappings
+    // against the products alone reports every Collection Link as `extra` —
+    // "the component carries Mappings the catalogue does not" — on every run.
+    // Substituting `[]` for the second argument left the whole suite green,
+    // which is what this asserts against.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("COLLECTION_LINKS_FILE");
+    expect(command).toContain(
+      "renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)"
+    );
+  });
+
+  it("writes Dropdown Options from the products alone", () => {
+    // The other half of the asymmetry, and the reason the two sinks take
+    // different arguments: what this command pushes to a live instance comes
+    // from `dropdownOptionsFor(catalogue)`, which is never handed a Collection
+    // Link (ADR-0021). Drift reads both arrays; the write reads one.
+    expect(command).toContain("dropdownOptionsFor(catalogue)");
+    expect(command).not.toContain("dropdownOptionsFor(catalogue, ");
+    expect(command).not.toMatch(/dropdownOptionsFor\([^)]*collectionLinks/);
+  });
+
   it("refuses a settings.yml a fresh build would not write", () => {
     // The digest guard records the catalogue alone, so a links file that was
     // edited and re-digested without a rebuild passed it while leaving the
