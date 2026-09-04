@@ -29,6 +29,7 @@ import {
   readCollectionLinks,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh";
+import { MANAGED_FIELDS } from "../../scripts/lib/plan-apply";
 import { refusedUrls } from "../../scripts/lib/settings-schema";
 import { SHEET_TABS } from "../../scripts/lib/sheet-export";
 
@@ -367,8 +368,8 @@ describe("the settings.yml this repository ships", () => {
     expect(
       settingsWithCatalogue(
         settingsText,
-        renderFieldMappings(catalogue, collectionLinks),
-        declaredDigest(catalogueText)
+        renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS),
+        declaredDigest(catalogueText, CATALOGUE_FILE)
       )
     ).toBe(settingsText);
   });
@@ -414,7 +415,9 @@ describe("the settings.yml this repository ships", () => {
     // The two sinks have to come from one catalogue (ADR-0011). This is what
     // lets the apply step notice it is about to push Dropdown Options derived
     // from a different one than the shipped Mappings were built from.
-    expect(recordedDigest(settingsText)).toBe(declaredDigest(catalogueText));
+    expect(recordedDigest(settingsText)).toBe(
+      declaredDigest(catalogueText, CATALOGUE_FILE)
+    );
   });
 
   it("keeps the rest of the file, so Debug Mode still exists", () => {
@@ -490,22 +493,42 @@ describe("the settings.yml this repository ships", () => {
     // cannot settle — Ruby's two URI parsers disagree over an underscore in a
     // host — out of reach.
     //
-    // Which of the two paths is expected is decided by the value's suffix, so
-    // this also pins the suffix on exact bytes: one leading space, one capital
-    // `D`, nothing else. Resolution is an exact trimmed string match, so a
-    // near miss resolves for nobody while looking right in a diff.
+    // Which of the two paths is expected is decided by the file the Mapping
+    // came from, and deliberately not by its value. Reading it off the value's
+    // suffix would make the assertion agree with whatever the row claimed
+    // about itself: a `(Discontinued)` row in the catalogue file would be
+    // granted a `/collections/` URL, ship as a Dropdown Option, and pass every
+    // gate — the one thing ADR-0021 exists to prevent. `readResolvedProducts`
+    // checks the handle and the status, never that the URL is a product page,
+    // so provenance is checked here or nowhere.
+    const collectionLinkKeys = new Set(
+      collectionLinks.map((link) => `${link.userFieldName} ${link.value}`)
+    );
+
     for (const field of shipped) {
       for (const mapping of field.mappings) {
         const url = new URL(mapping.url);
-        const isCollectionLink = mapping.value.endsWith(COLLECTION_LINK_SUFFIX);
+        const fromLinksFile = collectionLinkKeys.has(
+          `${field.user_field_name} ${mapping.value}`
+        );
 
         expect(url.protocol).toBe("https:");
         expect(url.host).toBe("www.cpap.com");
-        expect(url.pathname.startsWith("/products/")).toBe(!isCollectionLink);
-        expect(url.pathname.startsWith("/collections/")).toBe(isCollectionLink);
+        expect(url.pathname.startsWith("/products/")).toBe(!fromLinksFile);
+        expect(url.pathname.startsWith("/collections/")).toBe(fromLinksFile);
       }
     }
 
+    // The suffix belongs to Collection Links alone. A catalogue row wearing it
+    // is a row in the wrong file, and it is `dropdownOptionsFor`'s input, so it
+    // would be offered to a new member as a machine they can still buy.
+    for (const entry of catalogue) {
+      expect(entry.value.endsWith(COLLECTION_LINK_SUFFIX)).toBe(false);
+    }
+
+    // Pinned on exact bytes: one leading space, one capital `D`, nothing else.
+    // Resolution is an exact trimmed string match, so a near miss resolves for
+    // nobody while looking right in a diff.
     expect(COLLECTION_LINK_SUFFIX).toBe(" (Discontinued)");
 
     // The spreadsheet these titles came from was written for sleeping.com, and

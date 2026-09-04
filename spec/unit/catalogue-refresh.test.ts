@@ -530,7 +530,9 @@ describe("the catalogue file", () => {
     ]);
 
     expect(resolvedProductsCsv(CATALOGUE)).toBe(first);
-    expect(declaredDigest(changed)).not.toBe(declaredDigest(first));
+    expect(declaredDigest(changed, CATALOGUE_FILE)).not.toBe(
+      declaredDigest(first, CATALOGUE_FILE)
+    );
   });
 
   it("refuses a file with no digest line", () => {
@@ -556,6 +558,19 @@ describe("the catalogue file", () => {
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
     ).toThrow(/unexpected header row/);
+  });
+
+  it("refuses a row that is not as wide as the header says", () => {
+    // The same guard as the Collection Links reader gets, from the same
+    // helper. Both files are digested CSV read by the same three commands, and
+    // an extra column on a row is not a smaller fault in one than the other.
+    const body =
+      "user_field_name,value,handle,status,url\n" +
+      "Machine,A,a,ACTIVE,https://www.cpap.com/products/a,JUNK\n";
+
+    expect(() =>
+      readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/6 fields where the header declares 5/);
   });
 
   it("refuses a row whose status is not a Shopify status", () => {
@@ -692,6 +707,99 @@ describe("the collection-links file", () => {
     ).toThrow(/empty field/);
   });
 
+  it("refuses a row that is not as wide as the header says", () => {
+    // The header check cannot see this: it is the same fault one line further
+    // down. An extra field used to be discarded without a word, so a row with
+    // a stray trailing column read clean and shipped.
+    const wide =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines,JUNK\n";
+    const narrow = "user_field_name,value,url\nMachine,A (Discontinued)\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(wide)}\n${wide}`)
+    ).toThrow(/4 fields where the header declares 3/);
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(narrow)}\n${narrow}`)
+    ).toThrow(/2 fields where the header declares 3/);
+  });
+
+  it("refuses two rows carrying the same value for one field", () => {
+    // Both rows shipped, and the component then reported `duplicate-value` on
+    // every page load and resolved whichever came first — so row order decided
+    // which URL a member got, which is not a decision anyone made.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/bipap-machines\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/repeats the value/);
+  });
+
+  it("allows the same value under two different fields", () => {
+    // A Mapping is keyed within a field, not globally: Machine and Mask are
+    // separate namespaces and a value living in both is not a collision.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Mask,A (Discontinued),https://www.cpap.com/collections/nasal-cpap-masks\n";
+
+    expect(
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toHaveLength(2);
+  });
+
+  it("refuses a value that is the suffix and nothing else", () => {
+    // It passed the non-empty check and the suffix check, round-tripped
+    // through `csvLine`, and shipped a Profile Link whose anchor text was
+    // `(Discontinued)`. ADR-0020 reverses ADR-0012 on the strength of the
+    // value naming the equipment, so a value that names none is the one thing
+    // the suffix rule cannot be allowed to admit.
+    for (const value of [" (Discontinued)", "(Discontinued)"]) {
+      const body = `user_field_name,value,url\nMachine,"${value}",https://www.cpap.com/collections/cpap-machines\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
+  it("refuses a url that is not an https cpap.com collection page", () => {
+    // The only hand-entered URL in the pipeline, and the one with the widest
+    // blast radius: Discourse refuses the whole `profile_link_fields` value
+    // rather than the Mapping it dislikes (ADR-0016), so one typo here takes
+    // every Profile Link down. `not a url at all` used to read clean and reach
+    // settings.yml.
+    const refused = [
+      "not a url at all",
+      "www.cpap.com/collections/cpap-machines",
+      "http://www.cpap.com/collections/cpap-machines",
+      "https://cpap.com/collections/cpap-machines",
+      "https://www.sleeping.com/collections/cpap-machines",
+      "https://www.cpap.com/products/resmed-airsense-11-autoset",
+      "https://www.cpap.com/collections/",
+    ];
+
+    for (const url of refused) {
+      const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(CatalogueRefreshError);
+    }
+  });
+
+  it("accepts a collection url with a handle", () => {
+    const url = "https://www.cpap.com/collections/bipap-machines";
+    const body = `user_field_name,value,url\nMachine,A (Discontinued),${url}\n`;
+
+    expect(readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)).toEqual([
+      { userFieldName: "Machine", value: "A (Discontinued)", url },
+    ]);
+  });
+
   it("refuses a value that does not end in the suffix, exactly", () => {
     // Three near misses, each of which resolves for nobody while looking right
     // in a diff: resolution is an exact trimmed string match against what the
@@ -754,6 +862,7 @@ describe("the review document", () => {
   const review = renderReviewDocument({
     catalogue: built.catalogue,
     exclusions: built.exclusions,
+    collectionLinks: built.collectionLinks,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -821,10 +930,52 @@ describe("the review document", () => {
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
   });
 
+  it("lists every Collection Link that will ship", () => {
+    // The document is what a human approves, and it said "every Mapping" while
+    // showing only the Resolved Products. Three of the 58 shipped Mappings
+    // were absent from it, which is worse than never mentioning them: an
+    // approver told they are seeing everything has no reason to look further.
+    const withLinks = renderReviewDocument({
+      catalogue: built.catalogue,
+      exclusions: built.exclusions,
+      collectionLinks: [
+        {
+          userFieldName: "Machine",
+          value: "DreamStation Auto CPAP Machine (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      sheetRows: SHEET_ROWS,
+      products: PRODUCTS,
+      digest: "0".repeat(64),
+    });
+
+    expect(withLinks).toContain("## Collection Links — 1");
+    expect(withLinks).toContain(
+      "DreamStation Auto CPAP Machine (Discontinued)"
+    );
+    expect(withLinks).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+    // The count line has to add up to what ships, not to one of the two files.
+    expect(withLinks).toContain(
+      `- Mappings: ${built.catalogue.length + 1} ` +
+        `(${built.catalogue.length} Resolved Products, 1 Collection Links)`
+    );
+  });
+
+  it("says so plainly when there are no Collection Links", () => {
+    // `None.` rather than an absent section: "we looked and there were none"
+    // and "nobody asked" are different facts, and only one of them is fine.
+    expect(review).toContain("## Collection Links — 0");
+    expect(review).toContain("None.");
+  });
+
   it("is the same document twice, because there is no clock in it", () => {
     const again = renderReviewDocument({
       catalogue: built.catalogue,
       exclusions: built.exclusions,
+      collectionLinks: built.collectionLinks,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -859,6 +1010,7 @@ describe("the review document", () => {
       renderReviewDocument({
         catalogue: after.catalogue,
         exclusions: after.exclusions,
+        collectionLinks: after.collectionLinks,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),

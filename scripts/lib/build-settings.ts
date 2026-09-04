@@ -207,6 +207,11 @@ function onlyIndexOf(
  * The catalogue digest `settings.yml` records, so a later step can say whether
  * the Mappings a site is running and the Dropdown Options it is about to be
  * given came from the same catalogue.
+ *
+ * It answers that question about the products alone. Collection Links are not
+ * in it by design (see `DIGEST_LABEL`), so it cannot notice a links file that
+ * was edited and re-digested without a rebuild. `apply:catalogue` asks that
+ * separately, with `driftReport` against a fresh build from both inputs.
  */
 export function recordedDigest(settingsText: string): string {
   for (const line of settingsText.split("\n")) {

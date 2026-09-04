@@ -23,6 +23,7 @@ import {
   readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
+import { MANAGED_FIELDS } from "./lib/plan-apply.ts";
 
 /** Report drift and change nothing. The gate CI and the pre-commit hook run. */
 const CHECK_FLAG = "--check";
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   // it was approved is refused rather than shipped.
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
-  const digest = declaredDigest(catalogueText);
+  const digest = declaredDigest(catalogueText, CATALOGUE_FILE);
 
   // The second input. Both sinks used to come from one file; the Mappings now
   // come from two and the Dropdown Options still come from one, which is the
@@ -52,7 +53,11 @@ async function main(): Promise<void> {
   const collectionLinks = readCollectionLinks(
     await readFile(COLLECTION_LINKS_FILE, "utf8")
   );
-  const fields = renderFieldMappings(catalogue, collectionLinks);
+  const fields = renderFieldMappings(
+    catalogue,
+    collectionLinks,
+    MANAGED_FIELDS
+  );
 
   const committed = await readFile(SETTINGS_FILE, "utf8");
   const built = settingsWithCatalogue(committed, fields, digest);

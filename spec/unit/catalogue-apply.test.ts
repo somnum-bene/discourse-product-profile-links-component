@@ -32,7 +32,11 @@ import {
   CATALOGUE_FILE,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh.ts";
-import { type FieldWrite, planApply } from "../../scripts/lib/plan-apply.ts";
+import {
+  type FieldWrite,
+  MANAGED_FIELDS,
+  planApply,
+} from "../../scripts/lib/plan-apply.ts";
 
 const LIB_FILE = "scripts/lib/catalogue-apply.ts";
 const COMMAND_FILE = "scripts/apply-catalogue.ts";
@@ -652,7 +656,10 @@ describe("how far the instance's component is from the catalogue", () => {
     // catalogue on disk carries 55 Mappings. Writing the Dropdown Options now
     // would produce an Unmatched Value for every one of them.
     const catalogue = realCatalogue();
-    const notes = componentDrift([], renderFieldMappings(catalogue, []));
+    const notes = componentDrift(
+      [],
+      renderFieldMappings(catalogue, [], MANAGED_FIELDS)
+    );
 
     expect(notes.map((note) => note.user_field_name)).toEqual([
       "Machine",
@@ -970,6 +977,46 @@ describe("what this step is not allowed to do", () => {
   it("reads the catalogue through the reader that checks its digest", () => {
     expect(command).toContain("readResolvedProducts(catalogueText)");
     expect(command).not.toContain('split("\\n")');
+  });
+
+  it("reads the Collection Links and compares drift against both arrays", () => {
+    // `settings.yml` ships both, so comparing an instance's live Mappings
+    // against the products alone reports every Collection Link as `extra` —
+    // "the component carries Mappings the catalogue does not" — on every run.
+    // Substituting `[]` for the second argument left the whole suite green,
+    // which is what this asserts against.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("COLLECTION_LINKS_FILE");
+    expect(command).toContain(
+      "renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)"
+    );
+  });
+
+  it("writes Dropdown Options from the products alone", () => {
+    // The other half of the asymmetry, and the reason the two sinks take
+    // different arguments: what this command pushes to a live instance comes
+    // from `dropdownOptionsFor(catalogue)`, which is never handed a Collection
+    // Link (ADR-0021). Drift reads both arrays; the write reads one.
+    expect(command).toContain("dropdownOptionsFor(catalogue)");
+    expect(command).not.toContain("dropdownOptionsFor(catalogue, ");
+    expect(command).not.toMatch(/dropdownOptionsFor\([^)]*collectionLinks/);
+  });
+
+  it("refuses a settings.yml a fresh build would not write", () => {
+    // The digest guard records the catalogue alone, so a links file that was
+    // edited and re-digested without a rebuild passed it while leaving the
+    // drift comparison below measuring against Mappings that were never
+    // shipped. Both guards run before anything is written to a live site.
+    expect(command).toContain("driftReport(");
+    expect(command).toContain("settingsWithCatalogue(");
+
+    const digestGuard = command.indexOf("digestDisagreement(");
+    const staleGuard = command.indexOf("driftReport(");
+    const firstWrite = command.indexOf("for (const write of plan.writes)");
+
+    expect(digestGuard).toBeGreaterThan(-1);
+    expect(staleGuard).toBeGreaterThan(digestGuard);
+    expect(firstWrite).toBeGreaterThan(staleGuard);
   });
 
   it("re-reads the instance after writing instead of trusting the responses", () => {

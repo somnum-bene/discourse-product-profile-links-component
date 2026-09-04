@@ -327,8 +327,10 @@ Mapping has a URL, not that the URL is one. URL syntax is the schema's
 `validations: url: true`, enforced server-side by Ruby, on an administrator's
 input — a generated `default:` never passes through it during development. And a
 single refusal invalidates the entire `profile_link_fields` value rather than the
-one offending Mapping (ADR-0006), so one bad URL takes all 55 Profile Links down
-with it.
+one offending Mapping (ADR-0006), so one bad URL takes all 58 Profile Links down
+with it — the 55 from the catalogue and the three Collection Links alike. That
+is why `readCollectionLinks` checks the shape of a collection URL where it
+reads it: it is the only URL here anyone types by hand.
 
 So `settings-schema.ts` mirrors `UrlHelper.is_valid_url?`, which is the method
 that validation reaches. The Ruby is quoted in the module, the expectations were
@@ -442,7 +444,9 @@ replans against whatever the instance now holds.
 ## The reachability pass is the one check that is not a gate
 
 `pnpm verify:catalogue` asks cpap.com whether each of the 55 catalogue URLs
-serves a page. It is in no pre-commit hook and no CI step, unlike every other
+serves a page. It reads the catalogue file alone, so the three collection URLs
+are not among them — whether Shopify admits a collection is asked on refresh
+(ADR-0020), and #37 owns it. It is in no pre-commit hook and no CI step, unlike every other
 check here, and unit tests read `package.json`, `.pre-commit-config.yaml` and
 `.github/workflows/ci.yml` to keep it that way — including inside another npm
 script, because anything `pnpm build:settings` called would gate CI just as

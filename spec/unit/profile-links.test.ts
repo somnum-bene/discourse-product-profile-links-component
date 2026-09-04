@@ -263,11 +263,20 @@ describe("resolveProfileLinks", () => {
   });
 
   it("resolves a Mapping the field never offered as a Dropdown Option", () => {
-    // The one assumption the whole Collection Link feature rests on, pinned
-    // rather than assumed (ADR-0021). Nothing in the runtime changes to make
-    // this work: `resolveProfileLinks` looks the User's stored value up in
-    // `urlsByValue` and never consults an options list at all, so a Mapping
-    // with no Dropdown Option behind it resolves exactly like any other.
+    // Pins the component half of what Collection Links rest on (ADR-0021):
+    // nothing in the runtime changes to make this work, because
+    // `resolveProfileLinks` looks the User's stored value up in `urlsByValue`
+    // and never consults an options list at all, so a Mapping with no Dropdown
+    // Option behind it resolves exactly like any other.
+    //
+    // It is worth being exact about what this cannot prove, because the
+    // component half is the cheaper half. `SiteUserField` is `{ id, name }`
+    // and this module contains no reference to options, so "no options are
+    // consulted" is a property of the types rather than something this test
+    // could fail on. And the other half is Discourse's, not ours: that
+    // removing a Dropdown Option leaves the members already holding that value
+    // holding it still. No test here can reach that, and ADR-0021 requires it
+    // verified on staging before a Collection Link is trusted in production.
     //
     // The fixture is what the feature actually ships: a value carrying the
     // ` (Discontinued)` suffix, pointing at a cpap.com collection page, on a

@@ -13,6 +13,7 @@ import {
   type ResolvedProduct,
   type SheetRow,
 } from "../../scripts/lib/build-catalogue";
+import { MANAGED_FIELDS } from "../../scripts/lib/plan-apply.ts";
 
 // The fixtures are the real rows and the real Shopify facts found while
 // planning PSD-68, so the suite encodes the failures that actually happened
@@ -223,7 +224,11 @@ describe("buildCatalogue", () => {
     const excluded = exclusionFor(exclusions, "CPAP Machines (Discontinued)");
 
     expect(excluded.reason).toBe("discontinued-suffix");
-    expect(excluded.detail).toContain("category page");
+    // The detail is a reviewer's only account of why a title was dropped, and
+    // this reason no longer means the title gets no Profile Link — ADR-0020
+    // supersedes ADR-0012 and sends it on as a Collection Link.
+    expect(excluded.detail).toContain("naming no equipment");
+    expect(excluded.detail).toContain("ADR-0020");
   });
 
   it("collapses a repeated Suggested Title to one entry", () => {
@@ -526,7 +531,7 @@ describe("Collection Links as the third output", () => {
 
 describe("renderFieldMappings", () => {
   it("produces the profile_link_fields structure the setting expects", () => {
-    const fields = renderFieldMappings(build().catalogue, []);
+    const fields = renderFieldMappings(build().catalogue, [], MANAGED_FIELDS);
 
     expect(fields.map((field) => field.user_field_name)).toEqual([
       "Machine",
@@ -559,7 +564,7 @@ describe("renderFieldMappings", () => {
     ];
 
     const { catalogue, exclusions } = build([...MACHINE_ROWS, ...blankRows]);
-    const fields = renderFieldMappings(catalogue, []);
+    const fields = renderFieldMappings(catalogue, [], MANAGED_FIELDS);
 
     expect(fields.map((field) => field.user_field_name)).toEqual(["Machine"]);
     expect(
@@ -577,7 +582,11 @@ describe("renderFieldMappings", () => {
       PRODUCTS,
       COLLECTION_LINKS
     );
-    const fields = renderFieldMappings(catalogue, collectionLinks);
+    const fields = renderFieldMappings(
+      catalogue,
+      collectionLinks,
+      MANAGED_FIELDS
+    );
 
     expect(fields.map((field) => field.user_field_name)).toEqual([
       "Machine",
@@ -598,7 +607,7 @@ describe("renderFieldMappings", () => {
     // the second array decides whether the field ships at all. An empty
     // mappings list would be a Config Problem; a field with one Collection Link
     // in it is a field that resolves for the Users holding that value.
-    const fields = renderFieldMappings([], COLLECTION_LINKS);
+    const fields = renderFieldMappings([], COLLECTION_LINKS, MANAGED_FIELDS);
 
     expect(fields.map((field) => field.user_field_name)).toEqual([
       "Machine",
@@ -612,15 +621,47 @@ describe("renderFieldMappings", () => {
     ]);
   });
 
+  it("keeps a Collection-Link-only field in its declared position", () => {
+    // The regression Copilot caught on #47. Grouping a concatenation takes its
+    // field order from the order fields are first encountered, so every
+    // product-backed field came out ahead of a field carrying only Collection
+    // Links — `Mask` before `Machine` here, though `MANAGED_FIELDS` declares
+    // `Machine` first and the component renders Field Mappings in the order it
+    // receives them. Latent while both seeded fields have products, and wrong
+    // the moment one does not, which is the case this sink exists to support.
+    const { catalogue } = build();
+    const maskOnly = catalogue.filter(
+      (entry) => entry.userFieldName === "Mask"
+    );
+    const machineLinkOnly = COLLECTION_LINKS.filter(
+      (link) => link.userFieldName === "Machine"
+    );
+
+    expect(maskOnly.length).toBeGreaterThan(0);
+    expect(machineLinkOnly).toHaveLength(1);
+
+    const fields = renderFieldMappings(
+      maskOnly,
+      machineLinkOnly,
+      MANAGED_FIELDS
+    );
+
+    expect(fields.map((field) => field.user_field_name)).toEqual([
+      "Machine",
+      "Mask",
+    ]);
+  });
+
   it("ships only the products when handed an empty second array", () => {
     // An empty list has to be passed, not omitted: the parameter takes no
     // default, so a caller who has no Collection Links says so rather than
     // silently dropping them (ADR-0021).
     const { catalogue } = build();
-    const values = renderFieldMappings(catalogue, []).flatMap((field) =>
-      field.mappings.map(
-        (mapping) => `${field.user_field_name} ${mapping.value}`
-      )
+    const values = renderFieldMappings(catalogue, [], MANAGED_FIELDS).flatMap(
+      (field) =>
+        field.mappings.map(
+          (mapping) => `${field.user_field_name} ${mapping.value}`
+        )
     );
 
     expect(values).toEqual(
@@ -670,9 +711,11 @@ describe("dropdownOptionsFor", () => {
 
     // And the same values are in the Mappings, so the asymmetry is the whole
     // of the difference between the two sinks.
-    const mapped = renderFieldMappings(catalogue, collectionLinks).flatMap(
-      (field) => field.mappings.map((mapping) => mapping.value)
-    );
+    const mapped = renderFieldMappings(
+      catalogue,
+      collectionLinks,
+      MANAGED_FIELDS
+    ).flatMap((field) => field.mappings.map((mapping) => mapping.value));
 
     for (const link of collectionLinks) {
       expect(mapped).toContain(link.value);
@@ -728,7 +771,7 @@ describe("the cross-sink assertion", () => {
 
     expect(
       crossSinkMismatches(
-        renderFieldMappings(catalogue, []),
+        renderFieldMappings(catalogue, [], MANAGED_FIELDS),
         dropdownOptionsFor(catalogue)
       )
     ).toEqual([]);
@@ -740,7 +783,7 @@ describe("the cross-sink assertion", () => {
     // do not, and under an exact trimmed-string match those are unrelated
     // strings that look equivalent side by side (ADR-0011).
     const { catalogue } = build();
-    const fields = renderFieldMappings(catalogue, []);
+    const fields = renderFieldMappings(catalogue, [], MANAGED_FIELDS);
     const doctored: FieldMapping[] = fields.map((field) => ({
       user_field_name: field.user_field_name,
       mappings: field.mappings.map((mapping, index) =>
@@ -761,7 +804,7 @@ describe("the cross-sink assertion", () => {
 
   it("fails when a whole field's Mappings go missing", () => {
     const { catalogue } = build();
-    const fields = renderFieldMappings(catalogue, []).filter(
+    const fields = renderFieldMappings(catalogue, [], MANAGED_FIELDS).filter(
       (field) => field.user_field_name !== "Mask"
     );
 
@@ -783,7 +826,7 @@ describe("the cross-sink assertion", () => {
 
     expect(
       crossSinkMismatches(
-        renderFieldMappings(catalogue, []),
+        renderFieldMappings(catalogue, [], MANAGED_FIELDS),
         dropdownOptionsFor(catalogue).filter(
           (entry) => entry.user_field_name !== "Mask"
         )
@@ -808,7 +851,11 @@ describe("the cross-sink assertion", () => {
       PRODUCTS,
       COLLECTION_LINKS
     );
-    const fields = renderFieldMappings(catalogue, collectionLinks);
+    const fields = renderFieldMappings(
+      catalogue,
+      collectionLinks,
+      MANAGED_FIELDS
+    );
     const options = dropdownOptionsFor(catalogue);
 
     expect(crossSinkMismatches(fields, options)).toEqual([]);
