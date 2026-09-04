@@ -979,6 +979,23 @@ describe("what this step is not allowed to do", () => {
     expect(command).not.toContain('split("\\n")');
   });
 
+  it("refuses a settings.yml a fresh build would not write", () => {
+    // The digest guard records the catalogue alone, so a links file that was
+    // edited and re-digested without a rebuild passed it while leaving the
+    // drift comparison below measuring against Mappings that were never
+    // shipped. Both guards run before anything is written to a live site.
+    expect(command).toContain("driftReport(");
+    expect(command).toContain("settingsWithCatalogue(");
+
+    const digestGuard = command.indexOf("digestDisagreement(");
+    const staleGuard = command.indexOf("driftReport(");
+    const firstWrite = command.indexOf("for (const write of plan.writes)");
+
+    expect(digestGuard).toBeGreaterThan(-1);
+    expect(staleGuard).toBeGreaterThan(digestGuard);
+    expect(firstWrite).toBeGreaterThan(staleGuard);
+  });
+
   it("re-reads the instance after writing instead of trusting the responses", () => {
     expect(command).toContain("parseUserFields(");
     expect(command).toContain("readbackMismatches(after, targets)");
