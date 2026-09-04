@@ -1,6 +1,7 @@
-// Everything the build step decides. It has one input — the committed Resolved
-// Product Catalogue — and one output: the `default:` of `profile_link_fields` in
-// `settings.yml`, which is how the catalogue reaches an instance (ADR-0008).
+// Everything the build step decides. It has two inputs — the committed Resolved
+// Product Catalogue and the committed Collection Links — and one output: the
+// `default:` of `profile_link_fields` in `settings.yml`, which is how both reach
+// an instance (ADR-0008).
 //
 // Two properties make the rest of the design fall out. The build must be
 // deterministic, because a drift gate regenerates the file in CI and fails on
@@ -16,9 +17,9 @@
 //
 // This file re-decides nothing. Which titles ship, what they link to and the
 // order they appear in are all settled by `buildCatalogue` and recorded in the
-// catalogue file; the order below is the order the file holds. That is why the
-// catalogue carries a digest: a hand-shuffled or hand-edited catalogue would
-// otherwise change what ships without anything noticing.
+// two committed files; the order below is the order they hold. That is why both
+// carry a digest: a hand-shuffled or hand-edited one would otherwise change what
+// ships without anything noticing.
 
 import { stringify } from "yaml";
 import type { FieldMapping } from "./build-catalogue.ts";
@@ -41,7 +42,13 @@ export const SETTING_NAME = "profile_link_fields";
 export const BEGIN_MARKER = `  # BEGIN GENERATED ${SETTING_NAME} default`;
 export const END_MARKER = `  # END GENERATED ${SETTING_NAME} default`;
 
-/** How the region records the catalogue it was generated from. */
+/**
+ * How the region records the catalogue it was generated from. It is the Resolved
+ * Product Catalogue's digest and only that, because what this digest exists to
+ * correlate is the Dropdown Options a site is given — and those come from the
+ * products alone (ADR-0021). Collection Links change the region's bytes, which
+ * the drift check catches regardless.
+ */
 const DIGEST_LABEL = "  # Catalogue digest (sha256): ";
 const DIGEST_LINE = /^ {2}# Catalogue digest \(sha256\): ([0-9a-f]{64})$/;
 const DIGEST_SHAPE = /^[0-9a-f]{64}$/;
@@ -124,10 +131,10 @@ export function generatedRegion(
 
   return [
     BEGIN_MARKER,
-    `${INDENT}# Written by \`pnpm build:settings\` from the Resolved Product Catalogue.`,
+    `${INDENT}# Written by \`pnpm build:settings\` from the Resolved Product Catalogue and the Collection Links.`,
     `${DIGEST_LABEL}${digest}`,
     `${INDENT}# Do not edit between these fences: \`pnpm build:settings --check\``,
-    `${INDENT}# runs in CI and fails when this region disagrees with the catalogue.`,
+    `${INDENT}# runs in CI and fails when this region disagrees with either of them.`,
     ...yaml.trimEnd().split("\n").map(indented),
     END_MARKER,
   ].join("\n");

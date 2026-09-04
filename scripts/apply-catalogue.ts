@@ -52,7 +52,9 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINKS_FILE,
   declaredDigest,
+  readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
 import { planApply, PlanApplyError } from "./lib/plan-apply.ts";
@@ -88,6 +90,14 @@ async function main(): Promise<void> {
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
   const declared = declaredDigest(catalogueText);
+
+  // Read for the drift comparison below and for nothing else. The Dropdown
+  // Options this command writes come from `dropdownOptionsFor(catalogue)`,
+  // which is never handed a Collection Link — that is the point of the two
+  // arrays (ADR-0021).
+  const collectionLinks = readCollectionLinks(
+    await readFile(COLLECTION_LINKS_FILE, "utf8")
+  );
   const targets = dropdownOptionsFor(catalogue);
 
   const disagreement = digestDisagreement(
@@ -120,9 +130,15 @@ async function main(): Promise<void> {
   const lookup = findComponent(
     await request("GET", themesUrl(origin), credentials)
   );
+  // Against both arrays, because `settings.yml` ships both: comparing an
+  // instance's live Mappings against the products alone would report every
+  // Collection Link as drift on every run.
   const drift =
     lookup.kind === "one"
-      ? componentDrift(lookup.component.fields, renderFieldMappings(catalogue))
+      ? componentDrift(
+          lookup.component.fields,
+          renderFieldMappings(catalogue, collectionLinks)
+        )
       : [];
 
   process.stdout.write(`${renderComponent(lookup, drift)}\n`);

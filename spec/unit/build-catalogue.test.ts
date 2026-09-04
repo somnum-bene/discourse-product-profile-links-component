@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildCatalogue,
+  COLLECTION_LINK_SUFFIX,
+  type CollectionLink,
   dropdownOptionsFor,
   type ExcludedProduct,
   type FieldMapping,
@@ -158,12 +160,34 @@ const PRODUCTS: ProductRecord[] = [
 
 const SHEET_ROWS = [...MACHINE_ROWS, ...MASK_ROWS];
 
-function build(rows: SheetRow[] = SHEET_ROWS, products = PRODUCTS) {
-  return buildCatalogue({ sheetRows: rows, products });
+// Two hand-seeded Collection Links, one per Managed Field, shaped like the rows
+// the committed file carries. The Machine one is the legacy catch-all the
+// spreadsheet holds as `CPAP Machines (Discontinued)` — the value it becomes
+// comes from the sheet's `Text` column rather than the retired title, and the
+// derivation that does that is a later step (ADR-0020). Here they are given.
+const COLLECTION_LINKS: CollectionLink[] = [
+  {
+    userFieldName: "Machine",
+    value: "DreamStation Auto CPAP Machine (Discontinued)",
+    url: "https://www.cpap.com/collections/cpap-machines",
+  },
+  {
+    userFieldName: "Mask",
+    value: "Mirage FX Nasal CPAP Mask (Discontinued)",
+    url: "https://www.cpap.com/collections/nasal-cpap-masks",
+  },
+];
+
+function build(
+  rows: SheetRow[] = SHEET_ROWS,
+  products = PRODUCTS,
+  collectionLinks: CollectionLink[] = []
+) {
+  return buildCatalogue({ sheetRows: rows, products, collectionLinks });
 }
 
 function valuesFor(
-  entries: ResolvedProduct[],
+  entries: { userFieldName: string; value: string }[],
   userFieldName: string
 ): string[] {
   return entries
@@ -439,9 +463,70 @@ describe("buildCatalogue", () => {
   });
 });
 
+describe("Collection Links as the third output", () => {
+  it("returns them alongside the catalogue and the Excluded Products", () => {
+    const result = build(SHEET_ROWS, PRODUCTS, COLLECTION_LINKS);
+
+    expect(result.collectionLinks).toEqual(COLLECTION_LINKS);
+    expect(result.catalogue.length).toBeGreaterThan(0);
+    expect(result.exclusions.length).toBeGreaterThan(0);
+  });
+
+  it("carries no product handle and no product status", () => {
+    // A collection has neither, which is why this is its own type rather than
+    // a flag on a Resolved Product: admitting a sentinel handle or status
+    // would mean relaxing `readResolvedProducts` for every row (ADR-0021).
+    const [link] = build(
+      SHEET_ROWS,
+      PRODUCTS,
+      COLLECTION_LINKS
+    ).collectionLinks;
+
+    expect(Object.keys(link).sort()).toEqual(["url", "userFieldName", "value"]);
+  });
+
+  it("is empty rather than absent when none are given", () => {
+    expect(build().collectionLinks).toEqual([]);
+  });
+
+  it("orders them by field then value, as it orders the other two outputs", () => {
+    const scrambled: CollectionLink[] = [
+      {
+        userFieldName: "Mask",
+        value: "Zest Nasal CPAP Mask (Discontinued)",
+        url: "https://www.cpap.com/collections/nasal-cpap-masks",
+      },
+      ...COLLECTION_LINKS,
+    ].reverse();
+
+    const { collectionLinks } = build(SHEET_ROWS, PRODUCTS, scrambled);
+
+    expect(
+      collectionLinks.map((link) => `${link.userFieldName} ${link.value}`)
+    ).toEqual([
+      "Machine DreamStation Auto CPAP Machine (Discontinued)",
+      "Mask Mirage FX Nasal CPAP Mask (Discontinued)",
+      "Mask Zest Nasal CPAP Mask (Discontinued)",
+    ]);
+  });
+
+  it("names the suffix on exact bytes, because resolution is an exact match", () => {
+    // One leading space, one capital `D`, no variants. `resolveProfileLinks`
+    // looks the User's stored value up in a map keyed by the Mapping value, so
+    // ` (discontinued)` or `(Discontinued)` unspaced is not a near miss — it is
+    // a value that resolves for nobody (ADR-0020).
+    expect(COLLECTION_LINK_SUFFIX).toBe(" (Discontinued)");
+
+    for (const link of COLLECTION_LINKS) {
+      expect(link.value.endsWith(COLLECTION_LINK_SUFFIX)).toBe(true);
+      expect(link.value.endsWith(" (discontinued)")).toBe(false);
+    }
+  });
+});
+
 describe("renderFieldMappings", () => {
   it("produces the profile_link_fields structure the setting expects", () => {
-    const fields = renderFieldMappings(build().catalogue);
+    const fields = renderFieldMappings(build().catalogue, []);
 
     expect(fields.map((field) => field.user_field_name)).toEqual([
       "Machine",
@@ -474,7 +559,7 @@ describe("renderFieldMappings", () => {
     ];
 
     const { catalogue, exclusions } = build([...MACHINE_ROWS, ...blankRows]);
-    const fields = renderFieldMappings(catalogue);
+    const fields = renderFieldMappings(catalogue, []);
 
     expect(fields.map((field) => field.user_field_name)).toEqual(["Machine"]);
     expect(
@@ -484,6 +569,114 @@ describe("renderFieldMappings", () => {
           exclusion.reason === "blank-title"
       )
     ).toBe(true);
+  });
+
+  it("emits the Collection Links it is handed, after each field's products", () => {
+    const { catalogue, collectionLinks } = build(
+      SHEET_ROWS,
+      PRODUCTS,
+      COLLECTION_LINKS
+    );
+    const fields = renderFieldMappings(catalogue, collectionLinks);
+
+    expect(fields.map((field) => field.user_field_name)).toEqual([
+      "Machine",
+      "Mask",
+    ]);
+    expect(fields[0].mappings.at(-1)).toEqual({
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: "https://www.cpap.com/collections/cpap-machines",
+    });
+    expect(fields[1].mappings.at(-1)).toEqual({
+      value: "Mirage FX Nasal CPAP Mask (Discontinued)",
+      url: "https://www.cpap.com/collections/nasal-cpap-masks",
+    });
+  });
+
+  it("emits a Collection Link for a field with no products at all", () => {
+    // The field is absent from the products entirely, so this is the case where
+    // the second array decides whether the field ships at all. An empty
+    // mappings list would be a Config Problem; a field with one Collection Link
+    // in it is a field that resolves for the Users holding that value.
+    const fields = renderFieldMappings([], COLLECTION_LINKS);
+
+    expect(fields.map((field) => field.user_field_name)).toEqual([
+      "Machine",
+      "Mask",
+    ]);
+    expect(fields[0].mappings).toEqual([
+      {
+        value: "DreamStation Auto CPAP Machine (Discontinued)",
+        url: "https://www.cpap.com/collections/cpap-machines",
+      },
+    ]);
+  });
+
+  it("ships only the products when handed an empty second array", () => {
+    // An empty list has to be passed, not omitted: the parameter takes no
+    // default, so a caller who has no Collection Links says so rather than
+    // silently dropping them (ADR-0021).
+    const { catalogue } = build();
+    const values = renderFieldMappings(catalogue, []).flatMap((field) =>
+      field.mappings.map(
+        (mapping) => `${field.user_field_name} ${mapping.value}`
+      )
+    );
+
+    expect(values).toEqual(
+      catalogue.map((entry) => `${entry.userFieldName} ${entry.value}`)
+    );
+    expect(values.some((value) => value.includes(COLLECTION_LINK_SUFFIX))).toBe(
+      false
+    );
+  });
+});
+
+describe("dropdownOptionsFor", () => {
+  it("cannot be handed a Collection Link at all", () => {
+    // The guarantee, as the compiler enforces it: a `CollectionLink` has no
+    // `handle` and no `status`, so it is not assignable to `ResolvedProduct`
+    // and no call to this function can offer one. It is a type error rather
+    // than a runtime filter because a filter is something every future caller
+    // has to remember, and the first one that forgets offers a discontinued
+    // machine to a User choosing theirs (ADR-0021). `pnpm lint:types` is where
+    // this line is checked; the assertion below states the same fact at
+    // runtime, so the shape is pinned even for a reader who never runs it.
+    // @ts-expect-error a Collection Link is not a Resolved Product
+    const forced: ResolvedProduct[] = [COLLECTION_LINKS[0]];
+
+    expect(forced[0]).not.toHaveProperty("handle");
+    expect(forced[0]).not.toHaveProperty("status");
+  });
+
+  it("offers no Collection Link value even when both come from one build", () => {
+    const { catalogue, collectionLinks } = build(
+      SHEET_ROWS,
+      PRODUCTS,
+      COLLECTION_LINKS
+    );
+    const offered = dropdownOptionsFor(catalogue);
+
+    for (const link of collectionLinks) {
+      const field = offered.find(
+        (entry) => entry.user_field_name === link.userFieldName
+      );
+
+      // The field is there — this is a value missing from a list that exists,
+      // not a whole field quietly absent.
+      expect(field).toBeDefined();
+      expect(field?.options).not.toContain(link.value);
+    }
+
+    // And the same values are in the Mappings, so the asymmetry is the whole
+    // of the difference between the two sinks.
+    const mapped = renderFieldMappings(catalogue, collectionLinks).flatMap(
+      (field) => field.mappings.map((mapping) => mapping.value)
+    );
+
+    for (const link of collectionLinks) {
+      expect(mapped).toContain(link.value);
+    }
   });
 });
 
@@ -535,7 +728,7 @@ describe("the cross-sink assertion", () => {
 
     expect(
       crossSinkMismatches(
-        renderFieldMappings(catalogue),
+        renderFieldMappings(catalogue, []),
         dropdownOptionsFor(catalogue)
       )
     ).toEqual([]);
@@ -547,7 +740,7 @@ describe("the cross-sink assertion", () => {
     // do not, and under an exact trimmed-string match those are unrelated
     // strings that look equivalent side by side (ADR-0011).
     const { catalogue } = build();
-    const fields = renderFieldMappings(catalogue);
+    const fields = renderFieldMappings(catalogue, []);
     const doctored: FieldMapping[] = fields.map((field) => ({
       user_field_name: field.user_field_name,
       mappings: field.mappings.map((mapping, index) =>
@@ -568,7 +761,7 @@ describe("the cross-sink assertion", () => {
 
   it("fails when a whole field's Mappings go missing", () => {
     const { catalogue } = build();
-    const fields = renderFieldMappings(catalogue).filter(
+    const fields = renderFieldMappings(catalogue, []).filter(
       (field) => field.user_field_name !== "Mask"
     );
 
@@ -590,12 +783,48 @@ describe("the cross-sink assertion", () => {
 
     expect(
       crossSinkMismatches(
-        renderFieldMappings(catalogue),
+        renderFieldMappings(catalogue, []),
         dropdownOptionsFor(catalogue).filter(
           (entry) => entry.user_field_name !== "Mask"
         )
       )
     ).toEqual([]);
+  });
+
+  it("passes on a real Collection Link, which is expected to be absent from the options", () => {
+    // The same relaxation on the real thing rather than a doctored list. Both
+    // Collection Links below are Mappings and neither is a Dropdown Option,
+    // and that is not drift: nobody can select a value that is not offered, so
+    // a Mapping without an Option has no failure mode. ADR-0011's failure mode
+    // runs the other way — an Option with no Mapping is an Unmatched Value —
+    // and the check above still bites on it.
+    //
+    // Do not "fix" this back into an equality assertion. Equality was only ever
+    // the cheapest way to get `Options ⊆ Mapping values` when every catalogue
+    // entry was a product, and restoring it would silently re-couple the two
+    // sinks and make Collection Links unshippable.
+    const { catalogue, collectionLinks } = build(
+      SHEET_ROWS,
+      PRODUCTS,
+      COLLECTION_LINKS
+    );
+    const fields = renderFieldMappings(catalogue, collectionLinks);
+    const options = dropdownOptionsFor(catalogue);
+
+    expect(crossSinkMismatches(fields, options)).toEqual([]);
+
+    // Stated so the test above cannot pass by there being nothing asymmetric
+    // in the fixture.
+    const mappingCount = fields.reduce(
+      (total, field) => total + field.mappings.length,
+      0
+    );
+    const optionCount = options.reduce(
+      (total, field) => total + field.options.length,
+      0
+    );
+
+    expect(mappingCount).toBe(optionCount + COLLECTION_LINKS.length);
   });
 });
 

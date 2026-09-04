@@ -262,6 +262,57 @@ describe("resolveProfileLinks", () => {
     ]);
   });
 
+  it("resolves a Mapping the field never offered as a Dropdown Option", () => {
+    // The one assumption the whole Collection Link feature rests on, pinned
+    // rather than assumed (ADR-0021). Nothing in the runtime changes to make
+    // this work: `resolveProfileLinks` looks the User's stored value up in
+    // `urlsByValue` and never consults an options list at all, so a Mapping
+    // with no Dropdown Option behind it resolves exactly like any other.
+    //
+    // The fixture is what the feature actually ships: a value carrying the
+    // ` (Discontinued)` suffix, pointing at a cpap.com collection page, on a
+    // field whose other Mappings are ordinary products. The suffix is written
+    // out here on exact bytes — one leading space, one capital `D` — because
+    // resolution is an exact trimmed string match, and a near miss resolves
+    // for nobody.
+    const value = "DreamStation Auto CPAP Machine (Discontinued)";
+    const url = "https://www.cpap.com/collections/cpap-machines";
+    const withCollectionLink = readLinkConfig(
+      settingsWith([
+        {
+          user_field_name: "Machine",
+          mappings: [...MACHINE_FIELD.mappings, { value, url }],
+        },
+      ]),
+      SITE_USER_FIELDS
+    );
+
+    // No Config Problem: a Mapping the options do not offer is not a fault the
+    // component reports, which is what makes the feature free at runtime.
+    expect(withCollectionLink.problems).toEqual([]);
+
+    const result = resolveProfileLinks(withCollectionLink, { 1: value });
+
+    expect(result.links).toEqual([{ fieldName: "Machine", value, url }]);
+    expect(result.unmatched).toEqual([]);
+
+    // And the near misses are not the same value. Each of these is what a
+    // member would hold if the suffix were generated even slightly differently,
+    // and each resolves to nothing.
+    for (const nearMiss of [
+      "DreamStation Auto CPAP Machine",
+      "DreamStation Auto CPAP Machine (discontinued)",
+      "DreamStation Auto CPAP Machine(Discontinued)",
+    ]) {
+      const missed = resolveProfileLinks(withCollectionLink, { 1: nearMiss });
+
+      expect(missed.links).toEqual([]);
+      expect(missed.unmatched).toEqual([
+        { fieldName: "Machine", value: nearMiss },
+      ]);
+    }
+  });
+
   it("renders Profile Links in the administrator's configured order", () => {
     const { links } = resolveProfileLinks(config, {
       2: "F20",

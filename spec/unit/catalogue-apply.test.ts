@@ -652,7 +652,7 @@ describe("how far the instance's component is from the catalogue", () => {
     // catalogue on disk carries 55 Mappings. Writing the Dropdown Options now
     // would produce an Unmatched Value for every one of them.
     const catalogue = realCatalogue();
-    const notes = componentDrift([], renderFieldMappings(catalogue));
+    const notes = componentDrift([], renderFieldMappings(catalogue, []));
 
     expect(notes.map((note) => note.user_field_name)).toEqual([
       "Machine",

@@ -1,8 +1,8 @@
 // Everything the Catalogue Refresh decides, kept away from everything it does.
-// The command is a shell: read three files, post two kinds of GraphQL query,
-// write two files. Which handles to ask about, what a well-formed answer looks
-// like, what the catalogue file says, and what the review document reports are
-// all decided here, where a test can reach them.
+// The command is a shell: read the committed files, post two kinds of GraphQL
+// query, write the ones it owns. Which handles to ask about, what a well-formed
+// answer looks like, what the catalogue and collection-links files say, and what
+// the review document reports are all decided here, where a test can reach them.
 //
 // `buildCatalogue` judges the products. This file never re-judges them: it asks
 // Shopify for facts, hands them over, and reports what came back. The one place
@@ -12,6 +12,8 @@
 
 import { createHash } from "node:crypto";
 import {
+  COLLECTION_LINK_SUFFIX,
+  type CollectionLink,
   type ExcludedProduct,
   type ExclusionReason,
   handleFromSuggestedUrl,
@@ -40,8 +42,20 @@ export const TOKEN_VAR = "SHOPIFY_API_TOKEN";
  */
 export const SHOPIFY_API_VERSION = "2026-07";
 
-/** The Resolved Product Catalogue: committed, and the only input to `build`. */
+/** The Resolved Product Catalogue: committed, and one of two inputs to `build`. */
 export const CATALOGUE_FILE = "data/resolved-products.csv";
+
+/**
+ * The Collection Links: committed, and the second input to `build`. A sibling of
+ * the Resolved Product Catalogue rather than part of it — a Resolved Product
+ * requires a real handle and a real product status, and a collection has
+ * neither, so widening the catalogue file would mean relaxing its reader for
+ * every row (ADR-0021).
+ *
+ * Hand-seeded today. When derivation lands it is written by the same refresh
+ * that writes the catalogue, which is why it already carries a digest.
+ */
+export const COLLECTION_LINKS_FILE = "data/collection-links.csv";
 
 /**
  * The review document. `.ig.` is ignored, because this is a working document
@@ -121,6 +135,17 @@ export const CATALOGUE_COLUMNS = [
   "value",
   "handle",
   "status",
+  "url",
+] as const;
+
+/**
+ * The collection-links file's columns, in order. Three, not five: the two the
+ * catalogue carries and this file does not are exactly the two facts a
+ * collection has no answer for.
+ */
+export const COLLECTION_LINK_COLUMNS = [
+  "user_field_name",
+  "value",
   "url",
 ] as const;
 
@@ -453,19 +478,130 @@ export function resolvedProductsCsv(
   return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
 }
 
-/** The digest a catalogue file declares, without reading the rest of it. */
-export function declaredDigest(text: string): string {
+/**
+ * The Collection Links as a file, in the same digested shape as the catalogue.
+ * It carries a digest for the same reason the catalogue does: a curated
+ * decision is approved once and then read by two more commands.
+ */
+export function collectionLinksCsv(
+  collectionLinks: readonly CollectionLink[]
+): string {
+  const rows = collectionLinks.map((entry) =>
+    csvLine([entry.userFieldName, entry.value, entry.url])
+  );
+  const body = `${[csvLine([...COLLECTION_LINK_COLUMNS]), ...rows].join("\n")}\n`;
+
+  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+}
+
+/**
+ * The digest a digested file declares, without reading the rest of it. The file
+ * name is only ever used to say which file the message is about — the catalogue
+ * by default, since that is the one three commands ask about.
+ */
+export function declaredDigest(text: string, file = CATALOGUE_FILE): string {
   const firstLine = text.split("\n", 1)[0] ?? "";
   const match = DIGEST_LINE.exec(firstLine);
 
   if (!match) {
     throw new CatalogueRefreshError(
-      `${CATALOGUE_FILE} should start with a "${DIGEST_PREFIX}<64 hex digits>" ` +
+      `${file} should start with a "${DIGEST_PREFIX}<64 hex digits>" ` +
         `line. It starts with ${JSON.stringify(firstLine)}.`
     );
   }
 
   return match[1];
+}
+
+/**
+ * Everything below a digested file's first line, having checked that it is what
+ * the first line says it is.
+ */
+function verifiedBody(text: string, file: string): string {
+  const declared = declaredDigest(text, file);
+  const newline = text.indexOf("\n");
+  const body = text.slice(newline + 1);
+  const found = digestOf(body);
+
+  if (found !== declared) {
+    throw new CatalogueRefreshError(
+      `${file} does not match its own digest.\n` +
+        `  declared: ${declared}\n` +
+        `  found:    ${found}\n` +
+        `The file has been edited or truncated since it was generated. ` +
+        `Regenerate it rather than repairing it by hand.`
+    );
+  }
+
+  return body;
+}
+
+/**
+ * A digested file's data rows, having checked its header is exactly the columns
+ * expected. The header check is what stops a column being added, renamed or
+ * reordered from silently shifting what every field below it means.
+ */
+function dataRowsOf(
+  text: string,
+  file: string,
+  columns: readonly string[]
+): string[][] {
+  const rows = parseCsv(verifiedBody(text, file));
+  const [header, ...dataRows] = rows;
+
+  if (
+    !header ||
+    header.length !== columns.length ||
+    !header.every((column, index) => column === columns[index])
+  ) {
+    throw new CatalogueRefreshError(
+      `${file} has an unexpected header row.\n` +
+        `  expected: ${JSON.stringify(columns)}\n` +
+        `  found:    ${JSON.stringify(header ?? [])}`
+    );
+  }
+
+  return dataRows;
+}
+
+/**
+ * The Collection Links a file holds, refusing anything that is not exactly what
+ * `collectionLinksCsv` writes.
+ *
+ * The suffix is checked here, on exact bytes. A Collection Link's value is the
+ * string a User's stored value is matched against and the anchor text they
+ * read, so ` (discontinued)` or `(Discontinued)` without its leading space is
+ * not a near miss — it is a different value, which resolves for nobody while
+ * looking right in a diff.
+ */
+export function readCollectionLinks(text: string): CollectionLink[] {
+  const dataRows = dataRowsOf(
+    text,
+    COLLECTION_LINKS_FILE,
+    COLLECTION_LINK_COLUMNS
+  );
+
+  return dataRows.map((row, index) => {
+    const [userFieldName, value, url] = row;
+    const where = `${COLLECTION_LINKS_FILE} row ${index + 2}`;
+
+    if (!userFieldName || !value || !url) {
+      throw new CatalogueRefreshError(
+        `${where} has an empty field: ${JSON.stringify(row)}`
+      );
+    }
+
+    if (!value.endsWith(COLLECTION_LINK_SUFFIX)) {
+      throw new CatalogueRefreshError(
+        `${where} has the value ${JSON.stringify(value)}, which does not end ` +
+          `in ${JSON.stringify(COLLECTION_LINK_SUFFIX)}. Every Collection ` +
+          `Link says so in its own value, because the value is also the ` +
+          `anchor text a User reads (ADR-0020).`
+      );
+    }
+
+    return { userFieldName, value, url };
+  });
 }
 
 /**
@@ -475,35 +611,7 @@ export function declaredDigest(text: string): string {
  * an edit made to the file afterwards has to be loud.
  */
 export function readResolvedProducts(text: string): ResolvedProduct[] {
-  const declared = declaredDigest(text);
-  const newline = text.indexOf("\n");
-  const body = text.slice(newline + 1);
-  const found = digestOf(body);
-
-  if (found !== declared) {
-    throw new CatalogueRefreshError(
-      `${CATALOGUE_FILE} does not match its own digest.\n` +
-        `  declared: ${declared}\n` +
-        `  found:    ${found}\n` +
-        `The file has been edited or truncated since it was generated. ` +
-        `Regenerate it rather than repairing it by hand.`
-    );
-  }
-
-  const rows = parseCsv(body);
-  const [header, ...dataRows] = rows;
-
-  if (
-    !header ||
-    header.length !== CATALOGUE_COLUMNS.length ||
-    !header.every((column, index) => column === CATALOGUE_COLUMNS[index])
-  ) {
-    throw new CatalogueRefreshError(
-      `${CATALOGUE_FILE} has an unexpected header row.\n` +
-        `  expected: ${JSON.stringify(CATALOGUE_COLUMNS)}\n` +
-        `  found:    ${JSON.stringify(header ?? [])}`
-    );
-  }
+  const dataRows = dataRowsOf(text, CATALOGUE_FILE, CATALOGUE_COLUMNS);
 
   return dataRows.map((row, index) => {
     const [userFieldName, value, handle, status, url] = row;

@@ -7,6 +7,8 @@ import {
   type SiteUserField,
 } from "../../javascripts/discourse/lib/profile-links";
 import {
+  COLLECTION_LINK_SUFFIX,
+  dropdownOptionsFor,
   FieldMapping,
   renderFieldMappings,
 } from "../../scripts/lib/build-catalogue";
@@ -22,7 +24,9 @@ import {
 } from "../../scripts/lib/build-settings";
 import {
   CATALOGUE_FILE,
+  COLLECTION_LINKS_FILE,
   declaredDigest,
+  readCollectionLinks,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh";
 import { refusedUrls } from "../../scripts/lib/settings-schema";
@@ -349,6 +353,9 @@ describe("the settings.yml this repository ships", () => {
   const settingsText = readFileSync(SETTINGS_FILE, "utf8");
   const catalogueText = readFileSync(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
+  const collectionLinks = readCollectionLinks(
+    readFileSync(COLLECTION_LINKS_FILE, "utf8")
+  );
   const parsed = parse(settingsText) as SettingsFile;
   const shipped = parsed.profile_link_fields.default;
 
@@ -360,10 +367,47 @@ describe("the settings.yml this repository ships", () => {
     expect(
       settingsWithCatalogue(
         settingsText,
-        renderFieldMappings(catalogue),
+        renderFieldMappings(catalogue, collectionLinks),
         declaredDigest(catalogueText)
       )
     ).toBe(settingsText);
+  });
+
+  it("ships the seeded Collection Links as Mappings", () => {
+    // The tracer bullet's far end: a hand-seeded row in a committed file
+    // reaches the setting an instance actually receives, suffix and collection
+    // URL intact (ADR-0021).
+    expect(collectionLinks.length).toBeGreaterThan(0);
+
+    const shippedMappings = shipped.flatMap((field) =>
+      field.mappings.map((mapping) => ({
+        userFieldName: field.user_field_name,
+        value: mapping.value,
+        url: mapping.url,
+      }))
+    );
+
+    for (const link of collectionLinks) {
+      expect(shippedMappings).toContainEqual(link);
+    }
+  });
+
+  it("offers no seeded Collection Link value as a Dropdown Option", () => {
+    // The other half, and the reason for the second array: what a site offers
+    // comes from `dropdownOptionsFor`, which is handed the products alone, so
+    // a Collection Link cannot be offered by construction (ADR-0021).
+    const offered = dropdownOptionsFor(catalogue);
+
+    for (const link of collectionLinks) {
+      const field = offered.find(
+        (entry) => entry.user_field_name === link.userFieldName
+      );
+
+      // The field itself has to be there, or this would pass by the value
+      // being absent from a list that does not exist.
+      expect(field).toBeDefined();
+      expect(field?.options).not.toContain(link.value);
+    }
   });
 
   it("records the digest of the catalogue it was built from", () => {
@@ -439,21 +483,30 @@ describe("the settings.yml this repository ships", () => {
     });
   });
 
-  it("links only to https cpap.com product pages", () => {
+  it("links only to https cpap.com product and collection pages", () => {
     // Narrower than the schema gate above and for a different reason: Discourse
     // would accept `http://`, a path, or somebody else's host quite happily.
     // Pinning the host here is also what puts the one thing the schema mirror
     // cannot settle — Ruby's two URI parsers disagree over an underscore in a
     // host — out of reach.
+    //
+    // Which of the two paths is expected is decided by the value's suffix, so
+    // this also pins the suffix on exact bytes: one leading space, one capital
+    // `D`, nothing else. Resolution is an exact trimmed string match, so a
+    // near miss resolves for nobody while looking right in a diff.
     for (const field of shipped) {
       for (const mapping of field.mappings) {
         const url = new URL(mapping.url);
+        const isCollectionLink = mapping.value.endsWith(COLLECTION_LINK_SUFFIX);
 
         expect(url.protocol).toBe("https:");
         expect(url.host).toBe("www.cpap.com");
-        expect(url.pathname.startsWith("/products/")).toBe(true);
+        expect(url.pathname.startsWith("/products/")).toBe(!isCollectionLink);
+        expect(url.pathname.startsWith("/collections/")).toBe(isCollectionLink);
       }
     }
+
+    expect(COLLECTION_LINK_SUFFIX).toBe(" (Discontinued)");
 
     // The spreadsheet these titles came from was written for sleeping.com, and
     // the URLs are Shopify's rather than rewritten ones (ADR-0009). One
@@ -461,16 +514,28 @@ describe("the settings.yml this repository ships", () => {
     expect(settingsText).not.toContain("sleeping.com");
   });
 
-  it("ships every Mapping in the catalogue and nothing else", () => {
+  it("ships every Mapping in the two committed files and nothing else", () => {
+    // Built up field by field rather than taken from `renderFieldMappings`,
+    // which is the thing under test here: within a field the products come
+    // first and the Collection Links after them.
+    const expected = SHEET_TABS.flatMap((tab) =>
+      [
+        ...catalogue.filter(
+          (entry) => entry.userFieldName === tab.userFieldName
+        ),
+        ...collectionLinks.filter(
+          (entry) => entry.userFieldName === tab.userFieldName
+        ),
+      ].map((entry) => `${entry.userFieldName} ${entry.value}`)
+    );
+
     expect(
       shipped.flatMap((field) =>
         field.mappings.map(
           (mapping) => `${field.user_field_name} ${mapping.value}`
         )
       )
-    ).toEqual(
-      catalogue.map((entry) => `${entry.userFieldName} ${entry.value}`)
-    );
+    ).toEqual(expected);
   });
 
   it("gives no field an empty mappings list", () => {

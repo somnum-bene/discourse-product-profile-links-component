@@ -6,7 +6,8 @@
 //
 // The rules it applies are recorded in docs/adr/0009 (Shopify is the authority
 // for product URLs), 0010 (the sheet defines membership, Shopify defines
-// validity) and 0012 (discontinued equipment is out of scope).
+// validity), 0020 (discontinued equipment links to a collection) and 0021 (a
+// Collection Link is a Mapping with no Dropdown Option).
 
 /**
  * One row of a Sheet Export, reduced to the two columns that carry meaning.
@@ -61,6 +62,44 @@ export interface ResolvedProduct {
 }
 
 /**
+ * A Profile Link whose target is a cpap.com collection page rather than a
+ * product page, for equipment cpap.com no longer sells (ADR-0020).
+ *
+ * It is deliberately not a `ResolvedProduct` and deliberately not a flag on
+ * one. There is no `handle` and no `status` because a collection has neither,
+ * and inventing sentinels for them would mean relaxing
+ * `readResolvedProducts` for every row and making the Resolved Product
+ * Catalogue mean two things at once. Being a separate type in a separate array
+ * is what makes the asymmetry structural: `dropdownOptionsFor` cannot emit one
+ * because it is never handed one (ADR-0021).
+ */
+export interface CollectionLink {
+  userFieldName: string;
+  /**
+   * The equipment's name with `COLLECTION_LINK_SUFFIX` appended. This is both
+   * the value a User holds and the anchor text they read, which is why there is
+   * no separate display label: a second string can drift from the first, and
+   * the value is the only place a Collection Link can describe itself honestly.
+   */
+  value: string;
+  /** The curated cpap.com collection URL. */
+  url: string;
+}
+
+/**
+ * The literal appended to a Collection Link's value — one leading space, one
+ * capital `D`, no variants. Exported because resolution is an exact trimmed
+ * string match against what the User holds, so this string is load-bearing and
+ * every place that asserts it has to be asserting the same bytes.
+ *
+ * Not to be confused with the ` (discontinued)` the exclusion check below
+ * matches on: that one is a lowercased comparison form for spotting the four
+ * retired legacy catch-all titles in the spreadsheet, and it is never a value
+ * this pipeline writes.
+ */
+export const COLLECTION_LINK_SUFFIX = " (Discontinued)";
+
+/**
  * Why a Suggested Title did not make the catalogue. Each value is a separate
  * fact someone can act on, which is the reason they are not collapsed into one
  * "failed" outcome — an unpublished product is a merchandising job, a missing
@@ -99,11 +138,27 @@ export interface ExcludedProduct {
 export interface CatalogueInput {
   sheetRows: SheetRow[];
   products: ProductRecord[];
+  /**
+   * The Collection Links, as the committed collection-links file holds them.
+   * Hand-seeded for now: deriving them from the Excluded Products and the
+   * Collection Assignment is a later step, and this ticket proves the sink
+   * path works before anything depends on it.
+   *
+   * Required, and not optional, for the reason `renderFieldMappings` takes no
+   * default: a caller who leaves them out gets no Collection Links and no
+   * complaint, and none of them means to.
+   */
+  collectionLinks: readonly CollectionLink[];
 }
 
 export interface CatalogueResult {
   catalogue: ResolvedProduct[];
   exclusions: ExcludedProduct[];
+  /**
+   * The third output, alongside the catalogue and the Excluded Products. It
+   * goes to the Mappings sink and nowhere else (ADR-0021).
+   */
+  collectionLinks: CollectionLink[];
 }
 
 /** One entry of the `profile_link_fields` setting value. */
@@ -194,6 +249,7 @@ function compareValues(a: string, b: string): number {
 export function buildCatalogue({
   sheetRows,
   products,
+  collectionLinks,
 }: CatalogueInput): CatalogueResult {
   const byHandle = new Map<string, ProductRecord>();
   const byTitle = new Map<string, ProductRecord[]>();
@@ -380,15 +436,32 @@ export function buildCatalogue({
   catalogue.sort(byFieldThenValue);
   exclusions.sort(byFieldThenValue);
 
-  return { catalogue, exclusions };
+  // Sorted on the way through rather than trusted as given, so the order the
+  // Mappings ship in is decided here for both arrays by the same rule. A field
+  // the sheet never presented ranks 0, which is the same fallback the other two
+  // outputs get.
+  const sortedCollectionLinks = [...collectionLinks].sort(byFieldThenValue);
+
+  return { catalogue, exclusions, collectionLinks: sortedCollectionLinks };
 }
 
-function groupByField(
-  catalogue: ResolvedProduct[]
-): { userFieldName: string; entries: ResolvedProduct[] }[] {
-  const groups: { userFieldName: string; entries: ResolvedProduct[] }[] = [];
+/**
+ * The shape both sinks group on: a Custom User Field, a value, and the URL that
+ * value resolves to. A `ResolvedProduct` is one of these plus a handle and a
+ * status; a `CollectionLink` is exactly one.
+ */
+interface MappingEntry {
+  userFieldName: string;
+  value: string;
+  url: string;
+}
 
-  for (const entry of catalogue) {
+function groupByField<Entry extends MappingEntry>(
+  entries: readonly Entry[]
+): { userFieldName: string; entries: Entry[] }[] {
+  const groups: { userFieldName: string; entries: Entry[] }[] = [];
+
+  for (const entry of entries) {
     const group = groups.find((g) => g.userFieldName === entry.userFieldName);
 
     if (group) {
@@ -405,20 +478,34 @@ function groupByField(
  * The value of the `profile_link_fields` setting, as a data structure rather
  * than YAML text — the serialiser stays outside the tested surface.
  *
- * A Custom User Field with no Resolved Products behind it produces no entry at
- * all. An entry with an empty `mappings` list is a Config Problem, so shipping
- * one would be worse than shipping nothing (ADR-0012).
+ * A Custom User Field with nothing behind it produces no entry at all. An entry
+ * with an empty `mappings` list is a Config Problem, so shipping one would be
+ * worse than shipping nothing (ADR-0012).
+ *
+ * This is the sink that takes both arrays. The products come first within each
+ * field and the Collection Links after them, because one concatenation of two
+ * already-ordered lists is an order anyone can predict from the inputs
+ * (ADR-0021).
+ *
+ * Both parameters are required, and the second deliberately has no default. A
+ * default of `[]` would let a caller who forgot the argument drop every
+ * Collection Link with no type error — which is the same "guarantee turned into
+ * a habit" that ADR-0021 rejected a `kind` discriminator for. A caller that
+ * genuinely has none passes `[]` and says so.
  */
 export function renderFieldMappings(
-  catalogue: ResolvedProduct[]
+  catalogue: readonly ResolvedProduct[],
+  collectionLinks: readonly CollectionLink[]
 ): FieldMapping[] {
-  return groupByField(catalogue).map((group) => ({
-    user_field_name: group.userFieldName,
-    mappings: group.entries.map((entry) => ({
-      value: entry.value,
-      url: entry.url,
-    })),
-  }));
+  return groupByField<MappingEntry>([...catalogue, ...collectionLinks]).map(
+    (group) => ({
+      user_field_name: group.userFieldName,
+      mappings: group.entries.map((entry) => ({
+        value: entry.value,
+        url: entry.url,
+      })),
+    })
+  );
 }
 
 /**
@@ -430,9 +517,16 @@ export function renderFieldMappings(
  * their machine, no Profile Link appears, and nothing is logged unless Debug
  * Mode is on. Deriving the two lists separately would make that a matter of
  * discipline.
+ *
+ * It takes only the Resolved Products, and that is the whole guarantee behind
+ * Collection Links: this function cannot offer one because it is never handed
+ * one, and a `CollectionLink` has no `handle` and no `status` so it cannot be
+ * passed as a `ResolvedProduct` either. A `kind` discriminator here would have
+ * turned that guarantee into something every future caller has to remember
+ * (ADR-0021).
  */
 export function dropdownOptionsFor(
-  catalogue: ResolvedProduct[]
+  catalogue: readonly ResolvedProduct[]
 ): FieldOptions[] {
   return groupByField(catalogue).map((group) => ({
     user_field_name: group.userFieldName,

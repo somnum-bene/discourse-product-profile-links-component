@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildCatalogue,
+  COLLECTION_LINK_SUFFIX,
+  type CollectionLink,
   type ProductRecord,
   type ResolvedProduct,
   type SheetRow,
@@ -9,6 +11,9 @@ import {
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINK_COLUMNS,
+  COLLECTION_LINKS_FILE,
+  collectionLinksCsv,
   curatesTitles,
   declaredDigest,
   digestOf,
@@ -21,6 +26,7 @@ import {
   mergeProducts,
   productsByHandleQuery,
   productsFromByHandleResponse,
+  readCollectionLinks,
   readResolvedProducts,
   renderReviewDocument,
   resolvedProductsCsv,
@@ -566,6 +572,122 @@ describe("the catalogue file", () => {
   });
 });
 
+describe("the collection-links file", () => {
+  const LINKS: CollectionLink[] = [
+    {
+      userFieldName: "Machine",
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: "https://www.cpap.com/collections/cpap-machines",
+    },
+    {
+      userFieldName: "Mask",
+      value: "DreamWear Full Face Mask (S, M, L) (Discontinued)",
+      url: "https://www.cpap.com/collections/full-face-cpap-masks",
+    },
+  ];
+
+  it("is a digest line, a header, and one row per Collection Link", () => {
+    const lines = collectionLinksCsv(LINKS).split("\n");
+
+    expect(lines[0]).toMatch(/^# sha256 [0-9a-f]{64}$/);
+    expect(lines[1]).toBe("user_field_name,value,url");
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toBe("");
+  });
+
+  it("carries no handle and no status column", () => {
+    // The two columns the catalogue has and this file does not are exactly the
+    // two facts a collection has no answer for (ADR-0021).
+    expect(COLLECTION_LINK_COLUMNS).toEqual([
+      "user_field_name",
+      "value",
+      "url",
+    ]);
+    expect(collectionLinksCsv(LINKS)).not.toContain("ACTIVE");
+  });
+
+  it("round-trips every Collection Link unchanged", () => {
+    expect(readCollectionLinks(collectionLinksCsv(LINKS))).toEqual(LINKS);
+  });
+
+  it("reads the file this repository commits", () => {
+    const committed = readCollectionLinks(
+      readFileSync(COLLECTION_LINKS_FILE, "utf8")
+    );
+
+    expect(committed.length).toBeGreaterThan(0);
+
+    for (const link of committed) {
+      expect(link.value.endsWith(COLLECTION_LINK_SUFFIX)).toBe(true);
+      expect(link.url.startsWith("https://www.cpap.com/collections/")).toBe(
+        true
+      );
+    }
+  });
+
+  it("refuses a file with no digest line, naming this file rather than the catalogue", () => {
+    expect(() => readCollectionLinks("user_field_name,value,url\n")).toThrow(
+      new RegExp(COLLECTION_LINKS_FILE.replace(/[.]/g, "\\."))
+    );
+  });
+
+  it("refuses a file edited by hand after it was generated", () => {
+    const tampered = collectionLinksCsv(LINKS).replace(
+      "cpap-machines",
+      "bipap-machines"
+    );
+
+    expect(() => readCollectionLinks(tampered)).toThrow(
+      /does not match its own digest/
+    );
+  });
+
+  it("refuses a file whose columns are not the ones it writes", () => {
+    const body = "user_field_name,value,handle,status,url\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/unexpected header row/);
+  });
+
+  it("refuses a row with an empty field", () => {
+    const body = "user_field_name,value,url\nMachine,A (Discontinued),\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/empty field/);
+  });
+
+  it("refuses a value that does not end in the suffix, exactly", () => {
+    // Three near misses, each of which resolves for nobody while looking right
+    // in a diff: resolution is an exact trimmed string match against what the
+    // User holds, so the leading space and the capital `D` are load-bearing.
+    for (const value of [
+      "DreamStation Auto CPAP Machine",
+      "DreamStation Auto CPAP Machine (discontinued)",
+      "DreamStation Auto CPAP Machine(Discontinued)",
+    ]) {
+      const body = `user_field_name,value,url\nMachine,"${value}",https://www.cpap.com/collections/cpap-machines\n`;
+
+      expect(() =>
+        readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/does not end in " \(Discontinued\)"/);
+    }
+  });
+
+  it("accepts the suffix and nothing more than the suffix", () => {
+    const body = `user_field_name,value,url\nMachine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n`;
+
+    expect(readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)).toEqual([
+      {
+        userFieldName: "Machine",
+        value: "A (Discontinued)",
+        url: "https://www.cpap.com/collections/cpap-machines",
+      },
+    ]);
+  });
+});
+
 describe("curatesTitles", () => {
   it("is true for both current tabs, which both have Suggested columns", () => {
     // No current SHEET_TABS entry has `titleColumn: null` — `user_humidifier`
@@ -593,6 +715,7 @@ describe("the review document", () => {
   const built = buildCatalogue({
     sheetRows: SHEET_ROWS,
     products: PRODUCTS as ProductRecord[],
+    collectionLinks: [],
   });
   const review = renderReviewDocument({
     catalogue: built.catalogue,
@@ -682,6 +805,7 @@ describe("the review document", () => {
     const after = buildCatalogue({
       sheetRows: SHEET_ROWS,
       products: [archived, ...PRODUCTS.slice(1)] as ProductRecord[],
+      collectionLinks: [],
     });
 
     const before = resolvedProductsCsv(built.catalogue).split("\n");
@@ -751,8 +875,21 @@ describe("what each file is allowed to do", () => {
     // Where the two files go is part of what the pipeline is, not part of
     // writing them: `build` and `apply` read the catalogue by the same constant.
     expect(command).not.toContain(CATALOGUE_FILE);
+    expect(command).not.toContain(COLLECTION_LINKS_FILE);
     expect(command).not.toContain(REVIEW_FILE);
     expect(command).toContain("writeFile(CATALOGUE_FILE, csv)");
+    expect(command).toContain("writeFile(COLLECTION_LINKS_FILE, linksCsv)");
     expect(command).toContain("writeFile(REVIEW_FILE, review)");
+  });
+
+  it("reads the Collection Links through the reader that verifies their digest", () => {
+    // The file is hand-seeded and committed, so a refresh re-reads it through
+    // the same guards that will check it back in rather than parsing the CSV
+    // again — the suffix check included. The write loop itself is the one part
+    // of this pipeline no test covers, so which reader and which writer the
+    // command reaches for is asserted here.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("collectionLinksCsv(collectionLinks)");
+    expect(command).toContain("collectionLinks: seededCollectionLinks");
   });
 });
