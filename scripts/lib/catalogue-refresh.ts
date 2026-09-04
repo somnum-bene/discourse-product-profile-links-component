@@ -634,6 +634,7 @@ export function readCollectionLinks(text: string): CollectionLink[] {
     COLLECTION_LINKS_FILE,
     COLLECTION_LINK_COLUMNS
   );
+  const seen = new Map<string, number>();
 
   return dataRows.map((row, index) => {
     const [userFieldName, value, url] = row;
@@ -665,6 +666,25 @@ export function readCollectionLinks(text: string): CollectionLink[] {
     }
 
     assertCollectionUrl(url, where);
+
+    // A Mapping is keyed on its value within a field, so a second row for the
+    // same one is not two links: the component reports `duplicate-value` as a
+    // Config Problem on every page load and resolves the first. Which of the
+    // two URLs wins is then decided by row order, which is not a decision
+    // anyone made.
+    const key = `${userFieldName}\u0000${value}`;
+    const earlier = seen.get(key);
+
+    if (earlier !== undefined) {
+      throw new CatalogueRefreshError(
+        `${where} repeats the value ${JSON.stringify(value)} for ` +
+          `${JSON.stringify(userFieldName)}, already given on row ` +
+          `${earlier}. One value resolves one URL, so the second row is ` +
+          `either a mistake or a decision nobody recorded.`
+      );
+    }
+
+    seen.set(key, index + 2);
 
     return { userFieldName, value, url };
   });

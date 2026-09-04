@@ -692,6 +692,33 @@ describe("the collection-links file", () => {
     ).toThrow(/empty field/);
   });
 
+  it("refuses two rows carrying the same value for one field", () => {
+    // Both rows shipped, and the component then reported `duplicate-value` on
+    // every page load and resolved whichever came first — so row order decided
+    // which URL a member got, which is not a decision anyone made.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/bipap-machines\n";
+
+    expect(() =>
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toThrow(/repeats the value/);
+  });
+
+  it("allows the same value under two different fields", () => {
+    // A Mapping is keyed within a field, not globally: Machine and Mask are
+    // separate namespaces and a value living in both is not a collision.
+    const body =
+      "user_field_name,value,url\n" +
+      "Machine,A (Discontinued),https://www.cpap.com/collections/cpap-machines\n" +
+      "Mask,A (Discontinued),https://www.cpap.com/collections/nasal-cpap-masks\n";
+
+    expect(
+      readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
+    ).toHaveLength(2);
+  });
+
   it("refuses a value that is the suffix and nothing else", () => {
     // It passed the non-empty check and the suffix check, round-tripped
     // through `csvLine`, and shipped a Profile Link whose anchor text was
