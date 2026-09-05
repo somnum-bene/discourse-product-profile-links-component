@@ -11,8 +11,8 @@
 // this file's, and the distinction is worth keeping because provenance that
 // overstates itself is worse than provenance that says what it is.
 //
-// Two shapes of tab, on purpose. The `user_*` option tables reduce to a
-// Suggested Title and a Suggested URL; the Collection Assignment is eleven
+// Two shapes of tab, on purpose. The `user_*` option tables reduce to a legacy
+// identity and the Suggested pair it maps to; the Collection Assignment is eleven
 // columns of human curation that reduce to nothing. They share the guards and
 // not the shape — see `ExportTab` below.
 //
@@ -57,6 +57,20 @@ export interface ExportTab {
 export interface SheetTab extends ExportTab {
   /** The Custom User Field the tab's rows belong to. */
   userFieldName: string;
+  /**
+   * Header of the column holding the legacy identifier — the phpBB option value
+   * a member is actually holding. Not nullable, unlike the Suggested pair: a tab
+   * that cannot say which legacy value a row speaks for is not an option table,
+   * because the legacy value is the only thing an option table is a map *from*.
+   */
+  valueColumn: string;
+  /**
+   * Header of the column holding the legacy display text — the name the
+   * bulletin board showed for that value. Not nullable for the same reason, and
+   * load-bearing beyond provenance: on the four retired catch-all Suggested
+   * Titles this is the name a Collection Link is built from (ADR-0020).
+   */
+  textColumn: string;
   /**
    * Header of the column holding the Suggested Title, or null when the tab has
    * no Suggested columns at all.
@@ -155,6 +169,8 @@ export const SHEET_TABS: readonly SheetTab[] = [
     tab: "user_machine",
     userFieldName: "Machine",
     headers: ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
+    valueColumn: "Value",
+    textColumn: "Text",
     titleColumn: "Suggested Title",
     urlColumn: "Suggested URL",
   },
@@ -162,6 +178,8 @@ export const SHEET_TABS: readonly SheetTab[] = [
     tab: "user_mask",
     userFieldName: "Mask",
     headers: ["Value", "Text", "URL", "Suggested Title", "Suggested URL"],
+    valueColumn: "Value",
+    textColumn: "Text",
     titleColumn: "Suggested Title",
     urlColumn: "Suggested URL",
   },
@@ -643,11 +661,15 @@ export function sheetRowsFrom(tab: SheetTab, csvText: string): SheetRow[] {
     return [];
   }
 
+  const valueIndex = tab.headers.indexOf(tab.valueColumn);
+  const textIndex = tab.headers.indexOf(tab.textColumn);
   const titleIndex = tab.headers.indexOf(tab.titleColumn);
   const urlIndex = tab.headers.indexOf(tab.urlColumn);
 
   return dataRows.map((dataRow) => ({
     userFieldName: tab.userFieldName,
+    legacyValue: dataRow[valueIndex] ?? "",
+    legacyText: dataRow[textIndex] ?? "",
     suggestedTitle: dataRow[titleIndex] ?? "",
     suggestedUrl: dataRow[urlIndex] ?? "",
   }));

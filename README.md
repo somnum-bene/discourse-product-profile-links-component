@@ -75,18 +75,20 @@ The two sinks land in **two different places**: Mappings ship in `settings.yml`,
 | Command | What it does | Credentials it needs |
 |---|---|---|
 | `pnpm export:sheet` | re-exports the three allowlisted Sheet tabs to `data/user_machine.csv`, `data/user_mask.csv` and `data/collection-assignment.csv` | `SHEET_WORKBOOK_ID`, plus the three `GOOGLE_SERVICE_ACCOUNT_*` variables |
-| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, rewrites `data/collection-links.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
+| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, derives `data/collection-links.csv` from the Excluded Products + `data/collection-assignment.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
 | `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
 | `pnpm build:settings --check` | fails if `settings.yml` and the two committed files disagree | **none** |
-| `pnpm verify:catalogue` | asks cpap.com whether all 55 catalogue URLs serve a page, one request at a time | **none** — it only asks for public product pages |
+| `pnpm verify:catalogue` | asks cpap.com whether every catalogue URL serves a page, one request at a time | **none** — it only asks for public product pages |
 | `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 | `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
 
-`data/collection-assignment.csv` is the exception in that table: it is exported, validated and committed on the same terms as the option tables, and **nothing reads it yet** — it is the recommendation record the Collection Link work builds on, so the Catalogue Refresh above deliberately looks only at the `user_*` exports.
+`data/collection-assignment.csv` is the curated half of the Collection Links. A Catalogue Refresh joins it to the Excluded Products by legacy value: an excluded Suggested Title earns a link for five of the seven exclusion reasons, the assignment row says which collection it points at (an `Override` beating the recommendation), and the run asks Shopify whether that collection exists before shipping it. No row of `data/collection-links.csv` is hand-authored — the file is still committed, because `pnpm build:settings` has no network by design and needs it as an input, but a refresh writes every row of it.
+
+A link that is owed and cannot be derived is **reported rather than shipped**: an unadmitted collection, a legacy value nobody has assigned, an `undecided` row, or a value the curated table and the transform disagree about. They are listed one at a time under "Collection Links not derived" in the review document, and the command says how many there were on stderr. As of the 2026-09-04 refresh there are five, all of them legacy values whose products retired at Shopify after the curation pass — which is the standing mechanism doing its job, not a defect.
 
 The commands that need credentials read them from an ignored `.env`; the ones that need none cannot read it at all, which is what lets them run in CI and on a shared machine. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
 
-`pnpm verify:catalogue` is the one check here that is **not** a hook and not a CI step, and that is deliberate — it sends 55 requests to a storefront that rate-limits, and a commit that cannot be made while cpap.com is busy would be a gate failing for reasons nobody here controls ([ADR-0018](docs/adr/0018-reachability-is-a-deliberate-command-and-never-a-gate.md)). Run it before an apply. It exits non-zero on anything unshippable, and it reports four outcomes rather than pass/fail:
+`pnpm verify:catalogue` is the one check here that is **not** a hook and not a CI step, and that is deliberate — it sends one request per catalogue URL to a storefront that rate-limits, and a commit that cannot be made while cpap.com is busy would be a gate failing for reasons nobody here controls ([ADR-0018](docs/adr/0018-reachability-is-a-deliberate-command-and-never-a-gate.md)). Run it before an apply. It exits non-zero on anything unshippable, and it reports four outcomes rather than pass/fail:
 
 - **verified** — Shopify admits the product *and* the URL answers 2XX from a page that is still that product.
 - **failed** — Shopify admits it and cpap.com did not serve it.

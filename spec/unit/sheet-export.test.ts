@@ -98,6 +98,8 @@ const noTitleTab: SheetTab = {
   tab: "user_no_title",
   userFieldName: "NoTitle",
   headers: ["Value", "Text", ""],
+  valueColumn: "Value",
+  textColumn: "Text",
   titleColumn: null,
   urlColumn: null,
 };
@@ -493,16 +495,25 @@ describe("readSheetTab", () => {
 });
 
 describe("sheetRowsFrom", () => {
-  it("emits the Suggested Title and Suggested URL verbatim, under the field name", () => {
+  it("emits the legacy identity and the Suggested pair verbatim, under the field name", () => {
+    // Four columns rather than two. The legacy `Value` is what the Collection
+    // Assignment is curated against and the `Text` is the name a Collection
+    // Link falls back to on a retired catch-all title, so both have to reach
+    // the transform (ADR-0020).
     expect(sheetRowsFrom(machine, MACHINE_CSV)).toEqual([
       {
         userFieldName: "Machine",
+        legacyValue: "4872",
+        legacyText:
+          "AirCurve 10 VAuto BiLevel Machine with HumidAir Heated Humidifier",
         suggestedTitle: "AirCurve 10 VAuto BiLevel Machine",
         suggestedUrl:
           "https://www.sleeping.com/products/aircurve-10-vauto-bilevel-machine",
       },
       {
         userFieldName: "Machine",
+        legacyValue: "6092",
+        legacyText: "AirCurve 10 Vauto USA C2C CO",
         suggestedTitle: "AirCurve 10 VAuto BiLevel Machine",
         suggestedUrl:
           "https://www.sleeping.com/products/aircurve-10-vauto-bilevel-machine",

@@ -2,7 +2,7 @@ profile_link_fields:
   type: objects
   # BEGIN GENERATED profile_link_fields default
   # Written by `pnpm build:settings` from the Resolved Product Catalogue and the Collection Links.
-  # Catalogue digest (sha256): c3c3c7d9c7c25e7f16fe08ea83dca4ff367510b7b09cc0c647de8670e9df31b6
+  # Catalogue digest (sha256): 258391ccfeaa66a7366cc35d79deb9cd2ad3c65934259cdc2b7bad1056e062c2
   # Do not edit between these fences: `pnpm build:settings --check`
   # runs in CI and fails when this region disagrees with either of them.
   default:
@@ -20,14 +20,70 @@ profile_link_fields:
           url: https://www.cpap.com/products/resmed-airsense-11-autoset
         - value: Luna G3 BPAP 25A Bi-Level CPAP Machine
           url: https://www.cpap.com/products/luna-g3-bpap-25a-bi-level-cpap-machine
-        - value: Luna G3 BPAP 30VT Bi-Level CPAP Machine
-          url: https://www.cpap.com/products/luna-g3-bpap-30vt-bi-level-cpap-machine
-        - value: Transcend Micro Auto Travel CPAP Machine
-          url: https://www.cpap.com/products/transcend-micro-auto-travel-cpap-machine
+        - value: React Health G3 X Auto CPAP Machine
+          url: https://www.cpap.com/products/react-health-g3-x-auto-cpap-machine
         - value: AirCurve 11 ASV (Discontinued)
           url: https://www.cpap.com/collections/bipap-machines
+        - value: AirCurve 11 BiPAP ASV (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
+        - value: AirCurve™ 11 ST-A Co-Pack (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
+        - value: AirSense 10 CPAP with HumidAir (Discontinued)
+          url: https://www.cpap.com/collections/cpap-machines
         - value: AirSense 10 Elite with HumidAir (Discontinued)
           url: https://www.cpap.com/collections/cpap-machines
+        - value: AS10 C2C Climateline (Discontinued)
+          url: https://www.cpap.com/collections/cpap-machines
+        - value: AS10 C2C Slimline (Discontinued)
+          url: https://www.cpap.com/collections/cpap-machines
+        - value: DreamStation 2 Auto CPAP Advanced with Humidifier (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: DreamStation Auto CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: DreamStation Auto with Heated Humidifier + DreamWear Mask Bundle (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: DreamStation Auto With Heated Humidifier + Supplies Bundle (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: DreamStation BiPAP Pro Machine with Heated Humidifier Core (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
+        - value: DreamStation BiPAP® Auto Machine (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
+        - value: DreamStation CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: DreamStation Go Auto + DreamWear Mask Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: DreamStation Go Auto CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: DreamStation Go Auto CPAP Machine + Portable Outlet CPAP Battery Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: DreamStation Go Auto CPAP Machine with Heated Humidifier (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: DreamStation Go Auto Travel CPAP Machine + Six Disposable Filters Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: DreamStation Go Auto with Heated Humidifier + DreamWear Mask Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: HMS DreamStation Auto CPAP with Humidifier and Cell Modem (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: IntelliPAP 2 AutoAdjust Auto CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: Luna G3 (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: Luna II Auto CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: Luna TravelPAP (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: PR System One REMStar 60 Series Auto CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/apap-machines
+        - value: ResMed AirCurve 10 ASV BiLevel Machine (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
+        - value: Somnetics Transcend 3 Auto miniCPAP (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: Transcend Micro Essentials Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: Transcend Micro Power Bundle (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
+        - value: Z2 Auto Travel CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/travel-cpap-machines
     - user_field_name: Mask
       mappings:
         - value: AirFit F10 Full Face Mask
@@ -124,7 +180,105 @@ profile_link_fields:
           url: https://www.cpap.com/products/resmed-swift-fx-nasal-pillow-cpap-mask-with-headgear
         - value: TAP PAP Nasal Pillow CPAP Mask
           url: https://www.cpap.com/products/tap-pap-nasal-pillow-cpap-mask-with-improved-stability-mouthpiece
+        - value: 3B Medical Siesta Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
         - value: 3B Medical Siesta Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: AirFit F20 1 Year Resupply Bundle (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: AirFit N10 For Her Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: AirFit™ N10 Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Amara Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Apex Wizard 310 Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Apex Wizard 320 Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Assembly Kit for Nova Nasal Mask (Discontinued)
+          url: https://www.cpap.com/collections/cpap-mask-assembly-kits
+        - value: Deluxe Full Face Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: DreamWear Gel Nasal Pillow CPAP Mask with Headgear - Fit Pack (All Nasal Pillows with Medium Frame) (Discontinued)
+          url: https://www.cpap.com/collections/nasal-pillows-cpap-masks
+        - value: DreamWear Nasal CPAP Mask - Fit Pack + Mask Wipes Bundle (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: DreamWear Silicone Nasal Pillow CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-pillows-cpap-masks
+        - value: DreamWisp Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Eson Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Fisher & Paykel Forma Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Fisher & Paykel Zest Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Fisher & Paykel Zest Q Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: FlexiFit HC405 Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: FlexiFit HC406 Petite Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: FlexiFit HC407 Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: FlexiFit HC431 Full Face CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: FlexiFit HC432 Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Hans Rudolph 7600 Series V2 Full Face CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: MiniMe 2 Nasal Pediatric Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Morf Nasal Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: N20 1 Year Resupply (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Nasal Aire II Petite CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-prong-cpap-masks
+        - value: Nova Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Numa Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Oracle HC452 Oral CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: P10 Year Resupply (Discontinued)
+          url: https://www.cpap.com/collections/nasal-pillows-cpap-masks
+        - value: Pico Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Pilairo Q Nasal Pillow CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-pillows-cpap-masks
+        - value: Quest Full Face CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Rio II Nasal Pillow CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-pillows-cpap-masks
+        - value: Simplus Full Face Mask w/ 2 Cushions (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: SleepWeaver 3D Soft Cloth Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: SleepWeaver Advance Nasal CPAP Mask with Improved Zzzephyr Seal (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: SleepWeaver Advance Pediatric Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: SleepWeaver Advance Small Soft Cloth Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: SleepWeaver Anew Full Face Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: SleepWeaver Elan Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/cpap-masks
+        - value: Swift FX Nano For Her Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Swift FX Nano Nasal CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Sylent Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Ultra Mirage Full Face CPAP Mask with Headgear (Discontinued)
+          url: https://www.cpap.com/collections/full-face-cpap-masks
+        - value: Viva Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Wisp Nasal CPAP Mask (Discontinued)
+          url: https://www.cpap.com/collections/nasal-cpap-masks
+        - value: Wisp Pediatric Nasal CPAP Mask (Discontinued)
           url: https://www.cpap.com/collections/nasal-cpap-masks
   # END GENERATED profile_link_fields default
   description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/config/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value. WARNING: editing this setting here overrides it for this site, and an overridden setting never receives a shipped default again — this site's catalogue would freeze at the moment you save, silently and permanently, while the component carried on updating everywhere else. Change the product catalogue in the component's repository instead."
