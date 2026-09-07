@@ -478,15 +478,34 @@ export function planApply(
       continue;
     }
 
+    // Reaching here means the catalogue has no *products* for the field. It can
+    // still have Collection Links for it, because the options come from the
+    // products alone (ADR-0021), and a field whose every product has since
+    // retired arrives in exactly that state under the standing mechanism
+    // ADR-0020 describes. So "the catalogue has no Mappings for it" is a thing
+    // this loop may no longer assert without checking, and the sentence that
+    // used to follow from it — every option here resolves nothing — would be
+    // false about precisely the options that do resolve.
+    const linked = collectionLinks
+      .filter((link) => link.userFieldName === name)
+      .map((link) => link.value);
+
     const found = lookup(currentFields, name);
 
     if (found.kind === "none") {
       warnings.push({
         user_field_name: name,
         detail:
-          `"${name}" is a field this pipeline covers, the catalogue has no ` +
-          `Mappings for it, and the instance does not define it. Nothing to ` +
-          `do here, and nothing wrong with the instance.`,
+          linked.length === 0
+            ? `"${name}" is a field this pipeline covers, the catalogue has ` +
+              `no Mappings for it, and the instance does not define it. ` +
+              `Nothing to do here, and nothing wrong with the instance.`
+            : `"${name}" is a field this pipeline covers, the catalogue ` +
+              `carries ${linked.length} Collection Link` +
+              `${linked.length === 1 ? "" : "s"} for it and no products, and ` +
+              `the instance does not define it. Creating a Custom User Field ` +
+              `is a decision about the site and outside this step, so those ` +
+              `Mappings ship and resolve for nobody until someone makes it.`,
       });
       continue;
     }
@@ -515,15 +534,52 @@ export function planApply(
       continue;
     }
 
+    // Worded exactly as it always was when nothing covers the field, which is
+    // every case that existed before Collection Links did.
+    if (linked.length === 0) {
+      warnings.push({
+        user_field_name: name,
+        detail:
+          `"${name}" offers ${before.length} option` +
+          `${before.length === 1 ? "" : "s"} and the catalogue has no ` +
+          `Mappings for it, so every User who picks one gets no Profile Link ` +
+          `and nothing is logged unless Debug Mode is on: ${quoted(before)}. ` +
+          `This run leaves the field alone, and Discourse offers no way to ` +
+          `empty a dropdown (ADR-0015), so they stay until someone deletes ` +
+          `the field.`,
+      });
+      continue;
+    }
+
+    const unmatched = before.filter((option) => !linked.includes(option));
+
+    if (unmatched.length === 0) {
+      warnings.push({
+        user_field_name: name,
+        detail:
+          `"${name}" offers ${before.length} option` +
+          `${before.length === 1 ? "" : "s"} and the catalogue carries no ` +
+          `products for it, but a Collection Link covers every one of them, ` +
+          `so they all resolve: ${quoted(before)}. What is wrong is that they ` +
+          `are offered at all — a Collection Link is never shown to a User ` +
+          `choosing one (ADR-0021) — and Discourse offers no way to empty a ` +
+          `dropdown (ADR-0015), so removing them means naming the field in ` +
+          `clear.`,
+      });
+      continue;
+    }
+
     warnings.push({
       user_field_name: name,
       detail:
-        `"${name}" offers ${before.length} option` +
-        `${before.length === 1 ? "" : "s"} and the catalogue has no Mappings ` +
-        `for it, so every User who picks one gets no Profile Link and nothing ` +
-        `is logged unless Debug Mode is on: ${quoted(before)}. This run leaves ` +
-        `the field alone, and Discourse offers no way to empty a dropdown ` +
-        `(ADR-0015), so they stay until someone deletes the field.`,
+        `"${name}" offers ${unmatched.length} option` +
+        `${unmatched.length === 1 ? "" : "s"} no Mapping covers, so every ` +
+        `User who picks one gets no Profile Link and nothing is logged unless ` +
+        `Debug Mode is on: ${quoted(unmatched)}. The catalogue carries no ` +
+        `products for the field and a Collection Link covers its other ` +
+        `${before.length - unmatched.length}. This run leaves the field ` +
+        `alone, and Discourse offers no way to empty a dropdown (ADR-0015), ` +
+        `so they stay until someone deletes the field.`,
     });
   }
 
@@ -555,6 +611,13 @@ export function planApply(
  * matters most: a refusal is where an operator decides whether to authorise the
  * removal, so the retention has to be in front of them *then* rather than after
  * they have passed `replace`.
+ *
+ * The message says the Profile Link survives "on any instance carrying these
+ * Mappings" rather than flatly. This step reads the checked-out catalogue and
+ * has never seen the component the instance is actually running; `componentDrift`
+ * reports that gap and only warns, so an instance whose component predates these
+ * Mappings resolves nothing for the value. Stating the condition is the
+ * difference between a claim the plan can support and one it cannot.
  *
  * Matching is exact, for the reason all matching here is exact — Discourse
  * stores the string the User picked, and a Mapping either equals it or resolves
@@ -599,10 +662,11 @@ function retainedLinks(
         detail:
           `"${value}" is removed as a Dropdown Option on ` +
           `"${removal.name}" and retained as a Mapping: the catalogue ships ` +
-          `it as a Collection Link to ${link.url}, so a User already holding ` +
-          `it keeps getting a Profile Link and nobody choosing one is offered ` +
-          `equipment cpap.com no longer sells (ADR-0021). Those are two halves ` +
-          `of one decision — do not re-add it as an option.`,
+          `it as a Collection Link to ${link.url}, so on any instance ` +
+          `carrying these Mappings a User already holding it keeps getting a ` +
+          `Profile Link, and nobody choosing one is offered equipment ` +
+          `cpap.com no longer sells (ADR-0021). Those are two halves of one ` +
+          `decision — do not re-add it as an option.`,
       });
     }
   }

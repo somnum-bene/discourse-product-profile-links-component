@@ -600,6 +600,98 @@ describe("an option removed while its Mapping stays", () => {
   });
 });
 
+describe("a field whose only Mappings are Collection Links", () => {
+  /**
+   * The options come from the products alone, so a field can carry Mappings and
+   * emit no target at all — the state ADR-0020's standing mechanism reaches on
+   * its own the day a field's last product retires. The warnings for a field
+   * with no targets have to tell that apart from a field with nothing behind it,
+   * because they say what does and does not resolve.
+   */
+  const VENDOR_LINK = {
+    userFieldName: "Vendor",
+    value: "Acme CPAP (Discontinued)",
+    url: "https://www.cpap.com/collections/cpap-machines",
+  };
+  const THREE = [...TWO_FIELDS, "Vendor"];
+
+  function warningFor(fields: UserFieldDefinition[]): string {
+    const plan = planApply(
+      [...emptyFields(), ...fields],
+      CATALOGUE,
+      [VENDOR_LINK],
+      {
+        managedFields: THREE,
+      }
+    );
+    const warning = plan.warnings.find(
+      (entry) => entry.user_field_name === "Vendor"
+    );
+
+    expect(warning).toBeDefined();
+
+    return warning?.detail ?? "";
+  }
+
+  it("does not say the catalogue has no Mappings when it has links", () => {
+    const detail = warningFor([]);
+
+    expect(detail).not.toContain("has no Mappings for it");
+    expect(detail).toContain("1 Collection Link");
+    expect(detail).toContain("resolve for nobody");
+  });
+
+  it("keeps the old wording for a field nothing covers at all", () => {
+    const withLinks = warningFor([]);
+    const withoutLinks = planApply([...emptyFields()], CATALOGUE, [], {
+      managedFields: THREE,
+    }).warnings.find((entry) => entry.user_field_name === "Vendor");
+
+    expect(withoutLinks?.detail).toContain(
+      "the catalogue has no Mappings for it, and the instance does not define it"
+    );
+    expect(withoutLinks?.detail).not.toEqual(withLinks);
+  });
+
+  it("does not claim an option resolves nowhere when a link covers it", () => {
+    const detail = warningFor([
+      dropdown(4, "Vendor", ["Acme CPAP (Discontinued)"]),
+    ]);
+
+    expect(detail).not.toContain("gets no Profile Link");
+    expect(detail).toContain("a Collection Link covers every one of them");
+    expect(detail).toContain("never shown to a User choosing one");
+  });
+
+  it("names only the options no Mapping covers when some are covered", () => {
+    const detail = warningFor([
+      dropdown(4, "Vendor", ["Acme CPAP (Discontinued)", "Typed by hand"]),
+    ]);
+
+    expect(detail).toContain("1 option no Mapping covers");
+    expect(detail).toContain('"Typed by hand"');
+    expect(detail).not.toContain('"Acme CPAP (Discontinued)"');
+    expect(detail).toContain("gets no Profile Link");
+  });
+
+  it("says the same thing as before when the field has no links", () => {
+    const plan = planApply(
+      [...emptyFields(), dropdown(4, "Vendor", ["Typed by hand"])],
+      CATALOGUE,
+      [],
+      { managedFields: THREE }
+    );
+    const warning = plan.warnings.find(
+      (entry) => entry.user_field_name === "Vendor"
+    );
+
+    expect(warning?.detail).toContain(
+      "the catalogue has no Mappings for it, so every User who picks one gets " +
+        "no Profile Link"
+    );
+  });
+});
+
 describe("a field the catalogue has no Mappings for", () => {
   // Not a real Managed Field — invented and named explicitly via
   // `managedFields` so this scenario (a field this pipeline is scoped to but

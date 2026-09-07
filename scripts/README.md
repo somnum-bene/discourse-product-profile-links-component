@@ -6,18 +6,18 @@ send the catalogue pipeline to every forum visitor.
 
 The commands and what each one is allowed to touch:
 
-| Command                  | Reads                                                                     | Writes                                                                               | Configuration                                                       |
-| ------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pnpm export:sheet`      | three allowlisted spreadsheet tabs                                        | `data/user_*.csv`, `data/collection-assignment.csv`                                  | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
-| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API     | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
-| `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv`                 | `settings.yml`                                                                       | none, so it runs in CI                                              |
-| `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com                                    | nothing — it prints                                                                  | none, and it cannot read `.env`                                     |
-| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml` | one Discourse instance                                                               | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
+| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
+| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
+| `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
+| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml` | one Discourse instance         | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
 never committed. The two commands that need nothing omit that flag on purpose: a
-command that _could_ read `.env` is one that might come to depend on it, and then
+command that *could* read `.env` is one that might come to depend on it, and then
 it could no longer run in CI.
 
 ## The Sheet Export refuses more than it accepts
@@ -85,10 +85,10 @@ allowlist is written in names. And the fetch asks for **two ranges, not one**,
 through `values:batchGet` — so they still cost a single request against a
 single snapshot of the workbook:
 
-| Range                       | What it is                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------- |
-| `'user_machine'!A1:E2002`   | the export, pinned to exactly the declared width and one row past the ceiling |
-| `'user_machine'!F1:ZZZ2002` | everything to the right of it, which has to come back empty                   |
+| Range | What it is |
+| --- | --- |
+| `'user_machine'!A1:E2002` | the export, pinned to exactly the declared width and one row past the ceiling |
+| `'user_machine'!F1:ZZZ2002` | everything to the right of it, which has to come back empty |
 
 The second range is the guard. Bounding the fetch at the declared width was the
 obvious thing and it defeated the check it was meant to serve: asked only for
@@ -158,7 +158,7 @@ PERMISSION_DENIED` from the first tab it asks for. Nothing in either response
 mentions the claim set. Verified against the live endpoint, because the
 handoff this was built from claimed the token request fails instead.
 
-`unauthorized_client` is the _other_ failure, and it means the opposite: `sub`
+`unauthorized_client` is the *other* failure, and it means the opposite: `sub`
 was sent, and the delegation grant is missing or still propagating.
 
 ### What this key can actually do
@@ -170,8 +170,8 @@ the private key can sign an assertion naming **any** cpap.com Workspace user as
 `sub`, and read every Sheet that user can open. `GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL`
 is this repository's choice of subject; it is not a limit on the credential.
 
-So the blast radius of a leaked key is _read access to every Google Sheet in
-the domain_, not read access to one workbook. That is inherent to domain-wide
+So the blast radius of a leaked key is *read access to every Google Sheet in
+the domain*, not read access to one workbook. That is inherent to domain-wide
 delegation, and it is the mechanism we have: the org's policy blocks link
 sharing and blocks sharing a file to a service account, which is what the two
 bullets above are about. There is no narrower version of this that still works
@@ -180,24 +180,24 @@ piece of admin work, deliberately not done here.
 
 **Accepted, with these bounds:**
 
-| Control                     | What it bounds                                                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| One authorised scope        | `spreadsheets.readonly` and nothing else. Sheets only, read only — no Drive, no Gmail, no writes. Widening it is an Admin Console change, not a code change. |
-| Scope named in code         | `SHEETS_READONLY_SCOPE` is asked for by name in `lib/sheets-auth.ts`, so a wider console grant still does not widen what this command requests.              |
+| Control | What it bounds |
+| --- | --- |
+| One authorised scope | `spreadsheets.readonly` and nothing else. Sheets only, read only — no Drive, no Gmail, no writes. Widening it is an Admin Console change, not a code change. |
+| Scope named in code | `SHEETS_READONLY_SCOPE` is asked for by name in `lib/sheets-auth.ts`, so a wider console grant still does not widen what this command requests. |
 | Key never in the repository | It lives only in the ignored `.env`. Nothing logs it, nothing prints it in an error, and `credentialsFrom`'s refusals are asserted not to echo the material. |
-| Read-only by construction   | This code cannot write to the Sheet even if asked to. Correcting the Sheet is a human editing it, followed by a re-export.                                   |
-| Revocable in one place      | Removing the client id from Admin Console → Security → API controls → Domain-wide delegation kills the credential outright, without touching the repository. |
+| Read-only by construction | This code cannot write to the Sheet even if asked to. Correcting the Sheet is a human editing it, followed by a re-export. |
+| Revocable in one place | Removing the client id from Admin Console → Security → API controls → Domain-wide delegation kills the credential outright, without touching the repository. |
 
 Raised by code review on PR #45. Accepted for an internal read-only export
 rather than redesigned, on the grounds that the alternative is an admin round
 trip for a dedicated least-privilege user and the controls above bound it to
-domain-wide Sheets _reads_ with a single revocation point. Reconsider if this
+domain-wide Sheets *reads* with a single revocation point. Reconsider if this
 credential is ever wanted for anything beyond exporting these tabs.
 
 The escaped `\n` is the other trap. A PEM holds real newlines, `.env` cannot,
 and Node's `--env-file` hands the value over still escaped — so a key used as
 read is a string that looks right, signs nothing, and fails at the token
-endpoint with an error about the _client_ rather than about the key.
+endpoint with an error about the *client* rather than about the key.
 `credentialsFrom` unescapes it and then asks OpenSSL to parse it, so that
 becomes one legible refusal at startup rather than a puzzle three layers down.
 Neither the key nor the underlying parse error is ever printed: a refusal that
@@ -238,7 +238,6 @@ all the same kind of thing:
   Dropdown Options, and that asymmetry is the feature: `dropdownOptionsFor` is
   handed the products alone, so it cannot offer a discontinued machine to a User
   choosing theirs.
-
 - **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
   ignored, because it is regenerated on every refresh: every Mapping per field,
   every excluded Suggested Title under the reason it was excluded, and both
@@ -281,10 +280,10 @@ nothing to do with the catalogue. So the generated part is fenced, and only that
 part is rewritten:
 
 ```yaml
-# BEGIN GENERATED profile_link_fields default
-# Catalogue digest (sha256): c3c3c7d9…
-default: …
-# END GENERATED profile_link_fields default
+  # BEGIN GENERATED profile_link_fields default
+  # Catalogue digest (sha256): c3c3c7d9…
+  default: …
+  # END GENERATED profile_link_fields default
 ```
 
 Reserialising the whole document would reformat and comment-strip parts nobody
@@ -401,11 +400,10 @@ machine cpap.com no longer sells to the next User choosing one.
 It changes what the plan says and not what it needs — a removal with a retained
 Collection Link behind it is still authorised by `replace`, like every other
 removal, because the plan is all-or-nothing and one flag should not have two
-authorisation stories. The
-Collection Link is matched on the exact string, for the same reason everything
-here is: a User holding `CPAP Machines` is not covered by a Mapping keyed on
-`CPAP Machines (Discontinued)`, and claiming otherwise would promise a Profile
-Link that never appears.
+authorisation stories. The Collection Link is matched on the exact string, for
+the same reason everything here is: a User holding `CPAP Machines` is not
+covered by a Mapping keyed on `CPAP Machines (Discontinued)`, and claiming
+otherwise would promise a Profile Link that never appears.
 
 ## The apply step believes the reread, not the response code
 
@@ -492,7 +490,7 @@ or 503 on every attempt, or that nothing answered at all, produces no evidence
 either way — so it is neither a pass nor a failure, it blocks shipping, and the
 pass is run again. Folding it into either of the other two is exactly the mistake
 the outcome exists to prevent: cpap.com throttling reads as a broken product page
-otherwise. A 500 or a 502, by contrast, _is_ an answer and is reported as a
+otherwise. A 500 or a 502, by contrast, *is* an answer and is reported as a
 failure with its status, because retrying past it would substitute a guess for
 the human judgement it needs.
 
@@ -574,7 +572,7 @@ asked — hold every decision worth testing, and they are pure: no network, no
 filesystem, no clock. The commands around them are thin shells: fetch, read,
 write, execute a plan. If a bug can hide in a shell, logic has leaked out of a
 transform and belongs back inside it. The one thing the apply command decides for
-itself is _when_ to consult the plan, and a test pins that order, because it is
+itself is *when* to consult the plan, and a test pins that order, because it is
 the only mistake a shell can make on its own.
 
 Tests live in `spec/unit/`, never in `test/` — Discourse serves a theme's
