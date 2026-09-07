@@ -1024,23 +1024,41 @@ describe("Collection Links that cannot be derived", () => {
     expect(collectionFaults[0].problem).toBe("undecided-disposition");
   });
 
-  it("says nothing about plain-text and resolves-to-product rows", () => {
-    // Both are decisions somebody recorded, so neither is a fault. A
-    // `resolves-to-product` row is not dropped either — its legacy identifier
-    // still carries the live product's value downstream, just not from here.
-    for (const disposition of ["plain-text", "resolves-to-product"] as const) {
-      const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
-        assignment({
-          legacyPnums: "6240",
-          profileLinkValue: "n/a",
-          recommendedCollectionUrl: "n/a — same as existing value 5232",
-          disposition,
-        }),
-      ]);
+  it("says nothing about a plain-text row", () => {
+    // A decision somebody recorded, so not a fault.
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "n/a",
+        recommendedCollectionUrl: "n/a — same as existing value 5232",
+        disposition: "plain-text",
+      }),
+    ]);
 
-      expect(collectionLinks).toEqual([]);
-      expect(collectionFaults).toEqual([]);
-    }
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults).toEqual([]);
+  });
+
+  it("reports a resolves-to-product row whose product is no longer sold", () => {
+    // The row asserts the store still sells the title, and reaching this loop
+    // at all means the refresh excluded that title for a reason that earns a
+    // link. Both cannot hold, and honouring the row would drop the value to
+    // plain text with no Mapping and nobody told.
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "n/a",
+        recommendedCollectionUrl: "n/a — same as existing value 5232",
+        disposition: "resolves-to-product",
+      }),
+    ]);
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults).toHaveLength(1);
+    expect(collectionFaults[0]).toMatchObject({
+      legacyValues: ["6240"],
+      problem: "stale-product-resolution",
+    });
   });
 
   it("reports two legacy values that collapse onto one value and disagree", () => {
@@ -1089,6 +1107,37 @@ describe("Collection Links that cannot be derived", () => {
 
     expect(collectionLinks).toEqual([]);
     expect(collectionFaults[0].problem).toBe("no-base-name");
+  });
+
+  it("counts an absent link per suffix-only row, not one for the field", () => {
+    // A row that derives no value joins no group, so two of them in one field
+    // are two absent links. They both carry `value: ""`, which is the one key
+    // `undeliveredValues` cannot dedupe on.
+    const catchAll = MACHINE_ROWS.filter(
+      (row) => row.legacyValue === "5851"
+    )[0];
+
+    const { collectionFaults } = build(
+      [
+        { ...catchAll, legacyText: "(Discontinued)" },
+        { ...catchAll, legacyValue: "5852", legacyText: "(Discontinued)" },
+      ],
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "5851, 5852",
+          baseNameSource: "Text",
+          profileLinkValue: COLLECTION_LINK_SUFFIX,
+          recommendedCollectionUrl: CPAP_MACHINES,
+        }),
+      ]
+    );
+
+    expect(collectionFaults.map((fault) => fault.problem)).toEqual([
+      "no-base-name",
+      "no-base-name",
+    ]);
+    expect(undeliveredValues(collectionFaults)).toBe(2);
   });
 
   it("refuses a collection URL whose path carries more than the handle", () => {

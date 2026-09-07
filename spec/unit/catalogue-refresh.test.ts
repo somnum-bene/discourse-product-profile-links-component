@@ -1230,6 +1230,75 @@ describe("the review document", () => {
       `- Collection Links that could not be derived: ${problems} ` +
         `(${problems} reported problems)`
     );
+    expect(review).toContain(
+      `## Collection Links not derived — ${problems} ` +
+        `(${problems} reported problems)`
+    );
+  });
+
+  it("heads the section with links owed, not problems reported", () => {
+    // The heading is the number an approver scrolls to rather than reads past,
+    // and it is the one place the fixtures above cannot tell the two numbers
+    // apart. Two faults on one derived value are one Mapping that will not
+    // ship: a `divided-value` group reports itself on top of the row it held
+    // back, and the heading has to say one link and two reasons.
+    const collapsed = [
+      {
+        userFieldName: "Machine",
+        legacyValues: ["6240"],
+        value: "AirCurve 11 ASV (Discontinued)",
+        problem: "unassigned-legacy-value" as const,
+        detail: "nobody claims this legacy value",
+      },
+      {
+        userFieldName: "Machine",
+        legacyValues: ["6240", "6241"],
+        value: "AirCurve 11 ASV (Discontinued)",
+        problem: "divided-value" as const,
+        detail: "only some of these rows earned a link",
+      },
+    ];
+
+    const rendered = renderReviewDocument({
+      catalogue: built.catalogue,
+      exclusions: built.exclusions,
+      collectionLinks: built.collectionLinks,
+      collectionFaults: collapsed,
+      sheetRows: SHEET_ROWS,
+      products: PRODUCTS,
+      digest: "0".repeat(64),
+    });
+
+    expect(undeliveredValues(collapsed)).toBe(1);
+    expect(rendered).toContain(
+      "## Collection Links not derived — 1 (2 reported problems)"
+    );
+  });
+
+  it("says one problem in the singular", () => {
+    const single = [
+      {
+        userFieldName: "Machine",
+        legacyValues: ["6240"],
+        value: "AirCurve 11 ASV (Discontinued)",
+        problem: "unassigned-legacy-value" as const,
+        detail: "nobody claims this legacy value",
+      },
+    ];
+
+    const rendered = renderReviewDocument({
+      catalogue: built.catalogue,
+      exclusions: built.exclusions,
+      collectionLinks: built.collectionLinks,
+      collectionFaults: single,
+      sheetRows: SHEET_ROWS,
+      products: PRODUCTS,
+      digest: "0".repeat(64),
+    });
+
+    expect(rendered).toContain(
+      "## Collection Links not derived — 1 (1 reported problem)"
+    );
   });
 
   it("lists every Collection Link that will ship", () => {

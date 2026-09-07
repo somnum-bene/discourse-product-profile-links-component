@@ -1189,6 +1189,8 @@ const PROBLEM_DESCRIPTIONS: Record<CollectionLinkProblem, string> = {
     "The Suggested Title was excluded for a reason that earns a Collection Link, and no Collection Assignment row claims the legacy value. Nobody decided against a link here — the row was never put in front of anyone. Add it to the assignment tab and re-export.",
   "undecided-disposition":
     "The Collection Assignment row is still `undecided`. That is an absence of evidence rather than a preference, so it blocks the link rather than quietly resolving to none (ADR-0021). Set a `Disposition` in the Sheet and re-export.",
+  "stale-product-resolution":
+    "The Collection Assignment row records `resolves-to-product` — the title names a product the store still sells, so the legacy value becomes an ordinary product Mapping and was never a Collection Link candidate. But this refresh excluded that title for a reason that earns a link, so the product it was resolving to is gone. The row is not wrong about what it decided; it is out of date about the store. Point the row at a collection (or at plain text) in the Sheet and re-export. Reported rather than honoured because honouring it is the exact silent degradation ADR-0020 reversed ADR-0012 to prevent: the value would fall back to plain text with no Mapping and no complaint.",
   "unadmitted-collection":
     "The assigned collection is one Shopify does not hold, or the cell names no collection at all. Which collection a piece of retired equipment belongs to is an editorial judgement; whether that collection exists is Shopify's answer, and this is Shopify saying no (ADR-0009, ADR-0020). Note this is existence in the admin catalogue, not that the public page serves — that is Catalogue Verify's question (ADR-0017).",
   "no-base-name":
@@ -1252,7 +1254,9 @@ function renderCollectionFaults(
   });
 
   return [
-    `## Collection Links not derived — ${faults.length}`,
+    `## Collection Links not derived — ${undeliveredValues(faults)} ` +
+      `(${faults.length} reported ` +
+      `${faults.length === 1 ? "problem" : "problems"})`,
     `Each row here is a legacy value a member can be holding whose Suggested ` +
       `Title was excluded for one of the five reasons that earns a Collection ` +
       `Link, and which did not get one. The link is reported rather than ` +

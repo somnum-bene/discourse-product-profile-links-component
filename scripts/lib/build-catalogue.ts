@@ -206,6 +206,8 @@ export type CollectionLinkProblem =
   | "unassigned-legacy-value"
   /** The row's `Disposition` is `undecided` — nobody has looked yet. */
   | "undecided-disposition"
+  /** The row says the title resolves to a product the store no longer sells. */
+  | "stale-product-resolution"
   /** The assigned collection is one Shopify does not admit, or is no URL. */
   | "unadmitted-collection"
   /** Stripping the suffix leaves no name, so the value would be the suffix alone. */
@@ -251,12 +253,22 @@ export interface CollectionLinkFault {
  * problem on top of each withheld row's own. Counting reasons as links
  * overstates what is missing, and a number a reader can disprove by opening the
  * review document is worse than no number.
+ *
+ * A fault that derived no value at all is keyed on its legacy identifiers
+ * instead. Every `no-base-name` row carries `value: ""`, and those are the rows
+ * the derivation says join no group — so keying them on the empty value would
+ * fold every suffix-only row in a field into one absent link, which is this
+ * function's own error running the other way.
  */
 export function undeliveredValues(
   faults: readonly CollectionLinkFault[]
 ): number {
   return new Set(
-    faults.map((fault) => `${fault.userFieldName}\u0000${fault.value}`)
+    faults.map((fault) =>
+      fault.value === ""
+        ? `${fault.userFieldName}\u0000\u0000${fault.legacyValues.join(",")}`
+        : `${fault.userFieldName}\u0000${fault.value}`
+    )
   ).size;
 }
 
@@ -915,17 +927,36 @@ function deriveCollectionLinks({
 
     switch (assignment.disposition) {
       case "plain-text":
-      case "resolves-to-product":
-        // Both are decisions a curator recorded, and neither is a Collection
-        // Link. `resolves-to-product` in particular is not a dropped row — the
-        // legacy identifier still carries the live product's value downstream —
-        // it just does not carry one from here.
-        //
-        // Recorded rather than skipped, and with no fault: a decision is not a
-        // problem. But it is a decision the value has to honour, and if a
-        // sibling sharing this value did earn a link then honouring both is
-        // impossible — which the second pass reports as `divided-value`.
+        // A decision a curator recorded, and not a Collection Link. Recorded
+        // rather than skipped, and with no fault: a decision is not a problem.
+        // But it is a decision the value has to honour, and if a sibling
+        // sharing this value did earn a link then honouring both is impossible
+        // — which the second pass reports as `divided-value`.
         record("");
+        continue;
+      case "resolves-to-product":
+        // The one disposition this loop can prove wrong. `resolves-to-product`
+        // asserts the Suggested Title names a product the store still sells, so
+        // the legacy value gets an ordinary product Mapping and was never a
+        // Collection Link candidate — but a row only reaches here because that
+        // title *was* excluded, for one of the reasons that earns a link. Both
+        // cannot be true.
+        //
+        // Reported rather than honoured, because honouring it is the silent
+        // degradation ADR-0020 exists to catch: the product retires, the
+        // curated row keeps saying it has not, and the member's value quietly
+        // becomes plain text with no Mapping and no complaint. The curator's
+        // own note is what goes stale, so the curator is who hears about it.
+        withhold(
+          "stale-product-resolution",
+          `the Collection Assignment row records ` +
+            `\`resolves-to-product\`, which says the Suggested Title ` +
+            `${JSON.stringify(suggestedTitle)} names a product the store ` +
+            `still sells — but this refresh excluded that title as ` +
+            `\`${reason}\`, which earns a Collection Link. The store has ` +
+            `moved on since the row was written, and the row now has to say ` +
+            `where the value points instead`
+        );
         continue;
       case "undecided":
         withhold(
