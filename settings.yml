@@ -2,7 +2,7 @@ profile_link_fields:
   type: objects
   # BEGIN GENERATED profile_link_fields default
   # Written by `pnpm build:settings` from the Resolved Product Catalogue and the Collection Links.
-  # Catalogue digest (sha256): 258391ccfeaa66a7366cc35d79deb9cd2ad3c65934259cdc2b7bad1056e062c2
+  # Catalogue digest (sha256): 4b11fcf412632f2cd26713e1e6cba33bb80a1da522c0c152ea4de2c39dc28d9e
   # Do not edit between these fences: `pnpm build:settings --check`
   # runs in CI and fails when this region disagrees with either of them.
   default:
@@ -22,6 +22,8 @@ profile_link_fields:
           url: https://www.cpap.com/products/luna-g3-bpap-25a-bi-level-cpap-machine
         - value: React Health G3 X Auto CPAP Machine
           url: https://www.cpap.com/products/react-health-g3-x-auto-cpap-machine
+        - value: Transcend Micro 510 Travel CPAP Machine
+          url: https://www.cpap.com/products/transcend-micro-510-travel-cpap-machine
         - value: AirCurve 11 ASV (Discontinued)
           url: https://www.cpap.com/collections/bipap-machines
         - value: AirCurve 11 BiPAP ASV (Discontinued)
@@ -68,6 +70,8 @@ profile_link_fields:
           url: https://www.cpap.com/collections/apap-machines
         - value: Luna G3 (Discontinued)
           url: https://www.cpap.com/collections/apap-machines
+        - value: Luna G3 BPAP 30VT Bi-Level CPAP Machine (Discontinued)
+          url: https://www.cpap.com/collections/bipap-machines
         - value: Luna II Auto CPAP Machine (Discontinued)
           url: https://www.cpap.com/collections/apap-machines
         - value: Luna TravelPAP (Discontinued)

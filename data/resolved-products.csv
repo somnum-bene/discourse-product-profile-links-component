@@ -1,4 +1,4 @@
-# sha256 258391ccfeaa66a7366cc35d79deb9cd2ad3c65934259cdc2b7bad1056e062c2
+# sha256 4b11fcf412632f2cd26713e1e6cba33bb80a1da522c0c152ea4de2c39dc28d9e
 user_field_name,value,handle,status,url
 Machine,AirCurve 10 VAuto BiLevel Machine,aircurve-10-vauto-bilevel-machine,ACTIVE,https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine
 Machine,AirCurve 11 VAuto with HumidAir,resmed-aircurve-11-vauto-bilevel-machine-with-humidair,ACTIVE,https://www.cpap.com/products/resmed-aircurve-11-vauto-bilevel-machine-with-humidair
@@ -7,6 +7,7 @@ Machine,AirSense 10 AutoSet with HumidAir,resmed-airsense-10-autoset-cpap-machin
 Machine,AirSense 11 AutoSet,resmed-airsense-11-autoset,ACTIVE,https://www.cpap.com/products/resmed-airsense-11-autoset
 Machine,Luna G3 BPAP 25A Bi-Level CPAP Machine,luna-g3-bpap-25a-bi-level-cpap-machine,ACTIVE,https://www.cpap.com/products/luna-g3-bpap-25a-bi-level-cpap-machine
 Machine,React Health G3 X Auto CPAP Machine,react-health-g3-x-auto-cpap-machine,ACTIVE,https://www.cpap.com/products/react-health-g3-x-auto-cpap-machine
+Machine,Transcend Micro 510 Travel CPAP Machine,transcend-micro-510-travel-cpap-machine,ACTIVE,https://www.cpap.com/products/transcend-micro-510-travel-cpap-machine
 Mask,AirFit F10 Full Face Mask,resmed-airfit-f10-full-face-cpap-mask,ACTIVE,https://www.cpap.com/products/resmed-airfit-f10-full-face-cpap-mask
 Mask,AirFit F20 Full Face CPAP Mask,resmed-airfit-f20-full-face-cpap-mask,ACTIVE,https://www.cpap.com/products/resmed-airfit-f20-full-face-cpap-mask
 Mask,AirFit F30 + AirMini Mask Setup Pack Bundle,resmed-airfit-f30-complete-mask-airmini-mask-setup-pack-bundle,ACTIVE,https://www.cpap.com/products/resmed-airfit-f30-complete-mask-airmini-mask-setup-pack-bundle
