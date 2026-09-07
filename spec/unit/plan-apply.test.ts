@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  type CollectionLink,
   dropdownOptionsFor,
   type ResolvedProduct,
 } from "../../scripts/lib/build-catalogue";
@@ -104,7 +105,7 @@ describe("the fields this pipeline covers", () => {
 
 describe("populating fields that are empty", () => {
   it("writes every target option, in the catalogue's order", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
@@ -133,7 +134,7 @@ describe("populating fields that are empty", () => {
   });
 
   it("needs no replace, because nothing is taken away", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
@@ -147,6 +148,7 @@ describe("populating fields that are empty", () => {
         { id: 3, name: "Mask", field_type: "dropdown" },
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -158,7 +160,7 @@ describe("populating fields that are empty", () => {
   });
 
   it("writes the options `dropdownOptionsFor` gives it and nothing else", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
     const expected = dropdownOptionsFor(CATALOGUE);
@@ -177,6 +179,7 @@ describe("a field already holding the right options", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -192,7 +195,7 @@ describe("a field already holding the right options", () => {
     ];
 
     for (const replace of [false, true]) {
-      const plan = planApply(applied, CATALOGUE, {
+      const plan = planApply(applied, CATALOGUE, [], {
         managedFields: TWO_FIELDS,
         replace,
       });
@@ -209,6 +212,7 @@ describe("a field already holding the right options", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -235,6 +239,7 @@ describe("adding to a field without removing anything", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -260,7 +265,7 @@ describe("refusing a write that would remove an option", () => {
   ];
 
   it("refuses without replace, and names the option that triggered it", () => {
-    const plan = planApply(withStray(), CATALOGUE, {
+    const plan = planApply(withStray(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
@@ -274,7 +279,7 @@ describe("refusing a write that would remove an option", () => {
   });
 
   it("shows the before-and-after the refusal is protecting", () => {
-    const [refusal] = planApply(withStray(), CATALOGUE, {
+    const [refusal] = planApply(withStray(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     }).refusals;
 
@@ -286,7 +291,7 @@ describe("refusing a write that would remove an option", () => {
   });
 
   it("writes nothing at all, not even the fields that were fine", () => {
-    const plan = planApply(withStray(), CATALOGUE, {
+    const plan = planApply(withStray(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
@@ -294,7 +299,7 @@ describe("refusing a write that would remove an option", () => {
   });
 
   it("proceeds with replace, and reports the removal as a replacement", () => {
-    const plan = planApply(withStray(), CATALOGUE, {
+    const plan = planApply(withStray(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
       replace: true,
     });
@@ -320,6 +325,7 @@ describe("refusing a write that would remove an option", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -334,6 +340,7 @@ describe("refusing a write that would remove an option", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -352,6 +359,7 @@ describe("refusing a write that would remove an option", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -364,6 +372,7 @@ describe("refusing a write that would remove an option", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS, replace: true }
     );
 
@@ -378,12 +387,216 @@ describe("refusing a write that would remove an option", () => {
         dropdown(3, "Mask", MASK_TARGET),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
     expect(plan.refusals[0].removes).toEqual([
       { option: "airsense 11 autoset", sameProductAs: "AirSense 11 AutoSet" },
     ]);
+  });
+});
+
+/**
+ * An instance that received the April 2026 run: the products of the day, plus
+ * the four retired legacy catch-all titles the run wrote as Dropdown Options.
+ *
+ * The links beside them are a fixture, and deliberately not what
+ * `data/collection-links.csv` ships. ADR-0020 retires those four titles as
+ * values — "a row that carried one now takes its own legacy name instead" — so
+ * the shipped file carries `DreamStation CPAP Machine (Discontinued)` and never
+ * `CPAP Machines (Discontinued)`. Reading the fixture off that file would pin
+ * whatever the last Catalogue Refresh produced, which is that command's question
+ * rather than this one's.
+ *
+ * What is pinned here is the reporting: a value the Mappings carry and the
+ * options do not, whichever value that turns out to be. Today none of the four
+ * is one, because no option this pipeline has ever written carries the
+ * generated ` (Discontinued)` suffix — so on real data these four are removed
+ * with no retention behind them, and the test below on a near-spelling is that
+ * same rule seen from the side the shipped data is actually on.
+ */
+const CATCH_ALLS = [
+  {
+    userFieldName: "Machine",
+    value: "CPAP Machines (Discontinued)",
+    url: "https://www.cpap.com/collections/cpap-machines",
+  },
+  {
+    userFieldName: "Mask",
+    value: "CPAP Masks (Discontinued)",
+    url: "https://www.cpap.com/collections/cpap-masks",
+  },
+  {
+    userFieldName: "Mask",
+    value: "Full Face CPAP Masks (Discontinued)",
+    url: "https://www.cpap.com/collections/full-face-cpap-masks",
+  },
+  {
+    userFieldName: "Mask",
+    value: "Nasal CPAP Masks (Discontinued)",
+    url: "https://www.cpap.com/collections/nasal-cpap-masks",
+  },
+] as const;
+
+const CATCH_ALL_LINKS: CollectionLink[] = CATCH_ALLS.map((entry) => ({
+  userFieldName: entry.userFieldName,
+  value: entry.value,
+  url: entry.url,
+}));
+
+function legacyInstance(): UserFieldDefinition[] {
+  return [
+    dropdown(2, "Machine", [...MACHINE_TARGET, "CPAP Machines (Discontinued)"]),
+    dropdown(3, "Mask", [
+      ...MASK_TARGET,
+      "CPAP Masks (Discontinued)",
+      "Full Face CPAP Masks (Discontinued)",
+      "Nasal CPAP Masks (Discontinued)",
+    ]),
+  ];
+}
+
+describe("an option removed while its Mapping stays", () => {
+  it("says both halves in one message", () => {
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+    const [machine] = plan.retained;
+
+    expect(machine.user_field_name).toBe("Machine");
+    expect(machine.value).toBe("CPAP Machines (Discontinued)");
+    expect(machine.url).toBe("https://www.cpap.com/collections/cpap-machines");
+    expect(machine.detail).toContain("removed as a Dropdown Option");
+    expect(machine.detail).toContain("retained as a Mapping");
+    expect(machine.detail).toContain("CPAP Machines (Discontinued)");
+    expect(machine.detail).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+  });
+
+  it("names every catch-all the write takes away", () => {
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+
+    expect(plan.retained.map((entry) => entry.value)).toEqual([
+      "CPAP Machines (Discontinued)",
+      "CPAP Masks (Discontinued)",
+      "Full Face CPAP Masks (Discontinued)",
+      "Nasal CPAP Masks (Discontinued)",
+    ]);
+    expect(plan.writes.flatMap((write) => write.removed)).toEqual(
+      plan.retained.map((entry) => entry.value)
+    );
+  });
+
+  it("says it while the operator is still deciding, not after", () => {
+    // No `replace`, so the plan refuses and writes nothing. This is the moment
+    // the disposition exists for: the operator is reading a list of removals
+    // and choosing whether to authorise it.
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+    });
+
+    expect(plan.writes).toEqual([]);
+    expect(plan.refusals.map((refusal) => refusal.reason)).toEqual([
+      "would-remove-options",
+      "would-remove-options",
+    ]);
+    expect(plan.retained).toHaveLength(4);
+  });
+
+  it("is not one of the dispositions that already existed", () => {
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+
+    expect(plan.warnings).toEqual([]);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.retained).toHaveLength(4);
+  });
+
+  it("leaves the refusal for an option no Mapping covers exactly as it was", () => {
+    const withStray = [
+      dropdown(2, "Machine", [
+        ...MACHINE_TARGET,
+        "CPAP Machines (Discontinued)",
+        "Typed by hand",
+      ]),
+      dropdown(3, "Mask", MASK_TARGET),
+    ];
+    const links = planApply(withStray, CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+    });
+    const without = planApply(withStray, CATALOGUE, [], {
+      managedFields: TWO_FIELDS,
+    });
+
+    expect(links.refusals).toEqual(without.refusals);
+    expect(links.refusals[0].removes.map((removal) => removal.option)).toEqual([
+      "CPAP Machines (Discontinued)",
+      "Typed by hand",
+    ]);
+    expect(links.retained.map((entry) => entry.value)).toEqual([
+      "CPAP Machines (Discontinued)",
+    ]);
+  });
+
+  it("does not claim a Collection Link the value is only nearly spelled as", () => {
+    // The Mapping is keyed on `CPAP Machines (Discontinued)`. A User holding
+    // `CPAP Machines` really does lose their Profile Link, so reporting this
+    // removal as retained would promise a link that never appears.
+    const plan = planApply(
+      [
+        dropdown(2, "Machine", [...MACHINE_TARGET, "CPAP Machines"]),
+        dropdown(3, "Mask", MASK_TARGET),
+      ],
+      CATALOGUE,
+      CATCH_ALL_LINKS,
+      { managedFields: TWO_FIELDS, replace: true }
+    );
+
+    expect(plan.writes[0].removed).toEqual(["CPAP Machines"]);
+    expect(plan.retained).toEqual([]);
+  });
+
+  it("reports a retention whichever branch decided the removal", () => {
+    // `clear` is the third place a removal is decided, and it is decided about
+    // a field the catalogue has no Mappings for — which is exactly the field a
+    // Collection Link can be the only Mapping on.
+    const plan = planApply(
+      [...emptyFields(), dropdown(4, "Vendor", ["Acme CPAP (Discontinued)"])],
+      CATALOGUE,
+      [
+        {
+          userFieldName: "Vendor",
+          value: "Acme CPAP (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      { managedFields: [...TWO_FIELDS, "Vendor"], clear: ["Vendor"] }
+    );
+
+    expect(plan.retained.map((entry) => entry.value)).toEqual([
+      "Acme CPAP (Discontinued)",
+    ]);
+  });
+
+  it("has nothing to say about a plan that removes nothing", () => {
+    const plan = planApply(emptyFields(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+    });
+
+    expect(plan.writes.map((write) => write.reason)).toEqual([
+      "populate",
+      "populate",
+    ]);
+    expect(plan.retained).toEqual([]);
   });
 });
 
@@ -399,7 +612,7 @@ describe("a field the catalogue has no Mappings for", () => {
   ];
 
   it("is left alone, and warned about", () => {
-    const plan = planApply(vendor(), CATALOGUE, {
+    const plan = planApply(vendor(), CATALOGUE, [], {
       managedFields: THREE_FIELDS,
     });
 
@@ -414,7 +627,7 @@ describe("a field the catalogue has no Mappings for", () => {
   });
 
   it("is not cleared by replace", () => {
-    const plan = planApply(vendor(), CATALOGUE, {
+    const plan = planApply(vendor(), CATALOGUE, [], {
       managedFields: THREE_FIELDS,
       replace: true,
     });
@@ -425,7 +638,7 @@ describe("a field the catalogue has no Mappings for", () => {
   });
 
   it("clears to empty when it is named, and only then", () => {
-    const plan = planApply(vendor(), CATALOGUE, {
+    const plan = planApply(vendor(), CATALOGUE, [], {
       managedFields: THREE_FIELDS,
       clear: ["Vendor"],
     });
@@ -444,7 +657,7 @@ describe("a field the catalogue has no Mappings for", () => {
   });
 
   it("needs no replace to clear — naming the field is the authorisation", () => {
-    const plan = planApply(vendor(), CATALOGUE, {
+    const plan = planApply(vendor(), CATALOGUE, [], {
       managedFields: THREE_FIELDS,
       clear: ["Vendor"],
       replace: false,
@@ -458,6 +671,7 @@ describe("a field the catalogue has no Mappings for", () => {
     const plan = planApply(
       [...emptyFields(), dropdown(4, "Vendor", [])],
       CATALOGUE,
+      [],
       { managedFields: THREE_FIELDS, clear: ["Vendor"] }
     );
 
@@ -469,7 +683,7 @@ describe("a field the catalogue has no Mappings for", () => {
   });
 
   it("warns rather than refuses when the instance does not define it", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       managedFields: THREE_FIELDS,
     });
 
@@ -483,6 +697,7 @@ describe("a field the catalogue has no Mappings for", () => {
     const plan = planApply(
       [...emptyFields(), dropdown(9, "Location", ["Anywhere"])],
       CATALOGUE,
+      [],
       { managedFields: THREE_FIELDS }
     );
 
@@ -494,7 +709,7 @@ describe("a field the catalogue has no Mappings for", () => {
 
 describe("refusing to clear the wrong thing", () => {
   it("refuses a name the instance does not define", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       clear: ["Vendor"],
       managedFields: TWO_FIELDS,
     });
@@ -506,7 +721,7 @@ describe("refusing to clear the wrong thing", () => {
   });
 
   it("refuses a field the catalogue populates", () => {
-    const plan = planApply(emptyFields(), CATALOGUE, {
+    const plan = planApply(emptyFields(), CATALOGUE, [], {
       clear: ["Machine"],
       managedFields: TWO_FIELDS,
     });
@@ -524,6 +739,7 @@ describe("refusing to clear the wrong thing", () => {
         { id: 4, name: "Vendor", field_type: "text", options: null },
       ],
       CATALOGUE,
+      [],
       { clear: ["Vendor"] }
     );
 
@@ -534,7 +750,7 @@ describe("refusing to clear the wrong thing", () => {
 
   it("throws when the same field is named twice", () => {
     expect(() =>
-      planApply(emptyFields(), CATALOGUE, {
+      planApply(emptyFields(), CATALOGUE, [], {
         clear: ["Vendor", "Vendor"],
       })
     ).toThrow(PlanApplyError);
@@ -543,7 +759,7 @@ describe("refusing to clear the wrong thing", () => {
 
 describe("a field the plan cannot reason about", () => {
   it("refuses when the catalogue names a field the instance does not define", () => {
-    const plan = planApply([dropdown(3, "Mask", [])], CATALOGUE, {
+    const plan = planApply([dropdown(3, "Mask", [])], CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
@@ -561,6 +777,7 @@ describe("a field the plan cannot reason about", () => {
         dropdown(3, "Mask", []),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -577,6 +794,7 @@ describe("a field the plan cannot reason about", () => {
         dropdown(3, "Mask", []),
       ],
       CATALOGUE,
+      [],
       { managedFields: TWO_FIELDS }
     );
 
@@ -594,6 +812,7 @@ describe("a field the plan cannot reason about", () => {
         dropdown(8, "Vendor", []),
       ],
       CATALOGUE,
+      [],
       { managedFields: [...TWO_FIELDS, "Vendor"] }
     );
 
@@ -616,7 +835,7 @@ describe("the order options are written in", () => {
   ];
 
   it("is the catalogue's, not one this step decides for itself", () => {
-    const plan = planApply([dropdown(2, "Machine", [])], MIXED_CASE, {
+    const plan = planApply([dropdown(2, "Machine", [])], MIXED_CASE, [], {
       managedFields: ["Machine"],
     });
 
@@ -629,7 +848,7 @@ describe("the order options are written in", () => {
 
   it("is the order `dropdownOptionsFor` gave it, on the real catalogue too", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(TEST_INSTANCE, catalogue, { replace: true });
+    const plan = planApply(TEST_INSTANCE, catalogue, [], { replace: true });
 
     expect(plan.writes.map((write) => write.after)).toEqual(
       dropdownOptionsFor(catalogue).map((field) => field.options)
@@ -662,15 +881,15 @@ describe("a catalogue this step cannot use", () => {
     ];
 
     expect(() =>
-      planApply(emptyFields(), twice, { managedFields: TWO_FIELDS })
+      planApply(emptyFields(), twice, [], { managedFields: TWO_FIELDS })
     ).toThrow(PlanApplyError);
     expect(() =>
-      planApply(emptyFields(), twice, { managedFields: TWO_FIELDS })
+      planApply(emptyFields(), twice, [], { managedFields: TWO_FIELDS })
     ).toThrow(/twice/);
   });
 
   it("plans nothing at all for an empty catalogue, and warns about each field", () => {
-    const plan = planApply(TEST_INSTANCE, []);
+    const plan = planApply(TEST_INSTANCE, [], []);
 
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toEqual([]);
@@ -682,7 +901,7 @@ describe("a catalogue this step cannot use", () => {
 
 describe("the test instance as it stands today", () => {
   it("refuses without replace, naming the trademark spellings", () => {
-    const plan = planApply(TEST_INSTANCE, realCatalogue());
+    const plan = planApply(TEST_INSTANCE, realCatalogue(), []);
 
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toHaveLength(1);
@@ -701,7 +920,7 @@ describe("the test instance as it stands today", () => {
   });
 
   it("does not refuse over Mask, whose one option is in the catalogue", () => {
-    const plan = planApply(TEST_INSTANCE, realCatalogue());
+    const plan = planApply(TEST_INSTANCE, realCatalogue(), []);
 
     expect(
       plan.refusals.map((refusal) => refusal.user_field_name)
@@ -710,7 +929,7 @@ describe("the test instance as it stands today", () => {
 
   it("writes both mapped fields with replace, and does not touch anything else", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(TEST_INSTANCE, catalogue, { replace: true });
+    const plan = planApply(TEST_INSTANCE, catalogue, [], { replace: true });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
@@ -735,7 +954,7 @@ describe("the test instance as it stands today", () => {
   const withSleepPosition = [...MANAGED_FIELDS, "Sleep Position"];
 
   it("warns that the Sleep Position options resolve nothing, and names them", () => {
-    const plan = planApply(TEST_INSTANCE, realCatalogue(), {
+    const plan = planApply(TEST_INSTANCE, realCatalogue(), [], {
       replace: true,
       managedFields: withSleepPosition,
     });
@@ -749,7 +968,7 @@ describe("the test instance as it stands today", () => {
   });
 
   it("clears Sleep Position only when it is named, alongside the two writes", () => {
-    const plan = planApply(TEST_INSTANCE, realCatalogue(), {
+    const plan = planApply(TEST_INSTANCE, realCatalogue(), [], {
       replace: true,
       clear: ["Sleep Position"],
       managedFields: withSleepPosition,
@@ -768,7 +987,7 @@ describe("the test instance as it stands today", () => {
 
   it("is idempotent — applying the plan's own result plans nothing", () => {
     const catalogue = realCatalogue();
-    const first = planApply(TEST_INSTANCE, catalogue, {
+    const first = planApply(TEST_INSTANCE, catalogue, [], {
       replace: true,
       clear: ["Sleep Position"],
       managedFields: withSleepPosition,
@@ -782,7 +1001,7 @@ describe("the test instance as it stands today", () => {
       return write ? { ...field, options: write.after } : field;
     });
 
-    const second = planApply(applied, catalogue, {
+    const second = planApply(applied, catalogue, [], {
       replace: true,
       clear: ["Sleep Position"],
       managedFields: withSleepPosition,
@@ -792,7 +1011,7 @@ describe("the test instance as it stands today", () => {
     expect(second.refusals).toEqual([]);
     expect(second.unchanged).toEqual(["Sleep Position", "Machine", "Mask"]);
 
-    const withoutFlags = planApply(applied, catalogue, {
+    const withoutFlags = planApply(applied, catalogue, [], {
       managedFields: withSleepPosition,
     });
 
@@ -802,7 +1021,7 @@ describe("the test instance as it stands today", () => {
 
   it("offers exactly the values the shipped Mappings cover", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(TEST_INSTANCE, catalogue, { replace: true });
+    const plan = planApply(TEST_INSTANCE, catalogue, [], { replace: true });
     const mappings = dropdownOptionsFor(catalogue);
 
     for (const write of plan.writes) {

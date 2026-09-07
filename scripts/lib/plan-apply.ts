@@ -19,8 +19,14 @@
 // review document uses, and are never derived a second way. A Dropdown Option
 // with no Mapping behind it is an Unmatched Value — the User picks their machine
 // and no Profile Link appears — so the two lists have one source.
+//
+// The Collection Links are handed in beside the catalogue and never reach that
+// function. They are Mappings with no Dropdown Option behind them (ADR-0021), so
+// they cannot add an option and must not: this step is given them only so it can
+// say which of the options it is taking away are still Mappings afterwards.
 
 import {
+  type CollectionLink,
   dropdownOptionsFor,
   type FieldOptions,
   type ResolvedProduct,
@@ -120,12 +126,39 @@ export interface ApplyWarning {
   detail: string;
 }
 
+/**
+ * A value the plan takes out of a field's Dropdown Options and that the
+ * catalogue still carries as a Collection Link. Removed as an option, retained
+ * as a Mapping — the two halves of one decision (ADR-0021).
+ *
+ * It is its own disposition rather than an annotation on the removal because a
+ * reader who sees only the first half acts on it. An operator reading a bare
+ * `- "AirSense 10 Elite with HumidAir (Discontinued)"` has every reason to put
+ * the option back, and putting it back offers a machine cpap.com no longer sells
+ * to the next User choosing one, which is the bug ADR-0012 was right about.
+ * ADR-0013 authorises a destructive write by what it removes, so what this one
+ * removes has to be stated exactly: an option, and not a Profile Link.
+ */
+export interface RetainedLink {
+  user_field_name: string;
+  /** The Dropdown Option going away, which is also the Mapping's value. */
+  value: string;
+  /** The collection the value still resolves to. */
+  url: string;
+  detail: string;
+}
+
 export interface ApplyPlan {
   writes: FieldWrite[];
   refusals: ApplyRefusal[];
   warnings: ApplyWarning[];
   /** Fields already holding exactly the right options. Named, not silent. */
   unchanged: string[];
+  /**
+   * The removals that take away an option and nothing else. Distinct from a
+   * write's `removed`, which is every option going, harmless or not.
+   */
+  retained: RetainedLink[];
 }
 
 export interface ApplyOptions {
@@ -266,10 +299,21 @@ function reasonFor(
  * destroys site data, and it must not ride along on populating `Machine` and
  * `Mask` (ADR-0012). Naming the field is the authorisation; asking for
  * `replace` as well would make the second flag noise.
+ *
+ * A removal whose value the catalogue still carries as a Collection Link is
+ * reported as a `RetainedLink` and authorised no differently. It is tempting to
+ * waive `replace` for one, since the harm the refusal guards against — a User's
+ * Profile Link silently disappearing — is exactly what a retained Mapping
+ * prevents. It is not waived, because the plan is all-or-nothing and an operator
+ * approving the removals on a field is reading the whole list anyway; a rule
+ * that let some of them through would be a second authorisation story for one
+ * flag. What a Collection Link changes is what the plan *says*, not what it
+ * needs.
  */
 export function planApply(
   currentFields: readonly UserFieldDefinition[],
   catalogue: readonly ResolvedProduct[],
+  collectionLinks: readonly CollectionLink[],
   options: ApplyOptions = {}
 ): ApplyPlan {
   const managed = options.managedFields ?? MANAGED_FIELDS;
@@ -483,12 +527,87 @@ export function planApply(
     });
   }
 
+  // Everything else is decided per field; this is decided about the plan, and
+  // has to see the emptied write list rather than the one above it. A retention
+  // annotates a removal the plan reports, and a removal the plan has already
+  // withdrawn is not one.
+  const reportedWrites = refusals.length > 0 ? [] : writes;
+
   return {
-    writes: refusals.length > 0 ? [] : writes,
+    writes: reportedWrites,
     refusals,
     warnings,
     unchanged,
+    retained: retainedLinks(reportedWrites, refusals, collectionLinks),
   };
+}
+
+/**
+ * Every removal the finished plan reports, paired with the Collection Link that
+ * keeps the value resolvable.
+ *
+ * Read back off the plan rather than pushed at each of the three places a
+ * removal is decided, because a fourth place added later would silently stop
+ * being reported — and an unreported retention reads as a bare removal, which is
+ * the one thing this disposition exists to prevent.
+ *
+ * Refusals come first, in `renderPlan`'s order. They are also the case that
+ * matters most: a refusal is where an operator decides whether to authorise the
+ * removal, so the retention has to be in front of them *then* rather than after
+ * they have passed `replace`.
+ *
+ * Matching is exact, for the reason all matching here is exact — Discourse
+ * stores the string the User picked, and a Mapping either equals it or resolves
+ * nothing (ADR-0013). A squashed comparison would promise a Profile Link that
+ * never appears: an option spelled `AirSense 10 Elite with HumidAir` is not the
+ * Collection Link `AirSense 10 Elite with HumidAir (Discontinued)`, and a User
+ * holding the first one really does lose their link.
+ */
+function retainedLinks(
+  writes: readonly FieldWrite[],
+  refusals: readonly ApplyRefusal[],
+  collectionLinks: readonly CollectionLink[]
+): RetainedLink[] {
+  const removals = [
+    ...refusals.map((refusal) => ({
+      name: refusal.user_field_name,
+      removed: refusal.removes.map((removal) => removal.option),
+    })),
+    ...writes.map((write) => ({
+      name: write.user_field_name,
+      removed: write.removed,
+    })),
+  ];
+
+  const retained: RetainedLink[] = [];
+
+  for (const removal of removals) {
+    for (const value of removal.removed) {
+      const link = collectionLinks.find(
+        (candidate) =>
+          candidate.userFieldName === removal.name && candidate.value === value
+      );
+
+      if (!link) {
+        continue;
+      }
+
+      retained.push({
+        user_field_name: removal.name,
+        value,
+        url: link.url,
+        detail:
+          `"${value}" is removed as a Dropdown Option on ` +
+          `"${removal.name}" and retained as a Mapping: the catalogue ships ` +
+          `it as a Collection Link to ${link.url}, so a User already holding ` +
+          `it keeps getting a Profile Link and nobody choosing one is offered ` +
+          `equipment cpap.com no longer sells (ADR-0021). Those are two halves ` +
+          `of one decision — do not re-add it as an option.`,
+      });
+    }
+  }
+
+  return retained;
 }
 
 function notDropdown(
