@@ -10,13 +10,13 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 
 ## ✨ What you get
 
-| | |
-|---|---|
-| 🪪 **Three Link Surfaces** | User card, user profile, and posts — one shared resolver, so all three agree. |
-| 🚫 **No duplicate rows** | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
+|                              |                                                                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🪪 **Three Link Surfaces**   | User card, user profile, and posts — one shared resolver, so all three agree.                                                                      |
+| 🚫 **No duplicate rows**     | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
-| ♾️ **No ceiling** | Map as many Custom User Fields as you like. The old ten-slot limit is gone. |
-| 🧪 **Actually tested** | 457 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance. |
+| ♾️ **No ceiling**            | Map as many Custom User Fields as you like. The old ten-slot limit is gone.                                                                        |
+| 🧪 **Actually tested**       | 457 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance.                                  |
 
 ---
 
@@ -39,7 +39,7 @@ A value that matches no Mapping renders nothing. An empty configuration is valid
 >
 > So editing Mappings through the theme settings UI freezes that site's catalogue at the moment you click save. Nothing breaks and nothing is logged; the site simply stops receiving product changes while every other site carries on getting them. **Opening the editor and saving it unchanged does this too** — that is how the test instance acquired one ([ADR-0019](docs/adr/0019-an-empty-override-is-an-accident-and-only-a-migration-can-remove-it.md)).
 >
-> **And there is no undo.** Discourse exposes no route that deletes a Setting Override — the admin API only writes one. Removing it takes a settings migration, or deleting and reinstalling the component. `migrations/settings/0002` removes an *empty* one, because that can only be an accident; a populated one is somebody's configuration and is kept.
+> **And there is no undo.** Discourse exposes no route that deletes a Setting Override — the admin API only writes one. Removing it takes a settings migration, or deleting and reinstalling the component. `migrations/settings/0002` removes an _empty_ one, because that can only be an accident; a populated one is somebody's configuration and is kept.
 >
 > Change `data/resolved-products.csv` or `data/collection-links.csv` in this repository and regenerate instead. `pnpm apply:catalogue` reports an override it finds on the target site, so a mistake is at least visible on the next run — though only once the override differs from what the repository shipped, since nothing readable from outside distinguishes "no override" from "an override that agrees".
 
@@ -72,25 +72,27 @@ So there are deliberately fewer Dropdown Options than Mappings. A **Collection L
 
 The two sinks land in **two different places**: Mappings ship in `settings.yml`, and Dropdown Options are Discourse site data that no commit can reach — so the last step runs once per instance.
 
-| Command | What it does | Credentials it needs |
-|---|---|---|
-| `pnpm export:sheet` | re-exports the three allowlisted Sheet tabs to `data/user_machine.csv`, `data/user_mask.csv` and `data/collection-assignment.csv` | `SHEET_WORKBOOK_ID`, plus the three `GOOGLE_SERVICE_ACCOUNT_*` variables |
-| `pnpm refresh:catalogue` | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, derives `data/collection-links.csv` from the Excluded Products + `data/collection-assignment.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN` |
-| `pnpm build:settings` | regenerates the `profile_link_fields` default in `settings.yml` | **none** — which is what lets it gate CI |
-| `pnpm build:settings --check` | fails if `settings.yml` and the two committed files disagree | **none** |
-| `pnpm verify:catalogue` | asks cpap.com whether every catalogue URL serves a page, one request at a time | **none** — it only asks for public product pages |
-| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
-| `pnpm apply:catalogue` | writes the Dropdown Options to that instance and reads them back | the same three |
+| Command                       | What it does                                                                                                                                                                                                                  | Credentials it needs                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `pnpm export:sheet`           | re-exports the three allowlisted Sheet tabs to `data/user_machine.csv`, `data/user_mask.csv` and `data/collection-assignment.csv`                                                                                             | `SHEET_WORKBOOK_ID`, plus the three `GOOGLE_SERVICE_ACCOUNT_*` variables |
+| `pnpm refresh:catalogue`      | rebuilds `data/resolved-products.csv` from the `user_*` exports + the live Shopify catalogue, derives `data/collection-links.csv` from the Excluded Products + `data/collection-assignment.csv`, and writes a review document | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                               |
+| `pnpm build:settings`         | regenerates the `profile_link_fields` default in `settings.yml`                                                                                                                                                               | **none** — which is what lets it gate CI                                 |
+| `pnpm build:settings --check` | fails if `settings.yml` and the two committed files disagree                                                                                                                                                                  | **none**                                                                 |
+| `pnpm verify:catalogue`       | asks cpap.com whether every catalogue URL serves a page, one request at a time                                                                                                                                                | **none** — it only asks for public product pages                         |
+| `pnpm apply:catalogue --plan` | prints what a Catalogue Apply would do to one instance, writing nothing                                                                                                                                                       | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY`      |
+| `pnpm apply:catalogue`        | writes the Dropdown Options to that instance and reads them back                                                                                                                                                              | the same three                                                           |
 
 `data/collection-assignment.csv` is the curated half of the Collection Links. A Catalogue Refresh joins it to the Excluded Products by legacy value: an excluded Suggested Title earns a link for five of the seven exclusion reasons, the assignment row says which collection it points at (an `Override` beating the recommendation), and the run asks Shopify whether that collection exists before shipping it. No row of `data/collection-links.csv` is hand-authored — the file is still committed, because `pnpm build:settings` has no network by design and needs it as an input, but a refresh writes every row of it.
 
-A link that is owed and cannot be derived is **reported rather than shipped**: an unadmitted collection, a legacy value nobody has assigned, an `undecided` row, or a value the curated table and the transform disagree about. They are listed one at a time under "Collection Links not derived" in the review document, and the command says how many there were on stderr. As of the 2026-09-04 refresh there are five, all of them legacy values whose products retired at Shopify after the curation pass — which is the standing mechanism doing its job, not a defect.
+A link that is owed and cannot be derived is **reported rather than shipped**: an unadmitted collection, a legacy value nobody has assigned, an `undecided` row, a value the curated table and the transform disagree about, two assignment rows claiming one legacy value differently, or several legacy values that collapse onto one value and then disagree about it. They are listed one at a time under "Collection Links not derived" in the review document, and the command says how many there were on stderr — the number of absent links, and separately the number of problems behind them, because several legacy values sharing a Suggested Title are one missing link and more than one reason.
+
+That count is expected to move on its own, and a refresh reporting some is not a refresh that failed. A product retiring at Shopify after the curation pass turns its legacy values into links nobody has assigned yet, which is the standing mechanism doing its job. Read the current number out of the review document rather than from here.
 
 The commands that need credentials read them from an ignored `.env`; the ones that need none cannot read it at all, which is what lets them run in CI and on a shared machine. Only the base URL differs between the test and production instances, and no step needs both Shopify and Discourse credentials — so a rotated Shopify token cannot block a Discourse deployment. `scripts/README.md` is the long version.
 
 `pnpm verify:catalogue` is the one check here that is **not** a hook and not a CI step, and that is deliberate — it sends one request per catalogue URL to a storefront that rate-limits, and a commit that cannot be made while cpap.com is busy would be a gate failing for reasons nobody here controls ([ADR-0018](docs/adr/0018-reachability-is-a-deliberate-command-and-never-a-gate.md)). Run it before an apply. It exits non-zero on anything unshippable, and it reports four outcomes rather than pass/fail:
 
-- **verified** — Shopify admits the product *and* the URL answers 2XX from a page that is still that product.
+- **verified** — Shopify admits the product _and_ the URL answers 2XX from a page that is still that product.
 - **failed** — Shopify admits it and cpap.com did not serve it.
 - **unresolved** — nothing ever answered (429, 503, or no response). Not a pass and not a failure; it blocks, and you run the pass again.
 - **excluded** — Shopify does not admit it, so it was never requested. The catalogue should not contain one at all.
@@ -99,7 +101,7 @@ The commands that need credentials read them from an ignored `.env`; the ones th
 
 Two facts about the Discourse admin API that cost time to rediscover:
 
-- On Discourse 2026.8 the field definitions live at **`/admin/config/user_fields.json`**, and they are written with `PUT /admin/config/user_fields/:id.json`. The older `/admin/customize/user_fields` path returns **404** — for the JSON *and* for the admin page, so a bookmark or an older tutorial will send you to a dead URL.
+- On Discourse 2026.8 the field definitions live at **`/admin/config/user_fields.json`**, and they are written with `PUT /admin/config/user_fields/:id.json`. The older `/admin/customize/user_fields` path returns **404** — for the JSON _and_ for the admin page, so a bookmark or an older tutorial will send you to a dead URL.
 - **A `200` from the write route does not mean the write landed.** An empty option list is discarded, duplicates are silently merged, and the response is a cheerful copy of the field either way. The readback is the only thing that reports whether an apply happened — [ADR-0014](docs/adr/0014-a-write-is-confirmed-by-reading-it-back.md).
 
 ---
@@ -149,13 +151,13 @@ pnpm install
 pre-commit install   # 👈 don't skip this
 ```
 
-| Command | What it does |
-|---|---|
-| `pnpm lint` | stylelint + eslint + prettier + type-check, in parallel |
-| `pnpm lint:fix` | fixes everything auto-fixable |
-| `pnpm lint:types` | Glint/TypeScript on its own |
-| `pnpm test` | unit tests, once |
-| `pnpm test:watch` | unit tests, on change |
+| Command           | What it does                                            |
+| ----------------- | ------------------------------------------------------- |
+| `pnpm lint`       | stylelint + eslint + prettier + type-check, in parallel |
+| `pnpm lint:fix`   | fixes everything auto-fixable                           |
+| `pnpm lint:types` | Glint/TypeScript on its own                             |
+| `pnpm test`       | unit tests, once                                        |
+| `pnpm test:watch` | unit tests, on change                                   |
 
 The catalogue commands — `export:sheet`, `refresh:catalogue`, `build:settings`, `verify:catalogue`, `apply:catalogue` — are in [their own section above](#-the-cpapcom-product-catalogue), with the credentials each one needs.
 

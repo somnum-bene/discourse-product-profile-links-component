@@ -13,7 +13,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { buildCatalogue } from "./lib/build-catalogue.ts";
+import { buildCatalogue, undeliveredValues } from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
@@ -165,8 +165,11 @@ async function main(): Promise<void> {
     }
 
     process.stderr.write(
-      `\n${collectionFaults.length} Collection Links were owed and not ` +
-        `derived: ${[...counts]
+      `\n${undeliveredValues(collectionFaults)} Collection Links were owed ` +
+        `and not derived, across ${collectionFaults.length} reported ` +
+        `${collectionFaults.length === 1 ? "problem" : "problems"}: ${[
+          ...counts,
+        ]
           .map(([problem, count]) => `${count} ${problem}`)
           .join(", ")}.\n` +
         `They are reported rather than shipped — see "Collection Links not ` +

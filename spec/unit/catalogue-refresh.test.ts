@@ -10,6 +10,7 @@ import {
   type ProductRecord,
   type ResolvedProduct,
   type SheetRow,
+  undeliveredValues,
 } from "../../scripts/lib/build-catalogue";
 import {
   CATALOGUE_FILE,
@@ -922,12 +923,14 @@ describe("the collection-links file", () => {
     // the faults that would mean the committed file is missing a row it should
     // hold, and none of them survives a correct derivation.
     //
-    // `unassigned-legacy-value` is deliberately not asserted away. Five of them
-    // are real as of the 2026-09-04 refresh: three products retired at Shopify
-    // after the curation pass, so five legacy values now earn a Collection Link
-    // that nobody has assigned one to yet. That is the standing mechanism
-    // working — a product that retires in six months does exactly this — and it
-    // is reported in the review document rather than fixed here.
+    // `unassigned-legacy-value` is deliberately not asserted away, and this
+    // test declines to say how many of them there are. It is the one fault the
+    // committed data can grow on its own: a product retiring at Shopify after
+    // the curation pass turns its legacy values into links nobody has assigned
+    // yet. That is the standing mechanism working, reported in the review
+    // document rather than fixed here — so asserting a count would make an
+    // ordinary catalogue movement fail this file, and asserting the count that
+    // happened to hold on the day it was written would go stale in silence.
     expect(
       collectionFaults.filter(
         (fault) => fault.problem !== "unassigned-legacy-value"
@@ -1208,6 +1211,25 @@ describe("the review document", () => {
     // the fixtures hold an archived mask carrying the division tag, and counting
     // it would report three products on sale where there are two.
     expect(review).toContain("| Mask | 2 | 0 | 2 | 2 | 1 |");
+  });
+
+  it("counts absent Collection Links apart from the problems behind them", () => {
+    // Two numbers, because they are two facts: legacy values sharing a
+    // Suggested Title collapse to one Mapping, so a value can be one absent
+    // link and several reported problems. An approver reading the problem count
+    // as a link count goes looking for a link that was never owed.
+    //
+    // These fixtures happen to be one-to-one — every fault is its own value —
+    // which is what makes the labels load-bearing rather than the arithmetic:
+    // the summary has to say which number is which even when they agree.
+    const problems = built.collectionFaults.length;
+
+    expect(problems).toBeGreaterThan(0);
+    expect(undeliveredValues(built.collectionFaults)).toBe(problems);
+    expect(review).toContain(
+      `- Collection Links that could not be derived: ${problems} ` +
+        `(${problems} reported problems)`
+    );
   });
 
   it("lists every Collection Link that will ship", () => {

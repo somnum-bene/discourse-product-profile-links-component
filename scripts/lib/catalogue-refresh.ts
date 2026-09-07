@@ -29,6 +29,7 @@ import {
   type ProductStatus,
   type ResolvedProduct,
   type SheetRow,
+  undeliveredValues,
 } from "./build-catalogue.ts";
 import { type AssignmentRow, parseCsv, SHEET_TABS } from "./sheet-export.ts";
 
@@ -953,7 +954,9 @@ export function renderReviewDocument({
         `${collectionLinks.length} Collection Links)`,
       `- Collection Links file: \`${COLLECTION_LINKS_FILE}\``,
       `- Excluded Suggested Titles: ${exclusions.length}`,
-      `- Collection Links that could not be derived: ${collectionFaults.length}`,
+      `- Collection Links that could not be derived: ` +
+        `${undeliveredValues(collectionFaults)} ` +
+        `(${collectionFaults.length} reported problems)`,
       `- Shopify Admin API ${SHOPIFY_API_VERSION}, read-only, ${products.length} products seen`,
     ].join("\n"),
     `Regenerating this document from unchanged inputs produces an identical ` +
@@ -1209,9 +1212,9 @@ export const COLLECTION_LINK_PROBLEMS: readonly CollectionLinkProblem[] =
  *
  * This is the section that has to be readable when it is not empty, which is
  * why every problem gets its own subsection with its own explanation even when
- * there is nothing under it. A refresh that ships eighty-one links and silently
- * drops one is the failure ADR-0020 reversed ADR-0012 to prevent, arriving one
- * value at a time instead of all at once.
+ * there is nothing under it. A refresh that ships almost every link and
+ * silently drops one is the failure ADR-0020 reversed ADR-0012 to prevent,
+ * arriving one value at a time instead of all at once.
  */
 function renderCollectionFaults(
   faults: readonly CollectionLinkFault[]

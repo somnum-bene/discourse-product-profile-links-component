@@ -242,6 +242,24 @@ export interface CollectionLinkFault {
   detail: string;
 }
 
+/**
+ * How many Collection Links a set of faults means are missing.
+ *
+ * Not `faults.length`, which counts *reasons*. Several legacy values sharing a
+ * Suggested Title collapse to one Mapping, so two unassigned siblings are two
+ * faults and one absent link, and a `divided-value` group reports the group's
+ * problem on top of each withheld row's own. Counting reasons as links
+ * overstates what is missing, and a number a reader can disprove by opening the
+ * review document is worse than no number.
+ */
+export function undeliveredValues(
+  faults: readonly CollectionLinkFault[]
+): number {
+  return new Set(
+    faults.map((fault) => `${fault.userFieldName}\u0000${fault.value}`)
+  ).size;
+}
+
 export interface CatalogueInput {
   sheetRows: SheetRow[];
   products: ProductRecord[];
@@ -1052,14 +1070,29 @@ function deriveCollectionLinks({
  * Whether two Collection Assignment rows claiming one legacy value decide the
  * same thing.
  *
- * Only the three fields the derivation reads are compared, because only they
- * can change what ships. Two rows may differ in `Legacy Text` or
+ * Only the fields the derivation reads are compared, because only they can
+ * change what ships. Two rows may differ in `Legacy Text` or
  * `Recommended Collection Title` and still leave the same Collection Link, and
  * a duplicate that changes nothing is not worth a curator's afternoon.
+ *
+ * Which fields those are depends on the disposition, which is why the value and
+ * the URL are compared only under `collection`. On the other three the
+ * derivation never reads them: a `plain-text` row ships no link whatever its
+ * `Profile Link Value` says, and an `undecided` one blocks whatever URL it
+ * names. Two such rows carrying different stale recommendations agree on the
+ * only thing that reaches a member, so reporting them would put a fault in
+ * front of a curator with no edit that could clear it.
  */
 function decidesTheSame(a: AssignmentRow, b: AssignmentRow): boolean {
+  if (a.disposition !== b.disposition) {
+    return false;
+  }
+
+  if (a.disposition !== "collection") {
+    return true;
+  }
+
   return (
-    a.disposition === b.disposition &&
     a.profileLinkValue.trim() === b.profileLinkValue.trim() &&
     assignedCollectionUrl(a) === assignedCollectionUrl(b)
   );

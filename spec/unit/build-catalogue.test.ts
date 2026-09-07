@@ -13,6 +13,7 @@ import {
   renderFieldMappings,
   type ResolvedProduct,
   type SheetRow,
+  undeliveredValues,
 } from "../../scripts/lib/build-catalogue";
 import { MANAGED_FIELDS } from "../../scripts/lib/plan-apply.ts";
 import type { AssignmentRow } from "../../scripts/lib/sheet-export.ts";
@@ -1174,6 +1175,44 @@ describe("Collection Links that cannot be derived", () => {
     ]);
   });
 
+  it("lets a repeated non-`collection` claim through whatever it recommends", () => {
+    // Two `plain-text` rows differing in the value and the collection they
+    // recommend. Neither cell is read under that disposition — no link ships
+    // either way — so they agree on the only thing that reaches a member.
+    // Reporting it would hand a curator a fault with no edit that clears it.
+    const claim = { legacyPnums: "6240", disposition: "plain-text" } as const;
+
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({ ...claim, recommendedCollectionUrl: BIPAP }),
+      assignment({
+        ...claim,
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: CPAP_MACHINES,
+      }),
+    ]);
+
+    expect(collectionFaults).toEqual([]);
+    expect(collectionLinks).toEqual([]);
+  });
+
+  it("still reports two rows that claim one legacy value with different dispositions", () => {
+    // The disposition is compared whatever it is: `plain-text` against
+    // `collection` is the difference between a link and none, which is the
+    // most consequential disagreement two rows can hold.
+    const { collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: BIPAP,
+      }),
+      assignment({ legacyPnums: "6240", disposition: "plain-text" }),
+    ]);
+
+    expect(collectionFaults.map((fault) => fault.problem)).toEqual([
+      "duplicate-assignment",
+    ]);
+  });
+
   it("ships nothing for a value when only some of its rows earned a link", () => {
     // The sharp case. Both rows derive `AirCurve 11 ASV (Discontinued)`, so
     // they collapse to one Mapping — and a Mapping is keyed on its value and
@@ -1197,6 +1236,46 @@ describe("Collection Links that cannot be derived", () => {
       "unassigned-legacy-value",
     ]);
     expect(collectionFaults[0].legacyValues).toEqual(["6240", "6241"]);
+  });
+
+  it("counts one absent link for a value that reported two problems", () => {
+    // The same divided value, asked the question the CLI and the review
+    // document ask: how many Collection Links are missing. Two faults, one
+    // Mapping — and counting reasons as links would tell an operator to go
+    // find a second one that was never owed.
+    const { collectionFaults } = build([...ASV_ROW, ASV_SIBLING], PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: BIPAP,
+      }),
+    ]);
+
+    expect(collectionFaults).toHaveLength(2);
+    expect(undeliveredValues(collectionFaults)).toBe(1);
+  });
+
+  it("counts an absent link per value, not per field", () => {
+    // Two fields can hold the same value, and a Mapping lives in one field, so
+    // the pair is the key rather than the value alone.
+    expect(
+      undeliveredValues([
+        {
+          userFieldName: "Machine",
+          legacyValues: ["1"],
+          value: "Foo (Discontinued)",
+          problem: "unassigned-legacy-value",
+          detail: "",
+        },
+        {
+          userFieldName: "Mask",
+          legacyValues: ["2"],
+          value: "Foo (Discontinued)",
+          problem: "unassigned-legacy-value",
+          detail: "",
+        },
+      ])
+    ).toBe(2);
   });
 
   it("ships nothing for a value one of whose rows was curated to plain text", () => {
