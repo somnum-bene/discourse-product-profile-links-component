@@ -212,8 +212,12 @@ export type CollectionLinkProblem =
   | "no-base-name"
   /** The derived value and the row's curated `Profile Link Value` differ. */
   | "curation-disagreement"
+  /** Two Collection Assignment rows claim one legacy value and decide differently. */
+  | "duplicate-assignment"
   /** Two legacy values derive one value and disagree about its collection. */
-  | "conflicting-collection";
+  | "conflicting-collection"
+  /** Two legacy values derive one value and only some of them earn a link. */
+  | "divided-value";
 
 /** A Collection Link that could not be derived, and everything known about it. */
 export interface CollectionLinkFault {
@@ -225,9 +229,10 @@ export interface CollectionLinkFault {
    *
    * A list rather than a string, and always a list even when it holds one.
    * Most faults are about a single legacy value, but a `conflicting-collection`
-   * is about the several that collided on one derived value, and a field that
-   * held either one identifier or a comma-joined run of them would leave every
-   * consumer to guess which it had — including the one that has to render them.
+   * and a `divided-value` are about the several that collided on one derived
+   * value, and a field that held either one identifier or a comma-joined run
+   * of them would leave every consumer to guess which it had — including the
+   * one that has to render them.
    */
   legacyValues: string[];
   /** The value that would have shipped, as far as it could be derived. */
@@ -330,19 +335,67 @@ export function handleFromSuggestedUrl(suggestedUrl: string): string {
 }
 
 /**
+ * The one origin a Profile Link may point at, and the one path a collection
+ * lives under.
+ *
+ * Defined here, in the pure transform, rather than beside the read gate that
+ * also needs them. The derivation and the gate have to admit exactly the same
+ * set of URLs: one that the derivation ships and the reader refuses is a
+ * refresh that writes a Collection Link file no other command can load.
+ */
+export const COLLECTION_URL_ORIGIN = "https://www.cpap.com";
+export const COLLECTION_URL_PREFIX = "/collections/";
+
+/**
  * The collection handle a curated collection URL identifies, or an empty string
  * when it identifies none. The sibling of `handleFromSuggestedUrl`, and
  * exported for the same reason: the Catalogue Refresh has to ask Shopify about
  * exactly the handles this join will look for, and a command that worked them
  * out some other way could admit a collection the transform never consults.
  *
+ * It insists on the whole URL and not merely a `/collections/…` somewhere
+ * inside one, because the handle it returns is what Shopify is asked about
+ * while the URL it was read from is what ships. Anything looser lets those two
+ * name different pages: `…/collections/bipap-machines/typo` would be checked
+ * as `bipap-machines`, pass, and ship the broken path, and
+ * `https://example.com/collections/bipap-machines` would ship somebody else's
+ * store on the strength of cpap.com's collection existing. A URL that names no
+ * handle is reported as `unadmitted-collection` rather than shipped, so erring
+ * toward refusing costs a curator one line in a review document while erring
+ * the other way costs a member a dead link (ADR-0016).
+ *
+ * A query string and a fragment are the exception, and pass. They are the one
+ * thing that can follow the handle without changing which collection the URL
+ * resolves to, so admitting them keeps this from refusing a URL that works.
+ *
  * Shape only. Whether the handle names a collection that exists is Shopify's
  * answer, not this function's (ADR-0009).
  */
 export function collectionHandleFromUrl(url: string): string {
-  const match = /\/collections\/([^/?#]+)/.exec(url);
+  let parsed: URL;
 
-  return match ? match[1] : "";
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "";
+  }
+
+  // `origin` rather than `host`, so `http://` is refused along with the wrong
+  // host: Discourse renders these as links a member clicks, and the scheme is
+  // part of where they land.
+  if (
+    parsed.origin !== COLLECTION_URL_ORIGIN ||
+    !parsed.pathname.startsWith(COLLECTION_URL_PREFIX)
+  ) {
+    return "";
+  }
+
+  const handle = parsed.pathname.slice(COLLECTION_URL_PREFIX.length);
+
+  // One path segment and no more. This is what refuses both the nested path
+  // and the trailing slash, and a handle is one segment by Shopify's own
+  // definition.
+  return handle === "" || handle.includes("/") ? "" : handle;
 }
 
 function isDiscontinued(product: ProductRecord): boolean {
@@ -679,19 +732,41 @@ function deriveCollectionLinks({
   // Keyed on the legacy identifier, because that is the column a curator
   // assigns against and the string a migrated member is holding. A few rows
   // fold several identifiers into one assignment, and they all resolve to it.
-  // First wins if two rows claim one identifier, on the same terms as the
-  // `byHandle` map in `buildCatalogue`: the table is exported from a Sheet whose
-  // rows are seeded one-to-one from the option tables, so a second claim is a
-  // curation mistake rather than a second opinion, and it surfaces as a
-  // `curation-disagreement` the moment the two rows propose different values.
   const assignmentByLegacyValue = new Map<string, AssignmentRow>();
+
+  // The identifiers more than one row claims, and claims differently. The table
+  // is exported from a Sheet whose rows are seeded one-to-one from the option
+  // tables, so a second claim on one identifier is a curation mistake rather
+  // than a second opinion — but it is not one this function may settle. Letting
+  // the first row win would decide by sheet order, which is not a decision
+  // anyone made, and it would hide the mistake precisely because it produced a
+  // perfectly plausible link.
+  const contestedClaims = new Map<string, AssignmentRow[]>();
 
   for (const assignment of assignments) {
     for (const legacyValue of legacyValuesOf(assignment)) {
       const key = `${assignment.field}\u0000${legacyValue}`;
+      const claimed = assignmentByLegacyValue.get(key);
 
-      if (!assignmentByLegacyValue.has(key)) {
+      if (!claimed) {
         assignmentByLegacyValue.set(key, assignment);
+        continue;
+      }
+
+      // A repeat claim deciding the same thing changes nothing that ships, so
+      // it passes without comment: a curator can only act on a duplicate that
+      // matters, and a fault nobody can act on is noise in the one channel
+      // that has to stay worth reading.
+      if (decidesTheSame(claimed, assignment)) {
+        continue;
+      }
+
+      const contested = contestedClaims.get(key);
+
+      if (contested) {
+        contested.push(assignment);
+      } else {
+        contestedClaims.set(key, [claimed, assignment]);
       }
     }
   }
@@ -714,11 +789,68 @@ function deriveCollectionLinks({
       continue;
     }
 
-    const fault = (
-      problem: CollectionLinkProblem,
-      value: string,
-      detail: string
-    ): void => {
+    // ADR-0020's derivation, and the only exception to ADR-0010 there is. The
+    // Suggested Title is the curated name and normally wins outright; on the
+    // four retired catch-all titles it names no equipment at all, so the row
+    // takes the name the bulletin board actually showed its members instead.
+    // `discontinued-suffix` *is* the catch-all case — it is the reason those
+    // four titles were excluded — so the branch is read off the exclusion the
+    // transform already made rather than re-derived from the title here.
+    //
+    // Derived before the assignment is so much as looked up, because the value
+    // is what every outcome below has to be filed under. A row withheld
+    // without one is a row whose siblings cannot tell that it was withheld.
+    const baseName = (
+      reason === "discontinued-suffix" ? row.legacyText : suggestedTitle
+    )
+      .trim()
+      .replace(CARRIED_SUFFIX, "")
+      .trim();
+
+    if (!baseName) {
+      // The one outcome that joins no group. A row that derives no value is a
+      // member of none, so it withholds nothing from anybody but itself.
+      faults.push({
+        userFieldName,
+        legacyValues: [legacyValue],
+        value: "",
+        problem: "no-base-name",
+        detail:
+          `the ${
+            reason === "discontinued-suffix"
+              ? "legacy display text"
+              : "Suggested Title"
+          } leaves nothing once the suffix is stripped, so the value would be ` +
+          `${JSON.stringify(COLLECTION_LINK_SUFFIX)} and nothing else — a ` +
+          `string that names no equipment and matches no member (ADR-0020)`,
+      });
+      continue;
+    }
+
+    const value = `${baseName}${COLLECTION_LINK_SUFFIX}`;
+    const groupKey = `${userFieldName}\u0000${value}`;
+
+    // Every row deriving a value files an outcome under it, whether or not it
+    // earned a link, and that is what the second pass reads. A Mapping is
+    // keyed on its value, so a link shipped for one row is a link every row
+    // sharing that value receives — including one deliberately held back.
+    // Recording the withholding is the only way its siblings find out.
+    const record = (url: string): void => {
+      const group = groups.get(groupKey);
+
+      if (group) {
+        group.outcomes.push({ legacyValue, url });
+      } else {
+        groups.set(groupKey, {
+          userFieldName,
+          value,
+          outcomes: [{ legacyValue, url }],
+        });
+      }
+    };
+
+    /** Reports the row's problem and files it as having earned nothing. */
+    const withhold = (problem: CollectionLinkProblem, detail: string): void => {
       faults.push({
         userFieldName,
         legacyValues: [legacyValue],
@@ -726,16 +858,36 @@ function deriveCollectionLinks({
         problem,
         detail,
       });
+      record("");
     };
 
-    const assignment = assignmentByLegacyValue.get(
-      `${userFieldName}\u0000${legacyValue}`
-    );
+    const claimKey = `${userFieldName}\u0000${legacyValue}`;
+    const contested = contestedClaims.get(claimKey);
+
+    if (contested) {
+      withhold(
+        "duplicate-assignment",
+        `${contested.length} Collection Assignment rows claim this legacy ` +
+          `value and do not decide the same thing: ` +
+          contested
+            .map(
+              (claim) =>
+                `${JSON.stringify(claim.disposition)} → ` +
+                `${JSON.stringify(claim.profileLinkValue.trim())} at ` +
+                `${JSON.stringify(assignedCollectionUrl(claim))}`
+            )
+            .join("; ") +
+          `. Which of them is meant is a curator's answer, and taking the ` +
+          `first would answer it by sheet order`
+      );
+      continue;
+    }
+
+    const assignment = assignmentByLegacyValue.get(claimKey);
 
     if (!assignment) {
-      fault(
+      withhold(
         "unassigned-legacy-value",
-        "",
         `the Suggested Title ${JSON.stringify(suggestedTitle)} was excluded as ` +
           `\`${reason}\`, which earns a Collection Link, but no Collection ` +
           `Assignment row claims this legacy value`
@@ -750,57 +902,32 @@ function deriveCollectionLinks({
         // Link. `resolves-to-product` in particular is not a dropped row — the
         // legacy identifier still carries the live product's value downstream —
         // it just does not carry one from here.
+        //
+        // Recorded rather than skipped, and with no fault: a decision is not a
+        // problem. But it is a decision the value has to honour, and if a
+        // sibling sharing this value did earn a link then honouring both is
+        // impossible — which the second pass reports as `divided-value`.
+        record("");
         continue;
       case "undecided":
-        fault(
+        withhold(
           "undecided-disposition",
-          assignment.profileLinkValue.trim(),
           `the Collection Assignment row for this legacy value is still ` +
-            `\`undecided\`. That is an absence of evidence rather than a ` +
-            `preference, so it blocks the link rather than quietly resolving ` +
-            `to none (ADR-0021)`
+            `\`undecided\`, against a Profile Link Value of ` +
+            `${JSON.stringify(assignment.profileLinkValue.trim())}. That is ` +
+            `an absence of evidence rather than a preference, so it blocks ` +
+            `the link rather than quietly resolving to none (ADR-0021)`
         );
         continue;
       case "collection":
         break;
     }
 
-    // ADR-0020's derivation, and the only exception to ADR-0010 there is. The
-    // Suggested Title is the curated name and normally wins outright; on the
-    // four retired catch-all titles it names no equipment at all, so the row
-    // takes the name the bulletin board actually showed its members instead.
-    // `discontinued-suffix` *is* the catch-all case — it is the reason those
-    // four titles were excluded — so the branch is read off the exclusion the
-    // transform already made rather than re-derived from the title here.
-    const baseName = (
-      reason === "discontinued-suffix" ? row.legacyText : suggestedTitle
-    )
-      .trim()
-      .replace(CARRIED_SUFFIX, "")
-      .trim();
-
-    if (!baseName) {
-      fault(
-        "no-base-name",
-        "",
-        `the ${
-          reason === "discontinued-suffix"
-            ? "legacy display text"
-            : "Suggested Title"
-        } leaves nothing once the suffix is stripped, so the value would be ` +
-          `${JSON.stringify(COLLECTION_LINK_SUFFIX)} and nothing else — a ` +
-          `string that names no equipment and matches no member (ADR-0020)`
-      );
-      continue;
-    }
-
-    const value = `${baseName}${COLLECTION_LINK_SUFFIX}`;
     const curated = assignment.profileLinkValue.trim();
 
     if (value !== curated) {
-      fault(
+      withhold(
         "curation-disagreement",
-        value,
         `the Collection Assignment row declares a Base Name Source of ` +
           `${JSON.stringify(assignment.baseNameSource)} and a Profile Link ` +
           `Value of ${JSON.stringify(curated)}, but this row was excluded as ` +
@@ -814,44 +941,73 @@ function deriveCollectionLinks({
     const handle = collectionHandleFromUrl(url);
 
     if (!handle || !admitted.has(handle)) {
-      fault(
+      withhold(
         "unadmitted-collection",
-        value,
         handle
           ? `Shopify admits no collection with the handle ` +
               `${JSON.stringify(handle)}, which is what ${JSON.stringify(url)} ` +
               `names. A collection that does not exist is a link to nothing, ` +
               `and whether it exists is Shopify's answer (ADR-0009)`
           : `the assigned collection ${JSON.stringify(url)} names no ` +
-              `collection handle at all, so there is nothing to ask Shopify about`
+              `collection handle — it is not an ` +
+              `${JSON.stringify(`${COLLECTION_URL_ORIGIN}${COLLECTION_URL_PREFIX}`)} ` +
+              `URL followed by one — so there is nothing to ask Shopify ` +
+              `about, and a URL whose handle cannot be read is one no check ` +
+              `could have covered (ADR-0016)`
       );
       continue;
     }
 
-    const key = `${userFieldName}\u0000${value}`;
-    const group = groups.get(key);
-
-    if (group) {
-      const sharing = group.urls.get(url);
-
-      if (sharing) {
-        sharing.push(legacyValue);
-      } else {
-        group.urls.set(url, [legacyValue]);
-      }
-    } else {
-      groups.set(key, {
-        userFieldName,
-        value,
-        urls: new Map([[url, [legacyValue]]]),
-      });
-    }
+    record(url);
   }
 
   const collectionLinks: CollectionLink[] = [];
 
   for (const group of groups.values()) {
-    const [first, ...rest] = [...group.urls];
+    const earned = group.outcomes.filter((outcome) => outcome.url !== "");
+    const withheld = group.outcomes.filter((outcome) => outcome.url === "");
+
+    // Nothing to ship. Every withheld row has already reported why, or was a
+    // recorded decision that needed no reporting.
+    if (earned.length === 0) {
+      continue;
+    }
+
+    // The rows behind one value did not reach one answer. Shipping the link
+    // would hand it to the withheld rows too — a Mapping is keyed on its value
+    // and cannot tell which legacy identifier a member arrived by — so a
+    // curator's `plain-text` would be overruled, and an unassigned row would
+    // receive a link nobody assigned it. Both are the quiet guess ADR-0020
+    // exists to refuse, so the whole value waits until its rows agree.
+    if (withheld.length > 0) {
+      faults.push({
+        userFieldName: group.userFieldName,
+        legacyValues: group.outcomes.map((outcome) => outcome.legacyValue),
+        value: group.value,
+        problem: "divided-value",
+        detail:
+          `the legacy values behind this one value did not all earn a link: ` +
+          `${earned.map((outcome) => outcome.legacyValue).join(", ")} did, and ` +
+          `${withheld.map((outcome) => outcome.legacyValue).join(", ")} did ` +
+          `not. They share a Suggested Title, so they collapse to one ` +
+          `Mapping, and one Mapping cannot be shipped to some of them`,
+      });
+      continue;
+    }
+
+    const byUrl = new Map<string, string[]>();
+
+    for (const outcome of earned) {
+      const sharing = byUrl.get(outcome.url);
+
+      if (sharing) {
+        sharing.push(outcome.legacyValue);
+      } else {
+        byUrl.set(outcome.url, [outcome.legacyValue]);
+      }
+    }
+
+    const [first, ...rest] = [...byUrl];
 
     // One value resolves one URL: a Mapping is keyed on its value within a
     // field, so shipping both would be a `duplicate-value` Config Problem on
@@ -860,7 +1016,7 @@ function deriveCollectionLinks({
     if (rest.length > 0) {
       faults.push({
         userFieldName: group.userFieldName,
-        legacyValues: [...group.urls.values()].flat(),
+        legacyValues: [...byUrl.values()].flat(),
         value: group.value,
         problem: "conflicting-collection",
         detail:
@@ -892,11 +1048,35 @@ function deriveCollectionLinks({
   return { collectionLinks, faults };
 }
 
-/** One derived value, and every collection the rows behind it were assigned. */
+/**
+ * Whether two Collection Assignment rows claiming one legacy value decide the
+ * same thing.
+ *
+ * Only the three fields the derivation reads are compared, because only they
+ * can change what ships. Two rows may differ in `Legacy Text` or
+ * `Recommended Collection Title` and still leave the same Collection Link, and
+ * a duplicate that changes nothing is not worth a curator's afternoon.
+ */
+function decidesTheSame(a: AssignmentRow, b: AssignmentRow): boolean {
+  return (
+    a.disposition === b.disposition &&
+    a.profileLinkValue.trim() === b.profileLinkValue.trim() &&
+    assignedCollectionUrl(a) === assignedCollectionUrl(b)
+  );
+}
+
+/** What one sheet row's decision came to, and the collection it named. */
+interface RowOutcome {
+  legacyValue: string;
+  /** The collection this row earned, or `""` when it earned none. */
+  url: string;
+}
+
+/** One derived value, and what every row behind it came to. */
 interface DerivedGroup {
   userFieldName: string;
   value: string;
-  urls: Map<string, string[]>;
+  outcomes: RowOutcome[];
 }
 
 /**

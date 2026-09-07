@@ -511,6 +511,45 @@ describe("collectionHandleFromUrl", () => {
     ).toBe("apap-machines");
   });
 
+  it("returns nothing for a path carrying more than the handle", () => {
+    // The handle a looser parser reads here is `bipap-machines`, which Shopify
+    // admits — so the admission check would pass while the URL that ships is a
+    // page that does not exist. Refusing the shape is what keeps the string
+    // Shopify is asked about and the string a member clicks the same one.
+    expect(
+      collectionHandleFromUrl(
+        "https://www.cpap.com/collections/bipap-machines/typo"
+      )
+    ).toBe("");
+    expect(
+      collectionHandleFromUrl(
+        "https://www.cpap.com/collections/bipap-machines/"
+      )
+    ).toBe("");
+    expect(collectionHandleFromUrl("https://www.cpap.com/collections/")).toBe(
+      ""
+    );
+    expect(
+      collectionHandleFromUrl("https://www.cpap.com/products/airsense-11")
+    ).toBe("");
+  });
+
+  it("returns nothing for a collection at another origin", () => {
+    // `bipap-machines` exists at cpap.com, so a parser reading the handle out
+    // of any origin would admit somebody else's store on the strength of it.
+    expect(
+      collectionHandleFromUrl("https://example.com/collections/bipap-machines")
+    ).toBe("");
+    expect(
+      collectionHandleFromUrl(
+        "https://cpap.com.evil.test/collections/bipap-machines"
+      )
+    ).toBe("");
+    expect(
+      collectionHandleFromUrl("http://www.cpap.com/collections/bipap-machines")
+    ).toBe("");
+  });
+
   it("returns nothing for a cell that names no collection", () => {
     // The `resolves-to-product` rows hold exactly this, and an empty answer is
     // what turns into an `unadmitted-collection` fault rather than a request.
@@ -843,9 +882,11 @@ describe("the collection-links file", () => {
     // therefore the same ones fall through to a Collection Link.
     //
     // `admittedCollections` is every handle the table names, which is what the
-    // 2026-09-04 verification of all nine found. Admission is asked of Shopify
-    // on a real run; here it is granted, so that this test measures derivation
-    // and the admission check is measured on its own.
+    // last refresh found Shopify admitting — all of them. The count is left
+    // uncounted here on purpose: it is one curated row away from changing, and
+    // a number in a comment is a number that goes stale silently. Admission is
+    // asked of Shopify on a real run; here it is granted, so that this test
+    // measures derivation and the admission check is measured on its own.
     const sheetRows = SHEET_TABS.flatMap((tab) =>
       sheetRowsFrom(
         tab,

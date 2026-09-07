@@ -14,6 +14,8 @@ import { createHash } from "node:crypto";
 import {
   assignedCollectionUrl,
   COLLECTION_LINK_SUFFIX,
+  COLLECTION_URL_ORIGIN,
+  COLLECTION_URL_PREFIX,
   collectionHandleFromUrl,
   type CollectionLink,
   type CollectionLinkFault,
@@ -745,11 +747,9 @@ function dataRowsOf(
   });
 }
 
-const COLLECTION_URL_ORIGIN = "https://www.cpap.com";
-const COLLECTION_URL_PREFIX = "/collections/";
-
 /**
- * Refuses anything that is not an `https://www.cpap.com/collections/…` URL.
+ * Refuses anything that is not an `https://www.cpap.com/collections/<handle>`
+ * URL.
  *
  * This is the only hand-entered URL in the pipeline. A Resolved Product's URL
  * is Shopify's own `onlineStoreUrl` (ADR-0009) and so is a URL by
@@ -759,6 +759,13 @@ const COLLECTION_URL_PREFIX = "/collections/";
  * Mapping it dislikes (ADR-0016) — one typo takes every Profile Link down, not
  * just this one.
  *
+ * The verdict is `collectionHandleFromUrl`'s and nothing else's. The
+ * derivation asks Shopify about the handle that function reads, so a gate that
+ * judged URLs by its own rules could refuse a URL the derivation had just
+ * shipped — a refresh writing a file no other command can load — or admit one
+ * whose handle Shopify was never asked about. Everything below the early
+ * return exists to explain a refusal, not to decide one.
+ *
  * Shape only, and deliberately not existence: whether Shopify admits the
  * collection is a different question, asked on refresh against Shopify itself
  * and reported as `unadmitted-collection` rather than shipped (ADR-0020). This
@@ -767,6 +774,10 @@ const COLLECTION_URL_PREFIX = "/collections/";
  * curated URL entirely on trust.
  */
 function assertCollectionUrl(url: string, where: string): void {
+  if (collectionHandleFromUrl(url) !== "") {
+    return;
+  }
+
   let parsed: URL;
 
   try {
@@ -786,18 +797,14 @@ function assertCollectionUrl(url: string, where: string): void {
     );
   }
 
-  if (
-    !parsed.pathname.startsWith(COLLECTION_URL_PREFIX) ||
-    parsed.pathname === COLLECTION_URL_PREFIX
-  ) {
-    throw new CatalogueRefreshError(
-      `${where} has the url ${JSON.stringify(url)}, whose path is ` +
-        `${JSON.stringify(parsed.pathname)} rather than ` +
-        `${JSON.stringify(COLLECTION_URL_PREFIX)} and a collection handle. A ` +
-        `Collection Link that points at a product page is a Resolved Product ` +
-        `in the wrong file (ADR-0021).`
-    );
-  }
+  throw new CatalogueRefreshError(
+    `${where} has the url ${JSON.stringify(url)}, whose path is ` +
+      `${JSON.stringify(`${parsed.pathname}${parsed.search}${parsed.hash}`)} ` +
+      `rather than ${JSON.stringify(COLLECTION_URL_PREFIX)} and one ` +
+      `collection handle. A Collection Link that points at a product page is ` +
+      `a Resolved Product in the wrong file (ADR-0021), and one carrying a ` +
+      `nested path names a page Shopify was never asked to admit (ADR-0009).`
+  );
 }
 
 /**
@@ -1185,8 +1192,12 @@ const PROBLEM_DESCRIPTIONS: Record<CollectionLinkProblem, string> = {
     "Stripping the suffix left no name behind, so the value would have been ` (Discontinued)` and nothing else. A Collection Link is accepted only because its value names the equipment it replaced — it is both the join key and the anchor text a member reads (ADR-0020).",
   "curation-disagreement":
     "The value this refresh derives and the `Profile Link Value` the assignment row carries are different strings. They are two applications of one rule — ADR-0020's — so exactly one of them is wrong, and this document cannot say which. Nothing is shipped for the row until they agree.",
+  "duplicate-assignment":
+    "Two or more Collection Assignment rows claim the same legacy value and do not decide the same thing. The assignment tab is seeded one-to-one from the option tables, so a second claim is a curation mistake rather than a second opinion — but which row is the mistake is a curator's answer, and honouring the first would answer it by sheet order. Delete or merge the duplicate in the Sheet and re-export. Rows that repeat a claim and decide identically are left alone, because they change nothing that ships.",
   "conflicting-collection":
     "Two or more legacy values derive the same Collection Link value and were assigned to different collections. They collapse to one Mapping, and a Mapping has one URL — shipping either would be picking one by row order, which is not a decision anyone made.",
+  "divided-value":
+    "Two or more legacy values derive the same Collection Link value, and only some of them earned a link — the rest are unassigned, `undecided`, `plain-text`, or pointed at a collection Shopify would not admit. A Mapping is keyed on its value and cannot tell which legacy identifier a member arrived by, so shipping the link would hand it to the withheld rows too: a curator's `plain-text` overruled, or a link nobody assigned. The value waits until its rows agree.",
 };
 
 /** Every Collection Link problem, in the order the review document reports it. */

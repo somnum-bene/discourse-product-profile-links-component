@@ -268,6 +268,23 @@ const ASV_ROW: SheetRow[] = MACHINE_ROWS.filter(
   (row) => row.legacyValue === "6240"
 );
 
+/**
+ * A second legacy identifier for the same Suggested Title as `ASV_ROW`, and so
+ * a second row deriving the same Collection Link value.
+ *
+ * The legacy migration map carries several of these per product, which is why
+ * ADR-0020 has rows sharing a real Suggested Title collapse to one Mapping. It
+ * is also what makes a per-row decision unenforceable: the two rows are one
+ * value downstream, and one value has one answer.
+ */
+const ASV_SIBLING: SheetRow = {
+  userFieldName: "Machine",
+  legacyValue: "6241",
+  legacyText: "Aircurve 11 ASV c2c",
+  suggestedTitle: "AirCurve 11 ASV",
+  suggestedUrl: "https://www.sleeping.com/products/aircurve-11-asv",
+};
+
 const ADMITTED_COLLECTIONS = [
   "bipap-machines",
   "cpap-machines",
@@ -859,7 +876,7 @@ describe("Collection Links as the third output", () => {
     expect(build().collectionLinks).toEqual(COLLECTION_LINKS);
   });
 
-  it("derives none, and no faults, when the assignment table is empty", () => {
+  it("derives none, and reports every owed link, on an empty assignment table", () => {
     // The vacuous-pass guard's mirror image: every assertion above walks a
     // derived list, so this one pins what an empty table actually costs — five
     // reported faults, not a quiet zero.
@@ -1071,6 +1088,166 @@ describe("Collection Links that cannot be derived", () => {
 
     expect(collectionLinks).toEqual([]);
     expect(collectionFaults[0].problem).toBe("no-base-name");
+  });
+
+  it("refuses a collection URL whose path carries more than the handle", () => {
+    // The handle reads as `bipap-machines`, which Shopify admits, while the
+    // URL that would ship is a page that does not exist. Validating one string
+    // and shipping another is the one thing the admission check cannot catch,
+    // so the shape is refused before it is ever asked about (ADR-0016).
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: `${BIPAP}/typo`,
+      }),
+    ]);
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults[0].problem).toBe("unadmitted-collection");
+    expect(collectionFaults[0].detail).toContain("names no collection handle");
+  });
+
+  it("refuses a collection URL at somebody else's origin", () => {
+    // `bipap-machines` exists, so the admission check would pass on the
+    // handle alone and ship a link to another store.
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl:
+          "https://example.com/collections/bipap-machines",
+      }),
+    ]);
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults[0].problem).toBe("unadmitted-collection");
+  });
+
+  it("reports two assignment rows that claim one legacy value differently", () => {
+    // The assignment tab is seeded one-to-one from the option tables, so this
+    // is a curation mistake — and one that would otherwise ship the row the
+    // sheet happened to list first.
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: BIPAP,
+      }),
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: CPAP_MACHINES,
+      }),
+    ]);
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults).toHaveLength(1);
+    expect(collectionFaults[0].problem).toBe("duplicate-assignment");
+    expect(collectionFaults[0].legacyValues).toEqual(["6240"]);
+    expect(collectionFaults[0].detail).toContain(BIPAP);
+    expect(collectionFaults[0].detail).toContain(CPAP_MACHINES);
+  });
+
+  it("lets a repeated claim through when it decides the same thing", () => {
+    // A duplicate that changes nothing that ships is not something a curator
+    // can act on, and the fault channel only stays worth reading while
+    // everything in it is.
+    const claim = {
+      legacyPnums: "6240",
+      profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+      recommendedCollectionUrl: BIPAP,
+    };
+
+    const { collectionLinks, collectionFaults } = build(ASV_ROW, PRODUCTS, [
+      assignment(claim),
+      assignment({ ...claim, rationale: "said twice, decided once" }),
+    ]);
+
+    expect(collectionFaults).toEqual([]);
+    expect(collectionLinks).toEqual([
+      {
+        userFieldName: "Machine",
+        value: "AirCurve 11 ASV (Discontinued)",
+        url: BIPAP,
+      },
+    ]);
+  });
+
+  it("ships nothing for a value when only some of its rows earned a link", () => {
+    // The sharp case. Both rows derive `AirCurve 11 ASV (Discontinued)`, so
+    // they collapse to one Mapping — and a Mapping is keyed on its value and
+    // cannot tell which legacy identifier a member arrived by. Shipping 6240's
+    // link would hand it to 6241 as well, which nobody assigned.
+    const { collectionLinks, collectionFaults } = build(
+      [...ASV_ROW, ASV_SIBLING],
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "6240",
+          profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+          recommendedCollectionUrl: BIPAP,
+        }),
+      ]
+    );
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults.map((fault) => fault.problem)).toEqual([
+      "divided-value",
+      "unassigned-legacy-value",
+    ]);
+    expect(collectionFaults[0].legacyValues).toEqual(["6240", "6241"]);
+  });
+
+  it("ships nothing for a value one of whose rows was curated to plain text", () => {
+    // A recorded `plain-text` is a decision, not a problem — but it is a
+    // decision the shared value has to honour, and it cannot honour both.
+    const { collectionLinks, collectionFaults } = build(
+      [...ASV_ROW, ASV_SIBLING],
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "6240",
+          profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+          recommendedCollectionUrl: BIPAP,
+        }),
+        assignment({
+          legacyPnums: "6241",
+          disposition: "plain-text",
+        }),
+      ]
+    );
+
+    expect(collectionLinks).toEqual([]);
+    expect(collectionFaults).toHaveLength(1);
+    expect(collectionFaults[0].problem).toBe("divided-value");
+    expect(collectionFaults[0].detail).toContain("6240 did");
+    expect(collectionFaults[0].detail).toContain("6241 did");
+  });
+
+  it("ships one link for a value whose rows all earned the same one", () => {
+    // The mirror of the two above, so that `divided-value` is read as the
+    // rows disagreeing rather than as there being more than one of them.
+    const { collectionLinks, collectionFaults } = build(
+      [...ASV_ROW, ASV_SIBLING],
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "6240, 6241",
+          profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+          recommendedCollectionUrl: BIPAP,
+        }),
+      ]
+    );
+
+    expect(collectionFaults).toEqual([]);
+    expect(collectionLinks).toEqual([
+      {
+        userFieldName: "Machine",
+        value: "AirCurve 11 ASV (Discontinued)",
+        url: BIPAP,
+      },
+    ]);
   });
 });
 
