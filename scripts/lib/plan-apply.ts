@@ -193,6 +193,37 @@ function quoted(values: readonly string[]): string {
   return values.map((value) => `"${value}"`).join(", ");
 }
 
+/**
+ * The Collection Link covering a value on a field, or `undefined`.
+ *
+ * Three separate messages ask this question — the refusal that names what it
+ * would remove, the warning about a field with no products, and the retention
+ * itself — so it is answered in one place. Three copies of a matching rule is
+ * how two of them end up disagreeing about whether a User keeps their link.
+ *
+ * **Trimmed on both sides, because that is what the runtime does.**
+ * `readLinkConfig` trims a Mapping's value and `resolveProfileLinks` trims the
+ * stored value before the lookup that resolves it
+ * (`javascripts/discourse/lib/profile-links.ts`). ADR-0013 calls this matching
+ * exact and it still is where it counts — case and every interior character are
+ * compared byte for byte, because "close enough" would be shipping to a
+ * dropdown. But "exact" there is shorthand for "whatever the runtime will do",
+ * and the plan disagreeing with the runtime about a trailing space would report
+ * a Profile Link lost that is not.
+ */
+function linkCovering(
+  collectionLinks: readonly CollectionLink[],
+  userFieldName: string,
+  value: string
+): CollectionLink | undefined {
+  const wanted = value.trim();
+
+  return collectionLinks.find(
+    (link) =>
+      link.userFieldName === userFieldName && link.value.trim() === wanted
+  );
+}
+
 function sameOptions(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
@@ -440,16 +471,37 @@ export function planApply(
     const removed = before.filter((option) => !after.includes(option));
 
     if (removed.length > 0 && !options.replace) {
+      // The blanket claim below — removing one stops every User holding it
+      // getting a Profile Link — is false of a value a Collection Link still
+      // covers, and the retention printed alongside says the opposite in so
+      // many words. A plan that contradicts itself about the consequence is
+      // not one anybody can authorise, so the sentence is qualified where it
+      // does not hold. The decision is untouched: every removal here still
+      // needs `replace`, and the covered ones are still named.
+      const covered = removed.filter((option) =>
+        linkCovering(collectionLinks, name, option)
+      );
+
       refusals.push({
         user_field_name: name,
         reason: "would-remove-options",
         detail:
           `"${name}" already offers ${removed.length} option` +
           `${removed.length === 1 ? "" : "s"} the catalogue does not carry: ` +
-          `${quoted(removed)}. Removing one silently stops every User holding ` +
-          `it from getting a Profile Link, and there is no record of whether ` +
-          `it was written by this pipeline or entered by a person, so it is ` +
-          `treated as a person's. Pass replace to authorise it.`,
+          `${quoted(removed)}. ` +
+          (covered.length === 0
+            ? `Removing one silently stops every User holding it from ` +
+              `getting a Profile Link, and there is no record of whether it ` +
+              `was written by this pipeline or entered by a person, so it is ` +
+              `treated as a person's. Pass replace to authorise it.`
+            : `${quoted(covered)} ${covered.length === 1 ? "is" : "are"} ` +
+              `still carried as a Collection Link, so removing ` +
+              `${covered.length === 1 ? "it" : "them"} takes away the option ` +
+              `and not the Profile Link — see the retention below. Removing ` +
+              `any of the rest silently stops every User holding it from ` +
+              `getting one, and there is no record of whether it was written ` +
+              `by this pipeline or entered by a person, so it is treated as ` +
+              `a person's. Pass replace to authorise all of it.`),
         before,
         after,
         removes: describeRemovals(removed, after),
@@ -486,9 +538,9 @@ export function planApply(
     // this loop may no longer assert without checking, and the sentence that
     // used to follow from it — every option here resolves nothing — would be
     // false about precisely the options that do resolve.
-    const linked = collectionLinks
-      .filter((link) => link.userFieldName === name)
-      .map((link) => link.value);
+    const linked = collectionLinks.filter(
+      (link) => link.userFieldName === name
+    );
 
     const found = lookup(currentFields, name);
 
@@ -551,7 +603,9 @@ export function planApply(
       continue;
     }
 
-    const unmatched = before.filter((option) => !linked.includes(option));
+    const unmatched = before.filter(
+      (option) => !linkCovering(collectionLinks, name, option)
+    );
 
     if (unmatched.length === 0) {
       warnings.push({
@@ -569,6 +623,8 @@ export function planApply(
       continue;
     }
 
+    const covered = before.filter((option) => !unmatched.includes(option));
+
     warnings.push({
       user_field_name: name,
       detail:
@@ -576,10 +632,11 @@ export function planApply(
         `${unmatched.length === 1 ? "" : "s"} no Mapping covers, so every ` +
         `User who picks one gets no Profile Link and nothing is logged unless ` +
         `Debug Mode is on: ${quoted(unmatched)}. The catalogue carries no ` +
-        `products for the field and a Collection Link covers its other ` +
-        `${before.length - unmatched.length}. This run leaves the field ` +
-        `alone, and Discourse offers no way to empty a dropdown (ADR-0015), ` +
-        `so they stay until someone deletes the field.`,
+        `products for the field, and its other ${covered.length} option` +
+        `${covered.length === 1 ? " is" : "s are"} each covered by a ` +
+        `Collection Link. This run leaves the field alone, and Discourse ` +
+        `offers no way to empty a dropdown (ADR-0015), so they stay until ` +
+        `someone deletes the field.`,
     });
   }
 
@@ -646,10 +703,7 @@ function retainedLinks(
 
   for (const removal of removals) {
     for (const value of removal.removed) {
-      const link = collectionLinks.find(
-        (candidate) =>
-          candidate.userFieldName === removal.name && candidate.value === value
-      );
+      const link = linkCovering(collectionLinks, removal.name, value);
 
       if (!link) {
         continue;

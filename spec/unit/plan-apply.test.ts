@@ -521,8 +521,9 @@ describe("an option removed while its Mapping stays", () => {
     expect(plan.retained).toHaveLength(4);
   });
 
-  it("leaves the refusal for an option no Mapping covers exactly as it was", () => {
-    const withStray = [
+  /** One removal a link covers, one it does not. */
+  function mixedRemovals(): UserFieldDefinition[] {
+    return [
       dropdown(2, "Machine", [
         ...MACHINE_TARGET,
         "CPAP Machines (Discontinued)",
@@ -530,14 +531,26 @@ describe("an option removed while its Mapping stays", () => {
       ]),
       dropdown(3, "Mask", MASK_TARGET),
     ];
-    const links = planApply(withStray, CATALOGUE, CATCH_ALL_LINKS, {
+  }
+
+  it("refuses exactly as it did, whatever the links say", () => {
+    // AC 6 protects the decision, not the prose. Everything the refusal *does*
+    // — refuse, name every removal, empty the writes, demand `replace` — is
+    // identical with and without the links.
+    const links = planApply(mixedRemovals(), CATALOGUE, CATCH_ALL_LINKS, {
       managedFields: TWO_FIELDS,
     });
-    const without = planApply(withStray, CATALOGUE, [], {
+    const without = planApply(mixedRemovals(), CATALOGUE, [], {
       managedFields: TWO_FIELDS,
     });
 
-    expect(links.refusals).toEqual(without.refusals);
+    expect(links.writes).toEqual([]);
+    expect(links.refusals.map((refusal) => refusal.reason)).toEqual(
+      without.refusals.map((refusal) => refusal.reason)
+    );
+    expect(links.refusals[0].removes).toEqual(without.refusals[0].removes);
+    expect(links.refusals[0].before).toEqual(without.refusals[0].before);
+    expect(links.refusals[0].after).toEqual(without.refusals[0].after);
     expect(links.refusals[0].removes.map((removal) => removal.option)).toEqual([
       "CPAP Machines (Discontinued)",
       "Typed by hand",
@@ -545,6 +558,75 @@ describe("an option removed while its Mapping stays", () => {
     expect(links.retained.map((entry) => entry.value)).toEqual([
       "CPAP Machines (Discontinued)",
     ]);
+  });
+
+  it("does not tell the operator two opposite things about one value", () => {
+    // The blanket "removing one silently stops every User holding it from
+    // getting a Profile Link" is false of a covered value, and the retention
+    // printed alongside says so outright.
+    const [refusal] = planApply(mixedRemovals(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+    }).refusals;
+
+    expect(refusal.detail).toContain(
+      '"CPAP Machines (Discontinued)" is still carried as a Collection Link'
+    );
+    expect(refusal.detail).toContain("takes away the option and not the");
+    expect(refusal.detail).toContain(
+      "Removing any of the rest silently stops every User holding it"
+    );
+  });
+
+  it("keeps the old refusal wording when no link covers anything", () => {
+    const [refusal] = planApply(mixedRemovals(), CATALOGUE, [], {
+      managedFields: TWO_FIELDS,
+    }).refusals;
+
+    expect(refusal.detail).toContain(
+      "Removing one silently stops every User holding it from getting a " +
+        "Profile Link"
+    );
+    expect(refusal.detail).toContain("Pass replace to authorise it.");
+    expect(refusal.detail).not.toContain("Collection Link");
+  });
+
+  it("matches a value the way the runtime resolves it, trimming both sides", () => {
+    // `readLinkConfig` trims the Mapping value and `resolveProfileLinks` trims
+    // the stored value before the lookup, so an option that differs only by
+    // surrounding whitespace still resolves and is not a lost Profile Link.
+    const plan = planApply(
+      [
+        dropdown(2, "Machine", [
+          ...MACHINE_TARGET,
+          "  CPAP Machines (Discontinued)  ",
+        ]),
+        dropdown(3, "Mask", MASK_TARGET),
+      ],
+      CATALOGUE,
+      CATCH_ALL_LINKS,
+      { managedFields: TWO_FIELDS, replace: true }
+    );
+
+    expect(plan.retained.map((entry) => entry.value)).toEqual([
+      "  CPAP Machines (Discontinued)  ",
+    ]);
+  });
+
+  it("still refuses a value that differs by more than whitespace", () => {
+    const plan = planApply(
+      [
+        dropdown(2, "Machine", [
+          ...MACHINE_TARGET,
+          "CPAP machines (discontinued)",
+        ]),
+        dropdown(3, "Mask", MASK_TARGET),
+      ],
+      CATALOGUE,
+      CATCH_ALL_LINKS,
+      { managedFields: TWO_FIELDS, replace: true }
+    );
+
+    expect(plan.retained).toEqual([]);
   });
 
   it("does not claim a Collection Link the value is only nearly spelled as", () => {
@@ -661,6 +743,24 @@ describe("a field whose only Mappings are Collection Links", () => {
     expect(detail).not.toContain("gets no Profile Link");
     expect(detail).toContain("a Collection Link covers every one of them");
     expect(detail).toContain("never shown to a User choosing one");
+  });
+
+  it("counts the covered options with the noun, not as a bare number", () => {
+    const detail = warningFor([
+      dropdown(4, "Vendor", ["Acme CPAP (Discontinued)", "Typed by hand"]),
+    ]);
+
+    expect(detail).toContain("its other 1 option is each covered by a");
+    expect(detail).not.toContain("covers its other 1.");
+  });
+
+  it("treats a whitespace-only difference as covered, as the runtime does", () => {
+    const detail = warningFor([
+      dropdown(4, "Vendor", ["  Acme CPAP (Discontinued)"]),
+    ]);
+
+    expect(detail).toContain("a Collection Link covers every one of them");
+    expect(detail).not.toContain("gets no Profile Link");
   });
 
   it("names only the options no Mapping covers when some are covered", () => {
