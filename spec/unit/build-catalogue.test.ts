@@ -2122,6 +2122,38 @@ describe("the disposition table as the fifth output", () => {
     });
   });
 
+  it("hands over the legacy display text byte for byte, padding included", () => {
+    // `sheetRowsFrom` preserves this cell deliberately, and the table is where
+    // that care would otherwise be thrown away. Trimming it would be this
+    // pipeline tidying member-authored content — the same thing appending
+    // ` (Discontinued)` to an unlinked value would be, refused on the same
+    // grounds. And a trimmed value cannot be un-trimmed downstream, so the raw
+    // bytes leave the choice with the repository doing the writing.
+    //
+    // The identifier is the exception, because it is a join key: it is trimmed
+    // here and by `deriveCollectionLinks` and `legacyValuesOf`, so a padded
+    // cell cannot key one map and miss another.
+    const padded: SheetRow = {
+      userFieldName: "Mask",
+      legacyValue: "  3006  ",
+      legacyText: "  Unlisted mask with trailing space  ",
+      suggestedTitle: "",
+      suggestedUrl: "",
+    };
+    const { dispositions } = build([padded], PRODUCTS, []);
+
+    expect(dispositions).toEqual([
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "  Unlisted mask with trailing space  ",
+        value: "  Unlisted mask with trailing space  ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ]);
+  });
+
   it("emits a disposition this repository has a word for", () => {
     for (const row of build().dispositions) {
       expect(DISPOSITION_OUTCOMES).toContain(row.disposition);

@@ -810,18 +810,26 @@ export function dispositionTableCsv(
     // state when its legacy row carries neither a `Suggested Title` to resolve
     // nor a `Text` to fall back on, so there is no string in the world to hand
     // the non-public side for that identifier.
+    // Whitespace-only counts as blank, and the check has to say so explicitly
+    // because nothing upstream trims any more: the display text is carried
+    // verbatim on purpose, so `"   "` reaches here as three real characters
+    // rather than collapsing to `""` on the way. A value of spaces is not a
+    // name — it renders as nothing and matches nothing — and it is worse than
+    // an empty one because it looks populated in every diff and every reader.
     const blank = row.findIndex(
-      (field, at) => field === "" && DISPOSITION_COLUMNS[at] !== "url"
+      (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
     );
 
     if (blank !== -1) {
       throw new CatalogueRefreshError(
         `${where} names no ${DISPOSITION_COLUMNS[blank]}, for legacy value ` +
-          `${JSON.stringify(row[1])}. Only \`url\` may be empty. A row with ` +
-          `no URL carries the legacy display text as its value instead, so a ` +
-          `blank value means its option-table row has an empty \`Text\` too ` +
-          `and nothing names the equipment at all. Refusing to write: a blank ` +
-          `there is a member's equipment quietly deleted.`
+          `${JSON.stringify(row[1])}. Only \`url\` may be empty, and only ` +
+          `\`url\` may be empty by being absent — everything else has to hold ` +
+          `something that is not just whitespace. A row with no URL carries ` +
+          `the legacy display text as its value, so a blank one means its ` +
+          `option-table row has an empty \`Text\` and nothing names the ` +
+          `equipment at all. Refusing to write: a blank there is a member's ` +
+          `equipment quietly deleted.`
       );
     }
   }
@@ -858,6 +866,22 @@ export function readDispositionTable(text: string): DispositionRow[] {
     const [userFieldName, legacyValue, legacyText, value, url, disposition] =
       row;
     const where = `${DISPOSITION_FILE} row ${index + 2}`;
+
+    // `dataRowsOf` refuses an absent field; this refuses one holding only
+    // whitespace, which it cannot see. Both sides of the boundary have to
+    // agree, and the writer refuses the same thing.
+    const blank = row.findIndex(
+      (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
+    );
+
+    if (blank !== -1) {
+      throw new CatalogueRefreshError(
+        `${where} has a ${DISPOSITION_COLUMNS[blank]} of ` +
+          `${JSON.stringify(row[blank])}, which is whitespace and nothing ` +
+          `else. Only \`url\` may be empty; a column that looks populated in ` +
+          `a diff and holds no name is worse than one that is plainly absent.`
+      );
+    }
 
     if (!isDispositionOutcome(disposition)) {
       throw new CatalogueRefreshError(
@@ -1606,9 +1630,11 @@ function renderDispositions(dispositions: readonly DispositionRow[]): string {
         ])
       ),
     ].join("\n"),
-    `The last two rows are the section above seen from the member's side ` +
-      `rather than the curator's. They do not sum to it: an \`undecided\` row ` +
-      `is reported there as a Collection Link Fault and counted here under ` +
+    `\`undecided\` and \`collection-link-fault\` are the section above seen ` +
+      `from the member's side rather than the curator's — not the last two ` +
+      `rows of this table, which are ordered to put the curator's four words ` +
+      `first. They do not sum to that section either: an \`undecided\` row is ` +
+      `reported there as a Collection Link Fault and counted here under ` +
       `\`undecided\`, because a curator did decide to say so and a gate blocks ` +
       `the release on it (#38). \`collection-link-fault\` is every other way a ` +
       `link went undelivered, and a non-zero number there is work outstanding.`,

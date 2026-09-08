@@ -1357,6 +1357,55 @@ describe("the disposition table file", () => {
     );
   });
 
+  it("refuses to write a row whose value is only whitespace", () => {
+    // What the removed `.trim()` used to give for free. Nothing upstream trims
+    // the display text any more — it is carried verbatim on purpose — so
+    // `"   "` arrives as three real characters instead of collapsing to `""`,
+    // and it is worse than an empty value: it looks populated in every diff
+    // and every reader while naming nothing.
+    const whitespace: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "   ",
+        value: "   ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    expect(() => dispositionTableCsv(whitespace)).toThrow(
+      /names no legacy_text, for legacy value "3006"/
+    );
+  });
+
+  it("round-trips a value whose padding is real, rather than tidying it", () => {
+    // The other side of the same rule: whitespace *around* a name is preserved
+    // end to end, because the far side cannot un-trim what we trimmed.
+    const padded: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "  Unlisted mask  ",
+        value: "  Unlisted mask  ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    expect(readDispositionTable(dispositionTableCsv(padded))).toEqual(padded);
+  });
+
+  it("refuses to read a row whose value is only whitespace", () => {
+    // `dataRowsOf` cannot see this one — it refuses an absent field, and this
+    // field is present. Writer and reader have to agree on it.
+    const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /has a legacy_text of "   ", which is whitespace and nothing else/
+    );
+  });
+
   it("writes an empty URL without complaint, which is the only blank it allows", () => {
     expect(dispositionTableCsv([ROWS[2]])).toContain(
       "Mask,3005,Unlisted mask,Unlisted mask,,blank-title"

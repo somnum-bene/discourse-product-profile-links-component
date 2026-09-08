@@ -386,9 +386,17 @@ export function resolvingValues(
  */
 export interface DispositionRow {
   userFieldName: string;
-  /** The legacy phpBB option identifier — the column the join is keyed on. */
+  /**
+   * The legacy phpBB option identifier — the column the join is keyed on, and
+   * trimmed because every other join on it trims.
+   */
   legacyValue: string;
-  /** The name the bulletin board displayed for it. */
+  /**
+   * The name the bulletin board displayed for it, byte for byte as the Sheet
+   * Export holds it. Not trimmed: it is provenance rather than a key, and it is
+   * what an unlinked row hands over to be written, so tidying it here would
+   * decide for the far side something it cannot undo.
+   */
   legacyText: string;
   value: string;
   /** The Profile Link's target, or `""` when the value earns no link. */
@@ -883,11 +891,24 @@ function dispositionTable({
 
   const rows = sheetRows.map((row): DispositionRow => {
     const userFieldName = row.userFieldName;
+    // The identifier is trimmed because it is a join key, and every other
+    // place that joins on it trims too — `deriveCollectionLinks` and
+    // `legacyValuesOf` both do, so a padded cell would key one map and miss
+    // another.
     const legacyValue = row.legacyValue.trim();
-    // Trimmed for the reason every value in this pipeline is: resolution is an
-    // exact trimmed match on both sides, so a stored value with a stray space
-    // is a value nobody can hold on purpose.
-    const legacyText = row.legacyText.trim();
+    // The display text is **not** trimmed, and that is the opposite decision
+    // for the opposite reason. It is not a key: it is provenance, and it is the
+    // string an unlinked row hands the non-public side to write. Trimming it
+    // would be this pipeline rewriting member-authored content to tidy it,
+    // which is the same thing appending ` (Discontinued)` to an unlinked value
+    // would be — refused there, so refused here. `sheetRowsFrom` preserves the
+    // cell deliberately and this is where that care would otherwise be spent.
+    //
+    // The asymmetry with the runtime's trimmed match is not an oversight. A
+    // trimmed value cannot be un-trimmed downstream, so handing over the raw
+    // bytes leaves the choice with the repository that knows what it is
+    // writing into; trimming here makes it for them, permanently and silently.
+    const legacyText = row.legacyText;
     const titleKey = `${userFieldName}\u0000${normalizeTitle(
       row.suggestedTitle.trim()
     )}`;
