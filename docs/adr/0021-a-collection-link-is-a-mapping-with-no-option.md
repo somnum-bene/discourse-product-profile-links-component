@@ -22,6 +22,18 @@ A Catalogue Apply now writes fewer Dropdown Options than there are Mappings, on 
 
 There is also a second author of the option list. Discourse's importer has until now extended custom-field option lists on every run, which would re-add the values this decision removes. Gerhard Schlager has offered to change that. Until he confirms it, an apply's filtered option list is not stable across import runs.
 
+## The load-bearing assumption, verified (#41)
+
+The paragraph above called the survival of a stored value across an option removal "load-bearing and unverified." #29 proved it first, against a value that was never a Dropdown Option to begin with. #41 proved the actual apply path: `Machine` and `Mask` on `tyler-test.discourse.group` were seeded with a legacy catch-all value each (`AirCurve 11 ASV (Discontinued)`, `3B Medical Siesta Full Face CPAP Mask (Discontinued)`) matching an existing Collection Link, `planApply` reported both as covered removals with a `RetainedLink`, `--replace` removed them, and the instance's own readback — a fresh `GET`, not the `200` from the write — confirmed neither option remained. So the two-branch design #41's issue body once described (remove vs. treat as absent-by-design) is closed for good: removal is safe regardless of what Discourse's importer does in between, exactly as the ticket's discussion concluded before any code ran.
+
+**This does not retire the previous paragraph's second half.** Whether the importer keeps re-adding these values on every run is still real and still open — it decides how often a Catalogue Apply has to clean the list back up, not whether it may.
+
+## The removal branch cannot fire against anything this pipeline writes
+
+`dropdownOptionsFor` reads only Resolved Products; a Collection Link never reaches it (this ADR's whole point). `readCollectionLinks` requires every value to carry the literal suffix `COLLECTION_LINK_SUFFIX` (` (Discontinued)`), and nothing on the catalogue path ever appends that suffix to a Resolved Product's value. So a Dropdown Option this pipeline derives and a Collection Link value can never be the same string — not "does not happen to collide today," but structurally cannot, for as long as this ADR holds.
+
+Every removal `planApply` has ever proposed against real data is therefore a removal of something *else's* write: the four legacy catch-all titles Discourse's importer hand-entered on the instances that received the April 2026 run (ADR-0020 retired those four as values; a row that carried one now takes its own equipment name instead, which is why `data/collection-links.csv` holds no `CPAP Machines (Discontinued)`-style row today, only per-equipment ones). A reader comparing the committed catalogue and links files head-on could reasonably conclude the retention path is dead code, because nothing this repository produces ever needs it. It is not dead: it exists entirely to clean up options nobody here wrote, which is also why #41 had to seed `tyler-test.discourse.group` by hand before its readback could exercise it at all — a clean instance proves nothing here, because this pipeline never creates the condition the removal fires on.
+
 ## Where the curated assignment lives
 
 The collection assigned to each value is a reviewed table, maintained as a tab in a cpap.com-specific Google Sheet and pulled into the repo as a **Sheet Export** by `scripts/export-sheet.ts`, exactly like the three option tables. It is not a TypeScript constant, because the people who make the judgement are not the people who deploy, and it is not a one-time paste, because ADR-0020 makes this a standing mechanism. Every curation change then lands as a reviewable Catalogue Refresh diff, which is what a Catalogue Refresh is for.
