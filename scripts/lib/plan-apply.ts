@@ -240,6 +240,72 @@ function describeRemovals(
   });
 }
 
+/**
+ * What a `would-remove-options` refusal says, which depends on how much of what
+ * it is refusing a Collection Link still covers. Three cases rather than two,
+ * because the covered and uncovered options carry opposite consequences and the
+ * sentence naming one is false about the other.
+ *
+ * None covered is the original wording, untouched. Some covered qualifies it:
+ * the covered ones are named, the blanket claim is narrowed to "the rest".
+ * *All* covered has to drop that clause entirely — there is no rest, and a
+ * refusal that invents one is telling the operator a Profile Link is at stake
+ * when none is.
+ *
+ * That last case is the one that has to work hardest, because it is the case
+ * where the refusal looks unjustified: nothing a User holds stops resolving, so
+ * the message owes an answer to "then why am I being stopped?". The answer is
+ * ADR-0013's — a removal is authorised by what it takes out of the list, not by
+ * how harmless the removal looks — and the plan being all-or-nothing means one
+ * flag cannot have two authorisation stories depending on the reason.
+ */
+function removalRefusal(
+  name: string,
+  removed: readonly string[],
+  covered: readonly string[]
+): string {
+  const preamble =
+    `"${name}" already offers ${removed.length} option` +
+    `${removed.length === 1 ? "" : "s"} the catalogue does not carry: ` +
+    `${quoted(removed)}. `;
+
+  if (covered.length === 0) {
+    return (
+      `${preamble}Removing one silently stops every User holding it from ` +
+      `getting a Profile Link, and there is no record of whether it was ` +
+      `written by this pipeline or entered by a person, so it is treated as ` +
+      `a person's. Pass replace to authorise it.`
+    );
+  }
+
+  const one = covered.length === 1;
+
+  if (covered.length === removed.length) {
+    return (
+      `${preamble}${one ? "It is" : "Every one of them is"} still carried ` +
+      `as a Collection Link, so removing ${one ? "it" : "them"} takes away ` +
+      `the option${one ? "" : "s"} and not the Profile Link` +
+      `${one ? "" : "s"} — see the retention${one ? "" : "s"} below. No ` +
+      `User holding ${one ? "it" : "one"} stops getting a Profile Link. ` +
+      `Pass replace even so: a removal is authorised by what it takes out ` +
+      `of the list and not by how harmless it looks (ADR-0013), and the ` +
+      `plan is all-or-nothing, so one flag does not get two authorisation ` +
+      `stories.`
+    );
+  }
+
+  return (
+    `${preamble}${quoted(covered)} ${one ? "is" : "are"} still carried as a ` +
+    `Collection Link, so removing ${one ? "it" : "them"} takes away the ` +
+    `option${one ? "" : "s"} and not the Profile Link${one ? "" : "s"} — ` +
+    `see the retention${one ? "" : "s"} below. Removing any of the rest ` +
+    `silently stops every User holding it from getting one, and there is no ` +
+    `record of whether it was written by this pipeline or entered by a ` +
+    `person, so it is treated as a person's. Pass replace to authorise all ` +
+    `of it.`
+  );
+}
+
 function optionsOf(field: UserFieldDefinition): string[] {
   return [...(field.options ?? [])];
 }
@@ -485,23 +551,7 @@ export function planApply(
       refusals.push({
         user_field_name: name,
         reason: "would-remove-options",
-        detail:
-          `"${name}" already offers ${removed.length} option` +
-          `${removed.length === 1 ? "" : "s"} the catalogue does not carry: ` +
-          `${quoted(removed)}. ` +
-          (covered.length === 0
-            ? `Removing one silently stops every User holding it from ` +
-              `getting a Profile Link, and there is no record of whether it ` +
-              `was written by this pipeline or entered by a person, so it is ` +
-              `treated as a person's. Pass replace to authorise it.`
-            : `${quoted(covered)} ${covered.length === 1 ? "is" : "are"} ` +
-              `still carried as a Collection Link, so removing ` +
-              `${covered.length === 1 ? "it" : "them"} takes away the option ` +
-              `and not the Profile Link — see the retention below. Removing ` +
-              `any of the rest silently stops every User holding it from ` +
-              `getting one, and there is no record of whether it was written ` +
-              `by this pipeline or entered by a person, so it is treated as ` +
-              `a person's. Pass replace to authorise all of it.`),
+        detail: removalRefusal(name, removed, covered),
         before,
         after,
         removes: describeRemovals(removed, after),

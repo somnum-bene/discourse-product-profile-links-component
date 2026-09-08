@@ -400,10 +400,22 @@ machine cpap.com no longer sells to the next User choosing one.
 It changes what the plan says and not what it needs — a removal with a retained
 Collection Link behind it is still authorised by `replace`, like every other
 removal, because the plan is all-or-nothing and one flag should not have two
-authorisation stories. The Collection Link is matched on the exact string, for
-the same reason everything here is: a User holding `CPAP Machines` is not
-covered by a Mapping keyed on `CPAP Machines (Discontinued)`, and claiming
-otherwise would promise a Profile Link that never appears.
+authorisation stories. A Collection Link is matched by an exact trimmed-string
+match — the rule the runtime resolves by, and the same one everything else here
+uses (ADR-0010): a User holding `CPAP Machines` is not covered by a Mapping
+keyed on `CPAP Machines (Discontinued)`, and claiming otherwise would promise a
+Profile Link that never appears. One function, `linkCovering`, *is* that rule,
+and the refusal, the warning and the retention all ask it rather than each
+spelling it out — which is how two of them once came to say opposite things
+about the same value.
+
+The refusal itself changes wording with how much a link covers, and not what it
+decides. Cover none of the removals and it reads as it always did; cover some
+and the blanket "removing one stops every User holding it" is narrowed to the
+rest; cover all of them and that clause goes entirely, because there is no rest
+and a refusal that invents one puts a Profile Link at stake that is not. That
+last case still refuses: a removal is authorised by what it takes out of the
+list, never by how harmless it looks (ADR-0013).
 
 ## The apply step believes the reread, not the response code
 

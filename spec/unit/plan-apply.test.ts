@@ -590,6 +590,56 @@ describe("an option removed while its Mapping stays", () => {
     expect(refusal.detail).not.toContain("Collection Link");
   });
 
+  it("claims no remainder when a link covers every removal", () => {
+    // The mixed wording narrows the blanket claim to "the rest". With nothing
+    // uncovered there is no rest, and carrying that clause anyway tells the
+    // operator a Profile Link is at stake when none is — the same
+    // self-contradiction the covered/uncovered split exists to remove, just
+    // pointing the other way.
+    const [refusal] = planApply(
+      [
+        dropdown(2, "Machine", [
+          ...MACHINE_TARGET,
+          "CPAP Machines (Discontinued)",
+        ]),
+        dropdown(3, "Mask", MASK_TARGET),
+      ],
+      CATALOGUE,
+      CATCH_ALL_LINKS,
+      { managedFields: TWO_FIELDS }
+    ).refusals;
+
+    expect(refusal.detail).not.toContain("the rest");
+    expect(refusal.detail).toContain(
+      "It is still carried as a Collection Link"
+    );
+    expect(refusal.detail).toContain("No User holding it stops getting a");
+  });
+
+  it("still demands replace when every removal is covered, and says why", () => {
+    // The case where the refusal looks unjustified, so it owes an answer to
+    // "then why am I being stopped?" — ADR-0013's, not silence.
+    const plan = planApply(
+      [
+        dropdown(2, "Machine", [
+          ...MACHINE_TARGET,
+          "CPAP Machines (Discontinued)",
+        ]),
+        dropdown(3, "Mask", MASK_TARGET),
+      ],
+      CATALOGUE,
+      CATCH_ALL_LINKS,
+      { managedFields: TWO_FIELDS }
+    );
+
+    expect(plan.refusals[0].reason).toBe("would-remove-options");
+    expect(plan.writes).toEqual([]);
+    expect(plan.refusals[0].detail).toContain(
+      "authorised by what it takes out of the list and not by how harmless " +
+        "it looks (ADR-0013)"
+    );
+  });
+
   it("matches a value the way the runtime resolves it, trimming both sides", () => {
     // `readLinkConfig` trims the Mapping value and `resolveProfileLinks` trims
     // the stored value before the lookup, so an option that differs only by
