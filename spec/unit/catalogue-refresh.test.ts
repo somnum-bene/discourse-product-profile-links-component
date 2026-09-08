@@ -7,6 +7,7 @@ import {
   COLLECTION_LINK_SUFFIX,
   collectionHandleFromUrl,
   type CollectionLink,
+  type DispositionRow,
   type ProductRecord,
   type ResolvedProduct,
   type SheetRow,
@@ -24,6 +25,8 @@ import {
   curatesTitles,
   declaredDigest,
   digestOf,
+  DISPOSITION_COLUMNS,
+  dispositionTableCsv,
   divisionFieldsOf,
   DIVISIONS,
   divisionSurveyQuery,
@@ -34,6 +37,7 @@ import {
   productsByHandleQuery,
   productsFromByHandleResponse,
   readCollectionLinks,
+  readDispositionTable,
   readResolvedProducts,
   renderReviewDocument,
   resolvedProductsCsv,
@@ -1200,6 +1204,214 @@ describe("the collection-links file", () => {
   });
 });
 
+describe("the disposition table file", () => {
+  const CPAP_MACHINES = "https://www.cpap.com/collections/cpap-machines";
+  const ROWS: DispositionRow[] = [
+    {
+      userFieldName: "Machine",
+      legacyValue: "4872",
+      legacyText: "AirCurve 10 VAuto BiLevel Machine with HumidAir",
+      value: "AirCurve 10 VAuto BiLevel Machine",
+      url: "https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine",
+      disposition: "resolves-to-product",
+    },
+    {
+      userFieldName: "Machine",
+      legacyValue: "5851",
+      legacyText: "DreamStation Auto CPAP Machine",
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: CPAP_MACHINES,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3005",
+      legacyText: "Unlisted mask",
+      value: "Unlisted mask",
+      url: "",
+      disposition: "blank-title",
+    },
+  ];
+
+  /** A file body as the reader wants it, digest and all. */
+  function digested(body: string): string {
+    return `# sha256 ${digestOf(body)}\n${body}`;
+  }
+
+  const HEADER =
+    "user_field_name,legacy_value,legacy_text,value,url,disposition";
+
+  it("is a digest line, a header, and one row per legacy value", () => {
+    const lines = dispositionTableCsv(ROWS).split("\n");
+
+    expect(lines[0]).toMatch(/^# sha256 [0-9a-f]{64}$/);
+    expect(lines[1]).toBe(HEADER);
+    expect(lines).toHaveLength(6);
+    expect(lines[5]).toBe("");
+  });
+
+  it("carries the user field name as well as the five columns asked for", () => {
+    // The legacy identifier is only unique within a field, and the non-public
+    // side has to emit the custom field name as one of its three columns. A
+    // table without it would make the join guess at both.
+    expect(DISPOSITION_COLUMNS).toEqual([
+      "user_field_name",
+      "legacy_value",
+      "legacy_text",
+      "value",
+      "url",
+      "disposition",
+    ]);
+  });
+
+  it("round-trips every row unchanged, empty URL included", () => {
+    expect(readDispositionTable(dispositionTableCsv(ROWS))).toEqual(ROWS);
+  });
+
+  it("refuses a row that names no value", () => {
+    // An empty value is the one field this file cannot carry. The whole point
+    // of a row with no URL is that it still tells the non-public side what to
+    // write, so a blank there is a member's equipment quietly deleted.
+    const body = `${HEADER}\nMask,3005,Unlisted mask,,,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /names no value/
+    );
+  });
+
+  it("refuses a disposition this repository has no word for", () => {
+    const body = `${HEADER}\nMask,3005,Unlisted mask,Unlisted mask,,retired\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /"retired", which is not one of/
+    );
+  });
+
+  it("refuses a linked disposition with no URL", () => {
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /`collection` and carries no URL/
+    );
+  });
+
+  it("refuses an unlinked disposition carrying a URL", () => {
+    // The pairing runs both ways. A `plain-text` row with a URL is a curator's
+    // decision being overruled by a link nobody assigned.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv,${CPAP_MACHINES},plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /`plain-text` and carries the URL/
+    );
+  });
+
+  it("refuses an unlinked row whose value is not the legacy text", () => {
+    // Where the suffix would land if anyone appended it. A value that is not
+    // the member's own text, with no Mapping behind it, is a string invented
+    // for a member to hold that resolves for nobody.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv (Discontinued),,plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /carries no URL, so its value has to be the legacy display text/
+    );
+  });
+
+  it("refuses a file edited by hand after it was generated", () => {
+    const tampered = dispositionTableCsv(ROWS).replace("5851", "5852");
+
+    expect(() => readDispositionTable(tampered)).toThrow(
+      /does not match its own digest/
+    );
+  });
+
+  it("refuses to write a table with no rows at all", () => {
+    // The vacuous pass, refused at the boundary rather than only floored in a
+    // test. Every legacy option value earns a row, so none means the Sheet
+    // Exports arrived empty — and `MAX_DATA_ROWS` cannot notice that, because
+    // it only has a ceiling. An empty table is not a small version of this
+    // file: it is a claim that no member holds any equipment, and it would be
+    // valid, digested and correctly shaped.
+    expect(() => dispositionTableCsv([])).toThrow(CatalogueRefreshError);
+    expect(() => dispositionTableCsv([])).toThrow(/would have no rows/);
+  });
+
+  it("refuses to write a row that names no value", () => {
+    // The writer and the reader have to agree, and this is where they used to
+    // not: a legacy row with an empty `Text` and no Suggested Title derives a
+    // blank value, which this would happily write and `readDispositionTable`
+    // would then refuse. A file that passes every gate that produced it and
+    // fails the one that consumes it is the worse of the two failures.
+    const nameless: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "5854",
+        legacyText: "",
+        value: "",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    expect(() => dispositionTableCsv(nameless)).toThrow(
+      /names no legacy_text, for legacy value "5854"/
+    );
+  });
+
+  it("writes an empty URL without complaint, which is the only blank it allows", () => {
+    expect(dispositionTableCsv([ROWS[2]])).toContain(
+      "Mask,3005,Unlisted mask,Unlisted mask,,blank-title"
+    );
+  });
+
+  it("refuses to write a cell shaped like an email address", () => {
+    // The precedent is `readSheetTab`'s own refusal, and this artifact is the
+    // one that crosses to the side that holds member data, so the tripwire
+    // points outward as well as in.
+    expect(() => dispositionTableCsv(withLeak())).toThrow(
+      CatalogueRefreshError
+    );
+    expect(() => dispositionTableCsv(withLeak())).toThrow(
+      /shaped like an email address/
+    );
+  });
+
+  it("does not echo the cell it is refusing to write", () => {
+    // A guard that logged the thing it is refusing to admit would have written
+    // it into the repository by way of the error message. The row and column
+    // are enough to find it in the source it came from.
+    let message = "";
+
+    try {
+      dispositionTableCsv(withLeak());
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    // Row 5 rather than row 4: the header is row 1, so the fourth data row is
+    // the fifth line a person opening the file would count to.
+    expect(message).not.toContain(LEAKED);
+    expect(message).toContain("row 5");
+    expect(message).toContain("column 3");
+  });
+
+  const LEAKED = "someone@example.com";
+
+  /** The three good rows with a fourth that must never reach the file. */
+  function withLeak(): DispositionRow[] {
+    return [
+      ...ROWS,
+      {
+        userFieldName: "Mask",
+        legacyValue: "9001",
+        legacyText: LEAKED,
+        value: LEAKED,
+        url: "",
+        disposition: "plain-text",
+      },
+    ];
+  }
+});
+
 describe("curatesTitles", () => {
   it("is true for both current tabs, which both have Suggested columns", () => {
     // No current SHEET_TABS entry has `titleColumn: null` — `user_humidifier`
@@ -1235,6 +1447,7 @@ describe("the review document", () => {
     exclusions: built.exclusions,
     collectionLinks: built.collectionLinks,
     collectionFaults: built.collectionFaults,
+    dispositions: built.dispositions,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -1353,6 +1566,7 @@ describe("the review document", () => {
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: collapsed,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1380,6 +1594,7 @@ describe("the review document", () => {
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: single,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1406,6 +1621,7 @@ describe("the review document", () => {
         },
       ],
       collectionFaults: [],
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1438,6 +1654,7 @@ describe("the review document", () => {
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: built.collectionFaults,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1475,6 +1692,7 @@ describe("the review document", () => {
         exclusions: after.exclusions,
         collectionLinks: after.collectionLinks,
         collectionFaults: after.collectionFaults,
+        dispositions: after.dispositions,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),

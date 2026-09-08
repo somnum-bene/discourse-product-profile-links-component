@@ -16,7 +16,7 @@
 // curated table, and the transform below is the thing that decides what a row
 // of it means. Importing the reader itself would cost the purity the three
 // commands rely on; importing what the reader produces costs nothing.
-import type { AssignmentRow } from "./sheet-export.ts";
+import type { AssignmentRow, Disposition } from "./sheet-export.ts";
 
 /**
  * One row of a Sheet Export, reduced to the four columns that carry meaning:
@@ -272,6 +272,130 @@ export function undeliveredValues(
   ).size;
 }
 
+/**
+ * What became of one legacy option value, in the vocabulary the disposition
+ * table emits.
+ *
+ * It is the curated `Disposition` widened, never narrowed: a curator's four
+ * words mean here exactly what they mean in the Collection Assignment, and the
+ * three added ones describe outcomes no curator writes because they are not
+ * decisions. `blank-title` and `ambiguous-title-match` are the two exclusions
+ * that end a title's journey (ADR-0020); `collection-link-fault` is a
+ * **Collection Link Fault**, a link that was owed and could not be derived.
+ *
+ * They are listed apart rather than folded into `plain-text` because the
+ * member-facing result being identical — no link, keep the text — is not the
+ * same as the cause being identical. `plain-text` is a curator saying no link
+ * is wanted; `ambiguous-title-match` is evidence the Sheet Export is wrong;
+ * `collection-link-fault` is work outstanding. A reviewer reading counts per
+ * disposition has to tell those three apart, and one count merging them would
+ * read as settled.
+ */
+export type DispositionOutcome =
+  | Disposition
+  | "blank-title"
+  | "ambiguous-title-match"
+  | "collection-link-fault";
+
+/**
+ * Which outcomes mean a Profile Link resolves, as a table the compiler checks
+ * rather than a list a reader has to trust — the same shape and the same reason
+ * as `EARNS_COLLECTION_LINK`. Adding a value to `DispositionOutcome`, or a fifth
+ * word to `DISPOSITIONS` in `sheet-export.ts`, is a type error here.
+ *
+ * It does two jobs because they are one fact. It enumerates the vocabulary, so
+ * a curated word can never reach the non-public repository as a row nothing
+ * could classify. And it decides the pairing every row of the file turns on: a
+ * `true` carries a value that ships as a Mapping and the URL it ships to, a
+ * `false` carries the legacy display text and no URL. Two separate tables would
+ * be two places to add an outcome and one place to forget.
+ */
+const RESOLVES_A_LINK: Record<DispositionOutcome, boolean> = {
+  collection: true,
+  "plain-text": false,
+  "resolves-to-product": true,
+  undecided: false,
+  "blank-title": false,
+  "ambiguous-title-match": false,
+  "collection-link-fault": false,
+};
+
+/**
+ * The outcomes, in the order above — the curated four first, so the order says
+ * that this vocabulary widens `DISPOSITIONS` rather than replacing it. Exported
+ * so a reader can refuse everything else, and so the review document can report
+ * a count per outcome without keeping its own list.
+ */
+export const DISPOSITION_OUTCOMES = Object.keys(
+  RESOLVES_A_LINK
+) as readonly DispositionOutcome[];
+
+/**
+ * Whether a disposition means a Profile Link resolves, and therefore whether
+ * its row carries a URL.
+ *
+ * Exported because the reader of the committed file enforces the pairing and
+ * the review document reports it, and a reader that disagreed with the writer
+ * about which dispositions carry a link would refuse a file the writer had just
+ * produced — or admit one whose value nothing ships.
+ */
+export function resolvesALink(disposition: DispositionOutcome): boolean {
+  return RESOLVES_A_LINK[disposition];
+}
+
+/** How many legacy values resolve a Profile Link. Counted once, reported twice. */
+export function resolvingValues(
+  dispositions: readonly DispositionRow[]
+): number {
+  return dispositions.filter((row) => resolvesALink(row.disposition)).length;
+}
+
+/**
+ * One row of the disposition table: what one legacy option value becomes.
+ *
+ * This is the entire interface between this repository and the non-public one
+ * that holds member data (#28) — legacy identifier, legacy display text, the
+ * chosen Profile Link value, the target URL, and the disposition, joined there
+ * against a fresh member export to produce the three columns Discourse asked
+ * for. Which string a legacy value becomes is decided here; which member holds
+ * it is decided there, and nothing else crosses.
+ *
+ * `value` and `url` are populated exactly together, and that rule is the whole
+ * contract:
+ *
+ * - **With a URL**, `value` is byte-identical to a Mapping this repository
+ *   ships in `settings.yml`. Byte-identical, and deliberately stricter than the
+ *   runtime, which resolves on a *trimmed* match on both sides
+ *   (`javascripts/discourse/lib/profile-links.ts`). The runtime forgiving a
+ *   leading space is a property of the runtime; a value that differs by one
+ *   byte in the downstream join is a member whose Profile Link silently renders
+ *   nothing. Being stricter than what would work is the point, and it must not
+ *   be relaxed to agree with `linkCovering` — ADR-0023 is the whole argument,
+ *   and it is written down because relaxing it is the obvious tidy-up.
+ * - **Without a URL**, `value` is the legacy display text verbatim, and no
+ *   suffix is appended to it. The member holds an identifier, not a name — the
+ *   `Value` column is what a migrated member carries — so a row that emitted
+ *   nothing here would leave the non-public side with no name to write and
+ *   force it to build a second lookup of its own. The text is carried so the
+ *   member's record of what they own survives unlinked rather than being
+ *   deleted (#28). ` (Discontinued)` is *not* added: the suffix exists because a
+ *   Collection Link's value is its own anchor text (ADR-0020), and appending it
+ *   to a value that is not a link both rewrites what the member wrote and
+ *   manufactures a string that looks like a Collection Link and resolves for
+ *   nobody.
+ */
+export interface DispositionRow {
+  userFieldName: string;
+  /** The legacy phpBB option identifier — the column the join is keyed on. */
+  legacyValue: string;
+  /** The name the bulletin board displayed for it. */
+  legacyText: string;
+  value: string;
+  /** The Profile Link's target, or `""` when the value earns no link. */
+  url: string;
+  disposition: DispositionOutcome;
+}
+
 export interface CatalogueInput {
   sheetRows: SheetRow[];
   products: ProductRecord[];
@@ -314,6 +438,18 @@ export interface CatalogueResult {
    * mechanism exists to prevent, so it does not get to be a silent zero.
    */
   collectionFaults: CollectionLinkFault[];
+  /**
+   * The fifth: one row per legacy option value, for the non-public repository
+   * to join against a member export (#28).
+   *
+   * Derived here rather than anywhere downstream, because it is the only place
+   * that knows all four of the answers above at once. Reconstructing it from
+   * the committed files would have to re-derive which exclusion reason a title
+   * met, and two of those reasons — `blank-title` and `ambiguous-title-match` —
+   * are the difference between a member keeping their text and a data fault
+   * nobody has looked at.
+   */
+  dispositions: DispositionRow[];
 }
 
 /** One entry of the `profile_link_fields` setting value. */
@@ -649,9 +785,7 @@ export function buildCatalogue({
   const byFieldThenValue = (
     a: { userFieldName: string; value: string },
     b: { userFieldName: string; value: string }
-  ): number =>
-    (fieldRank.get(a.userFieldName) ?? 0) -
-      (fieldRank.get(b.userFieldName) ?? 0) || compareValues(a.value, b.value);
+  ): number => byField(fieldRank, a, b) || compareValues(a.value, b.value);
 
   catalogue.sort(byFieldThenValue);
   exclusions.sort(byFieldThenValue);
@@ -662,13 +796,16 @@ export function buildCatalogue({
   // trust a caller's copy of them.
   //
   // Sorted on the way out by the same rule as the other two, so the order the
-  // Mappings ship in is decided once. Only this output can reach the `?? 0`
-  // fallback above, and now only barely: a Collection Link takes its field name
-  // from the sheet row it was derived from, so it is always ranked. The
-  // fallback stays because `byFieldThenValue` is the comparator for three
-  // arrays and a comparator that assumes its input is a defect waiting on a
-  // fourth.
-  const { collectionLinks, faults } = deriveCollectionLinks({
+  // Mappings ship in is decided once. Only this output can reach `byField`'s
+  // `?? 0`, and now only barely: a Collection Link takes its field name from
+  // the sheet row it was derived from, so it is always ranked. The fallback
+  // lives in `byField` because four arrays are sorted through it, and a
+  // comparator that assumes its input is a defect waiting on a fifth.
+  const {
+    collectionLinks,
+    faults,
+    outcomes: linkOutcomes,
+  } = deriveCollectionLinks({
     sheetRows,
     exclusions,
     assignments,
@@ -682,7 +819,201 @@ export function buildCatalogue({
     exclusions,
     collectionLinks,
     collectionFaults: faults,
+    dispositions: dispositionTable({
+      sheetRows,
+      catalogue,
+      exclusions,
+      linkOutcomes,
+      fieldRank,
+    }),
   };
+}
+
+/**
+ * The disposition table: every legacy option value, and what it becomes.
+ *
+ * It walks the Sheet Exports, which makes three of this ticket's requirements
+ * structural rather than checked. Every legacy value gets a row, because a row
+ * *is* a sheet row. Both Managed Fields are covered and no third one is
+ * invented, because the allowlist has two entries and Humidifier is not one of
+ * them (#42/ADR-0022). And a value that resolves to a live product is included
+ * beside the Collection Links, because the walk does not know the difference —
+ * the downstream join needs every value, and a table built from the exclusions
+ * or the links alone would be missing the majority of them.
+ *
+ * Each row's answer comes from whichever of the two outputs already decided it:
+ * the catalogue for a title that resolved, the derivation's own per-value
+ * outcomes for a title that earned a Collection Link. Nothing here re-derives a
+ * value or re-judges an exclusion. That is deliberate — this artifact is the
+ * only interface to the repository that writes to members, and a second
+ * implementation of ADR-0020's naming rule living in the reporting path is a
+ * disagreement waiting to be discovered by a member with no link.
+ */
+function dispositionTable({
+  sheetRows,
+  catalogue,
+  exclusions,
+  linkOutcomes,
+  fieldRank,
+}: {
+  sheetRows: readonly SheetRow[];
+  catalogue: readonly ResolvedProduct[];
+  exclusions: readonly ExcludedProduct[];
+  linkOutcomes: readonly LegacyOutcome[];
+  fieldRank: ReadonlyMap<string, number>;
+}): DispositionRow[] {
+  const productByTitle = new Map(
+    catalogue.map((entry) => [
+      `${entry.userFieldName}\u0000${normalizeTitle(entry.value)}`,
+      entry,
+    ])
+  );
+  const reasonByTitle = new Map(
+    exclusions.map((exclusion) => [
+      `${exclusion.userFieldName}\u0000${normalizeTitle(exclusion.value)}`,
+      exclusion.reason,
+    ])
+  );
+  const outcomeByLegacyValue = new Map(
+    linkOutcomes.map((outcome) => [
+      `${outcome.userFieldName}\u0000${outcome.legacyValue}`,
+      outcome,
+    ])
+  );
+
+  const rows = sheetRows.map((row): DispositionRow => {
+    const userFieldName = row.userFieldName;
+    const legacyValue = row.legacyValue.trim();
+    // Trimmed for the reason every value in this pipeline is: resolution is an
+    // exact trimmed match on both sides, so a stored value with a stray space
+    // is a value nobody can hold on purpose.
+    const legacyText = row.legacyText.trim();
+    const titleKey = `${userFieldName}\u0000${normalizeTitle(
+      row.suggestedTitle.trim()
+    )}`;
+
+    /** No link: the member keeps the name the bulletin board showed them. */
+    const unlinked = (disposition: DispositionOutcome): DispositionRow => ({
+      userFieldName,
+      legacyValue,
+      legacyText,
+      value: legacyText,
+      url: "",
+      disposition,
+    });
+
+    const outcome = outcomeByLegacyValue.get(
+      `${userFieldName}\u0000${legacyValue}`
+    );
+
+    // A row the Collection Link derivation reached. Its answer is that
+    // function's, including which of the four words it earned, because it is
+    // the only thing that saw the row's own claim and its siblings' at once.
+    if (outcome) {
+      return outcome.url === ""
+        ? unlinked(outcome.disposition)
+        : {
+            userFieldName,
+            legacyValue,
+            legacyText,
+            value: outcome.value,
+            url: outcome.url,
+            disposition: outcome.disposition,
+          };
+    }
+
+    const product = productByTitle.get(titleKey);
+
+    // The majority case, and the one a table built from the Collection
+    // Assignment would have missed: the Suggested Title resolved, so the legacy
+    // value already has an ordinary product Mapping.
+    //
+    // This is also where a `resolves-to-product` row lands, and it lands here
+    // without anything reading the row. The curated `Profile Link Value` on
+    // those rows is `n/a` — the row saying it proposes no *new* value, not that
+    // the identifier has no value — and the legacy row's own Suggested Title is
+    // what joins it to the product. So the resolution is the same join every
+    // other product row takes, and the `n/a` never reaches a member.
+    if (product) {
+      return {
+        userFieldName,
+        legacyValue,
+        legacyText,
+        value: product.value,
+        url: product.url,
+        disposition: "resolves-to-product",
+      };
+    }
+
+    const reason = reasonByTitle.get(titleKey);
+
+    // The two exclusions that end a title's journey (ADR-0020), reported as
+    // themselves. `blank-title` is a row with no name to resolve;
+    // `ambiguous-title-match` is a title matching two products, which is
+    // evidence the equipment is still sold and the Sheet Export is wrong.
+    if (reason === "blank-title" || reason === "ambiguous-title-match") {
+      return unlinked(reason);
+    }
+
+    // Unreachable, and it fails towards the member keeping their value. Every
+    // other exclusion reason earns a Collection Link, so the derivation filed
+    // an outcome for the row and the first branch took it. A row arriving here
+    // is a reason added to `ExclusionReason` without `EARNS_COLLECTION_LINK`
+    // being told, which the compiler already refuses — so this is the shape of
+    // the refusal if it ever gets through, not a case with a story.
+    return unlinked("collection-link-fault");
+  });
+
+  // Sorted rather than left in sheet order, so the committed artifact is a
+  // stable diff. Fields keep the order the sheet presented them in, matching
+  // the other three outputs; identifiers within a field go in numeric order,
+  // because they are numbers and a reader looking for 6377 should not have to
+  // know that it sorts before 999.
+  return rows.sort(
+    (a, b) =>
+      byField(fieldRank, a, b) ||
+      compareIdentifiers(a.legacyValue, b.legacyValue)
+  );
+}
+
+/**
+ * The field half of every comparator here, so the `?? 0` is reasoned about
+ * once. Fields keep the order the sheet presented them in; a name the sheet
+ * never presented ranks first rather than throwing, because this is a
+ * comparator for four arrays and one that assumed its input is a defect
+ * waiting on a fifth.
+ */
+function byField(
+  fieldRank: ReadonlyMap<string, number>,
+  a: { userFieldName: string },
+  b: { userFieldName: string }
+): number {
+  return (
+    (fieldRank.get(a.userFieldName) ?? 0) -
+    (fieldRank.get(b.userFieldName) ?? 0)
+  );
+}
+
+/**
+ * Two legacy identifiers, in the order a person reads them. Numeric when both
+ * are numbers, which every one of them is today, and code point order
+ * otherwise — the phpBB column is a string and nothing guarantees it stays
+ * numeric, so a non-numeric identifier has to sort somewhere rather than
+ * compare as `NaN`.
+ */
+function compareIdentifiers(a: string, b: string): number {
+  const numericA = /^\d+$/.test(a);
+  const numericB = /^\d+$/.test(b);
+
+  if (numericA && numericB) {
+    return Number(a) - Number(b);
+  }
+
+  if (numericA !== numericB) {
+    return numericA ? -1 : 1;
+  }
+
+  return compareValues(a, b);
 }
 
 /**
@@ -706,6 +1037,24 @@ interface DerivationInput {
 interface DerivationResult {
   collectionLinks: CollectionLink[];
   faults: CollectionLinkFault[];
+  /**
+   * What every legacy value that entered this derivation came to, one entry
+   * each. Only the rows whose Suggested Title earned a Collection Link appear:
+   * a row whose title resolved to a live product never reaches this function,
+   * and the disposition table reads that outcome off the catalogue instead.
+   */
+  outcomes: LegacyOutcome[];
+}
+
+/** What one legacy value's Collection Link came to, whether or not it shipped. */
+interface LegacyOutcome {
+  userFieldName: string;
+  legacyValue: string;
+  /** The value that shipped, or `""` when none did. */
+  value: string;
+  /** The collection URL that shipped, or `""` when none did. */
+  url: string;
+  disposition: DispositionOutcome;
 }
 
 /**
@@ -803,6 +1152,7 @@ function deriveCollectionLinks({
 
   const admitted = new Set(admittedCollections);
   const faults: CollectionLinkFault[] = [];
+  const outcomes: LegacyOutcome[] = [];
   const groups = new Map<string, DerivedGroup>();
 
   for (const row of sheetRows) {
@@ -839,7 +1189,16 @@ function deriveCollectionLinks({
 
     if (!baseName) {
       // The one outcome that joins no group. A row that derives no value is a
-      // member of none, so it withholds nothing from anybody but itself.
+      // member of none, so it withholds nothing from anybody but itself — but
+      // it is still a legacy value a member holds, so the disposition table
+      // hears about it directly rather than through a group it never joined.
+      outcomes.push({
+        userFieldName,
+        legacyValue,
+        value: "",
+        url: "",
+        disposition: "collection-link-fault",
+      });
       faults.push({
         userFieldName,
         legacyValues: [legacyValue],
@@ -865,21 +1224,30 @@ function deriveCollectionLinks({
     // keyed on its value, so a link shipped for one row is a link every row
     // sharing that value receives — including one deliberately held back.
     // Recording the withholding is the only way its siblings find out.
-    const record = (url: string): void => {
+    const record = (url: string, disposition: DispositionOutcome): void => {
       const group = groups.get(groupKey);
 
       if (group) {
-        group.outcomes.push({ legacyValue, url });
+        group.outcomes.push({ legacyValue, url, disposition });
       } else {
         groups.set(groupKey, {
           userFieldName,
           value,
-          outcomes: [{ legacyValue, url }],
+          outcomes: [{ legacyValue, url, disposition }],
         });
       }
     };
 
-    /** Reports the row's problem and files it as having earned nothing. */
+    /**
+     * Reports the row's problem and files it as having earned nothing.
+     *
+     * `undecided` keeps its own word in the disposition table and every other
+     * problem becomes one. That is not a shortcut: a curator writing
+     * `undecided` is the one case where somebody looked at the row and said so,
+     * and it is the case a gate blocks the release on (#38), so a reader
+     * counting dispositions needs it separate from the eight ways a link goes
+     * undelivered without anyone having decided anything.
+     */
     const withhold = (problem: CollectionLinkProblem, detail: string): void => {
       faults.push({
         userFieldName,
@@ -888,7 +1256,12 @@ function deriveCollectionLinks({
         problem,
         detail,
       });
-      record("");
+      record(
+        "",
+        problem === "undecided-disposition"
+          ? "undecided"
+          : "collection-link-fault"
+      );
     };
 
     const claimKey = `${userFieldName}\u0000${legacyValue}`;
@@ -932,7 +1305,7 @@ function deriveCollectionLinks({
         // But it is a decision the value has to honour, and if a sibling
         // sharing this value did earn a link then honouring both is impossible
         // — which the second pass reports as `divided-value`.
-        record("");
+        record("", "plain-text");
         continue;
       case "resolves-to-product":
         // The one disposition this loop can prove wrong. `resolves-to-product`
@@ -1007,10 +1380,33 @@ function deriveCollectionLinks({
       continue;
     }
 
-    record(url);
+    record(url, "collection");
   }
 
   const collectionLinks: CollectionLink[] = [];
+
+  /**
+   * Files every row of a group that ships nothing.
+   *
+   * A row that earned a link and lost it to its group keeps no `collection`
+   * word: the link does not ship, so saying `collection` would be this table
+   * naming a Mapping that is not there. A row that earned nothing already has
+   * the right word — its own decision, or its own fault — and keeps it.
+   */
+  const withholdGroup = (group: DerivedGroup): void => {
+    for (const outcome of group.outcomes) {
+      outcomes.push({
+        userFieldName: group.userFieldName,
+        legacyValue: outcome.legacyValue,
+        value: "",
+        url: "",
+        disposition:
+          outcome.disposition === "collection"
+            ? "collection-link-fault"
+            : outcome.disposition,
+      });
+    }
+  };
 
   for (const group of groups.values()) {
     const earned = group.outcomes.filter((outcome) => outcome.url !== "");
@@ -1019,6 +1415,7 @@ function deriveCollectionLinks({
     // Nothing to ship. Every withheld row has already reported why, or was a
     // recorded decision that needed no reporting.
     if (earned.length === 0) {
+      withholdGroup(group);
       continue;
     }
 
@@ -1041,6 +1438,7 @@ function deriveCollectionLinks({
           `not. They share a Suggested Title, so they collapse to one ` +
           `Mapping, and one Mapping cannot be shipped to some of them`,
       });
+      withholdGroup(group);
       continue;
     }
 
@@ -1077,6 +1475,7 @@ function deriveCollectionLinks({
           `. They share a Suggested Title, so they collapse to one Mapping, ` +
           `and one Mapping has one URL`,
       });
+      withholdGroup(group);
       continue;
     }
 
@@ -1085,6 +1484,19 @@ function deriveCollectionLinks({
       value: group.value,
       url: first[0],
     });
+
+    // The one place a group ships, so the one place an outcome carries a value.
+    // Every row here earned the same URL — that is what the two checks above
+    // established — so each of them receives the Mapping the group produced.
+    for (const outcome of group.outcomes) {
+      outcomes.push({
+        userFieldName: group.userFieldName,
+        legacyValue: outcome.legacyValue,
+        value: group.value,
+        url: first[0],
+        disposition: outcome.disposition,
+      });
+    }
   }
 
   faults.sort(
@@ -1094,7 +1506,7 @@ function deriveCollectionLinks({
       compareValues(a.legacyValues.join(), b.legacyValues.join())
   );
 
-  return { collectionLinks, faults };
+  return { collectionLinks, faults, outcomes };
 }
 
 /**
@@ -1134,6 +1546,15 @@ interface RowOutcome {
   legacyValue: string;
   /** The collection this row earned, or `""` when it earned none. */
   url: string;
+  /**
+   * Why, in the disposition table's words. Recorded at the point the decision
+   * is made rather than reconstructed afterwards: every terminal branch below
+   * already knows which of the four it took, and a second pass inferring it
+   * from the fault list would have to re-answer questions like "did this row's
+   * own claim fail, or did its sibling's" — precedence this function settles
+   * once and would then be guessing at.
+   */
+  disposition: DispositionOutcome;
 }
 
 /** One derived value, and what every row behind it came to. */

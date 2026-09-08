@@ -234,7 +234,15 @@ export class SheetExportError extends Error {
 // Deliberately strict about what sits either side of the `@`: the point is to
 // recognise an email address, and a loose pattern that also matched product
 // titles would turn a safety net into a nuisance that gets switched off.
-const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
+//
+// Exported because the same tripwire guards the other boundary: this one
+// refuses to let member data *in* from the spreadsheet, and
+// `dispositionTableCsv` refuses to let it *out* in the disposition table. One
+// pattern rather than two copies, on the same grounds as
+// `COLLECTION_LINK_SUFFIX` — a guard that had drifted between the two
+// directions would be strict at one boundary and lax at the other, and nobody
+// would find out which.
+export const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
 
 /**
  * Resolve a tab name against the option-table allowlist. This is the only way

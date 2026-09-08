@@ -9,7 +9,7 @@ The commands and what each one is allowed to touch:
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
-| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-assignment.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `data/disposition-table.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
 | `pnpm check:collection-assignment` | `data/collection-assignment.csv`  | nothing — it prints, or refuses     | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
@@ -217,7 +217,7 @@ handful of tabs, and exits well inside the hour.
 ## The Catalogue Refresh writes files to ship and one file to read
 
 `refresh:catalogue` is the only command that touches Shopify, and the only one
-that turns a curated title into a link. It writes three things, and they are not
+that turns a curated title into a link. It writes four things, and they are not
 all the same kind of thing:
 
 - **`data/resolved-products.csv` is the record.** It is committed, it is an
@@ -231,14 +231,50 @@ all the same kind of thing:
   what the link is. Three columns rather than five, because a collection has no
   product handle and no product status — which is exactly why widening the
   catalogue file was rejected (ADR-0021). It carries its own digest, and its
-  reader refuses a value whose suffix is not those exact bytes. Its rows are
-  hand-seeded today; deriving them from the Excluded Products and the Collection
-  Assignment is a later step, so this refresh reads the file and writes it back.
+  reader refuses a value whose suffix is not those exact bytes. Every row of it
+  is derived from the Excluded Products and the Collection Assignment rather
+  than typed by a person.
 
   Both files feed the Mappings. Only `data/resolved-products.csv` feeds the
   Dropdown Options, and that asymmetry is the feature: `dropdownOptionsFor` is
   handed the products alone, so it cannot offer a discontinued machine to a User
   choosing theirs.
+- **`data/disposition-table.csv` is the only output that leaves.** One row per
+  legacy option value across both Managed Fields: the legacy identifier, the
+  name the bulletin board showed for it, the chosen Profile Link value, the
+  target URL, and the disposition. It is committed, it carries its own digest,
+  and **nothing in this repository reads it** — it is the entire interface to a
+  separate, non-public repository that joins it against a fresh member export to
+  produce the three columns Discourse's migrations engineer asked for: member
+  identifier, custom field name, value (#28).
+
+  Which string a legacy value becomes is decided here; which member holds it is
+  decided there. Keeping that the only interface is what allows the member-level
+  work to happen somewhere this repository never sees, and it is why the file
+  carries no member data of any kind — `dispositionTableCsv` refuses to write a
+  cell shaped like an email address, and reports the row and column without
+  echoing the cell, on the same reasoning as `readSheetTab`'s guard pointing the
+  other way.
+
+  Two rules run the file, and both are checked on read as well as on write.
+  A row **with** a URL carries a value byte-identical to a Mapping shipped in
+  `settings.yml` — byte-identical, which is deliberately stricter than the
+  runtime's own trimmed match, because a value that differs by one byte in
+  somebody else's join is a member whose Profile Link silently renders nothing
+  (ADR-0023 — relaxing this to agree with `linkCovering` is the obvious tidy-up
+  and it would remove the only guarantee the join has).
+  A row **without** one carries the legacy display text verbatim, with no suffix
+  added, so the member keeps what they entered and simply gets no link. That is
+  the case for a `plain-text` or `undecided` row and for a title excluded as
+  `blank-title` or `ambiguous-title-match`: they appear with no URL rather than
+  being omitted, because the join needs every value.
+
+  The `Disposition` column widens the curated vocabulary and never narrows it.
+  A curator's four words mean what they mean in the Collection Assignment;
+  `blank-title`, `ambiguous-title-match` and `collection-link-fault` describe
+  outcomes nobody decided. They are apart from `plain-text` on purpose — the
+  result for the member is the same and the causes are not, and one count
+  merging a settled decision with a fixable data fault would read as settled.
 - **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
   ignored, because it is regenerated on every refresh: every Mapping per field,
   every excluded Suggested Title under the reason it was excluded, and both
