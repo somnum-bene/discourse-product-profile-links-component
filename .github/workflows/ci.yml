@@ -54,3 +54,12 @@ jobs:
       # is what lets this run here at all.
       - name: settings.yml matches the catalogue and the Collection Links
         run: pnpm build:settings --check
+
+      # The release gate. An `undecided` Collection Assignment row is an
+      # absence of evidence, not a preference, and blocks the way an Unresolved
+      # URL does (ADR-0021) — but that is a fact about the repository, not
+      # about Shopify, so it lives here rather than in refresh:catalogue's exit
+      # code. Needs no credentials either, for the same reason build:settings
+      # doesn't.
+      - name: no Collection Assignment row is still undecided
+        run: pnpm check:collection-assignment
