@@ -487,6 +487,36 @@ export function collectionHandlesFrom(
   return [...handles].sort();
 }
 
+/**
+ * The Collection Assignment rows still `undecided`, in Sheet order. `undecided`
+ * is an absence of evidence rather than a preference, so it blocks a release
+ * the way an Unresolved URL does (ADR-0021) — but that gate belongs on the
+ * committed files, not on a Catalogue Refresh's exit code, which stays zero on
+ * purpose (see `refresh-catalogue.ts`). This is what a standalone check runs
+ * over `data/collection-assignment.csv` alone, with no Shopify call and no
+ * Excluded Product to join against.
+ *
+ * A `switch` rather than `=== "undecided"`, so a fifth `Disposition` added to
+ * `DISPOSITIONS` fails to compile here instead of silently reading as decided.
+ * `resolves-to-product` sits beside `plain-text` and `collection` on purpose:
+ * all three are a curator's recorded decision, and only the absence of one
+ * blocks anything.
+ */
+export function undecidedAssignments(
+  assignments: readonly AssignmentRow[]
+): AssignmentRow[] {
+  return assignments.filter((assignment) => {
+    switch (assignment.disposition) {
+      case "collection":
+      case "plain-text":
+      case "resolves-to-product":
+        return false;
+      case "undecided":
+        return true;
+    }
+  });
+}
+
 /** One request asking whether Shopify admits each collection in a batch. */
 export function collectionsByHandleQuery(handles: readonly string[]): string {
   return byHandleQuery(COLLECTION_LOOKUP, handles);

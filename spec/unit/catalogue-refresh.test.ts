@@ -43,14 +43,34 @@ import {
   type SurveyedProduct,
   surveyPageFromResponse,
   TOKEN_VAR,
+  undecidedAssignments,
 } from "../../scripts/lib/catalogue-refresh";
 import {
   ASSIGNMENT_TABS,
+  type AssignmentRow,
   assignmentRowsFrom,
   exportFileName,
   SHEET_TABS,
   sheetRowsFrom,
 } from "../../scripts/lib/sheet-export";
+
+/** An assignment row with the columns this suite ignores left empty. */
+function assignment(row: Partial<AssignmentRow>): AssignmentRow {
+  return {
+    field: "Machine",
+    legacyPnums: "",
+    legacyText: "",
+    baseNameSource: "Suggested Title",
+    profileLinkValue: "",
+    recommendedCollectionTitle: "",
+    recommendedCollectionUrl: "",
+    confidence: "High",
+    rationale: "",
+    override: "",
+    disposition: "collection",
+    ...row,
+  };
+}
 
 // The fixtures are real: the sheet rows are lines from the committed Sheet
 // Exports, and the product records are what the cpap.com Shopify catalogue
@@ -466,13 +486,13 @@ describe("collectionHandlesFrom", () => {
     // asked Shopify about. A command that worked the handles out some other way
     // could admit a collection the transform never consults, or miss one it
     // does.
-    for (const assignment of assignments) {
-      if (assignment.disposition !== "collection") {
+    for (const row of assignments) {
+      if (row.disposition !== "collection") {
         continue;
       }
 
       expect(handles).toContain(
-        collectionHandleFromUrl(assignedCollectionUrl(assignment))
+        collectionHandleFromUrl(assignedCollectionUrl(row))
       );
     }
   });
@@ -494,6 +514,60 @@ describe("collectionHandlesFrom", () => {
 
     expect(undisposed.length).toBeGreaterThan(0);
     expect(collectionHandlesFrom(undisposed)).toEqual([]);
+  });
+});
+
+describe("undecidedAssignments", () => {
+  it("flags only the rows still undecided", () => {
+    // All four words the schema allows, one row each, so a decided disposition
+    // slipping through would be caught here rather than by an accident of
+    // which fixture happened to be missing.
+    const undecided = assignment({
+      legacyPnums: "6240",
+      disposition: "undecided",
+    });
+
+    const rows = [
+      assignment({ legacyPnums: "3002", disposition: "collection" }),
+      assignment({ legacyPnums: "3003", disposition: "plain-text" }),
+      assignment({ legacyPnums: "3004", disposition: "resolves-to-product" }),
+      undecided,
+    ];
+
+    expect(undecidedAssignments(rows)).toEqual([undecided]);
+  });
+
+  it("does not treat resolves-to-product as undecided", () => {
+    // The gap #38 exists to close: a row that was never a Collection Link
+    // candidate at all is still a curator's decision, and a check that
+    // conflated the two would block a release on rows already correctly
+    // curated.
+    const rows = [
+      assignment({ legacyPnums: "6377", disposition: "resolves-to-product" }),
+      assignment({ legacyPnums: "6378", disposition: "resolves-to-product" }),
+    ];
+
+    expect(undecidedAssignments(rows)).toEqual([]);
+  });
+
+  it("passes an empty table, which does not by itself prove the check works", () => {
+    // Pinned separately from the two tests above on purpose. "No undecided
+    // rows" and "no rows at all" both return `[]` here, and a suite that only
+    // asserted the empty case would pass just as well against a function that
+    // never detected anything.
+    expect(undecidedAssignments([])).toEqual([]);
+  });
+
+  it("the committed Collection Assignment has none, today", () => {
+    const assignments = ASSIGNMENT_TABS.flatMap((tab) =>
+      assignmentRowsFrom(
+        tab,
+        readFileSync(join("data", exportFileName(tab)), "utf8")
+      )
+    );
+
+    expect(assignments.length).toBeGreaterThan(0);
+    expect(undecidedAssignments(assignments)).toEqual([]);
   });
 });
 

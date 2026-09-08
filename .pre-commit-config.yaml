@@ -93,6 +93,18 @@ repos:
         pass_filenames: false
         files: ^settings\.yml$|^data/(resolved-products|collection-links)\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
 
+      # The release gate. `undecided` blocks the way an Unresolved URL does
+      # (ADR-0021), and it is a fact about the committed Collection Assignment
+      # rather than about Shopify, so it runs here rather than gating
+      # refresh:catalogue's exit code. No network, no credentials — the same
+      # reason build-settings above can run as a hook.
+      - id: check-collection-assignment
+        name: no Collection Assignment row is still undecided
+        entry: pnpm check:collection-assignment
+        language: system
+        pass_filenames: false
+        files: ^data/collection-assignment\.csv$|^scripts/(check-collection-assignment\.ts|lib/(catalogue-refresh|sheet-export)\.ts)$
+
       - id: vitest
         name: unit tests
         entry: pnpm test

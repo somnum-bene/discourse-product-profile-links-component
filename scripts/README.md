@@ -11,6 +11,7 @@ The commands and what each one is allowed to touch:
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
 | `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
+| `pnpm check:collection-assignment` | `data/collection-assignment.csv`  | nothing — it prints, or refuses     | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
 | `pnpm apply:catalogue`   | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml` | one Discourse instance         | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
@@ -307,6 +308,35 @@ moved on without a rebuild look identical in the file and have the same remedy,
 so one message covers both: regenerate. The same comparison is also a unit test
 against the real files, which is why a stale `settings.yml` fails `pnpm test`
 too.
+
+## An undecided row blocks the ship, and the gate lives away from the refresh
+
+`refresh:catalogue` reports `undecided` Collection Assignment rows on stderr
+and stays green while they exist, on purpose: its exit code is a statement
+about Shopify and the Sheet, which move without anyone committing anything, and
+a command that failed every time the catalogue drifted is a command people
+stop reading.
+
+`check:collection-assignment` is the gate instead, and it is a statement about
+the repository: it reads only the committed `data/collection-assignment.csv`
+and exits non-zero while any row's `Disposition` is `undecided`, naming every
+one so the fix does not require opening the file to find it. `undecided` is an
+absence of evidence rather than a preference, so it blocks the same way an
+Unresolved URL does (ADR-0021) — the alternative, letting an uncurated row
+quietly resolve to no link, is indistinguishable from the failure this whole
+mechanism exists to remove.
+
+`plain-text` and `resolves-to-product` are **not** `undecided`, deliberately: a
+row dispositioned either way is a curator's recorded decision, not an absence
+of one. `undecidedAssignments` in `lib/catalogue-refresh.ts` switches over the
+`Disposition` union rather than testing `=== "undecided"`, so a fifth value
+added to `DISPOSITIONS` fails to compile there instead of silently falling
+through as decided.
+
+It needs no credentials and no network, which is what lets it run in CI and as
+a pre-commit hook beside `build:settings --check` — and unlike that gate, it
+never needs the Excluded Products or a live Shopify catalogue: whether a row
+has been looked at is a fact the assignment table can answer by itself.
 
 ## The gates that stand in front of a bad regeneration
 
