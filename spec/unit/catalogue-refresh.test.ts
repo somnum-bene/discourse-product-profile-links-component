@@ -558,6 +558,21 @@ describe("undecidedAssignments", () => {
     expect(undecidedAssignments([])).toEqual([]);
   });
 
+  it("refuses a Disposition it was not taught, rather than silently treating it as decided", () => {
+    // `DISPOSITIONS` is the only thing standing between "unrecognised" and
+    // "this compiles", so this reaches the guard the same way an actual fifth
+    // value would: past the type system, the way `assignmentRowsFrom`'s own
+    // `as AssignmentRow[]` cast lets an unvalidated Disposition through in
+    // the first place.
+    const rows = [
+      assignment({ disposition: "not-a-real-disposition" as never }),
+    ];
+
+    expect(() => undecidedAssignments(rows)).toThrow(
+      /Unrecognised Disposition/
+    );
+  });
+
   it("the committed Collection Assignment has none, today", () => {
     const assignments = ASSIGNMENT_TABS.flatMap((tab) =>
       assignmentRowsFrom(

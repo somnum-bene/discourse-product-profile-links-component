@@ -513,6 +513,20 @@ export function undecidedAssignments(
         return false;
       case "undecided":
         return true;
+      default: {
+        // Not just documentation: this repository's tsconfig sets neither
+        // `strict` nor `noImplicitReturns`, so `Array.prototype.filter`'s
+        // `unknown`-returning predicate type would happily accept a case that
+        // fell through and returned nothing — which `filter` then treats as
+        // `false`, silently letting a fifth `Disposition` read as decided.
+        // Assigning to `never` is what actually forces the compiler to
+        // reject a case this switch does not handle.
+        const exhaustive: never = assignment.disposition;
+        throw new CatalogueRefreshError(
+          `Unrecognised Disposition ${JSON.stringify(exhaustive)}. ` +
+            `undecidedAssignments has not been taught what it means.`
+        );
+      }
     }
   });
 }

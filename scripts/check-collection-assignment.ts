@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   if (undecided.length > 0) {
     throw new CatalogueRefreshError(
       `${undecided.length} of ${assignments.length} Collection Assignment ` +
-        `${assignments.length === 1 ? "row is" : "rows are"} still \`undecided\`, ` +
+        `${undecided.length === 1 ? "row is" : "rows are"} still \`undecided\`, ` +
         `naming ${undecided.length === 1 ? "it" : "them"} below. Each is an ` +
         `absence of evidence rather than a preference, so it blocks the ` +
         `release the way an Unresolved URL does, until a curator sets its ` +
