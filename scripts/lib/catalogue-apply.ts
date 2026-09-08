@@ -708,6 +708,11 @@ function listed(values: readonly string[]): string {
  * The Apply Plan, for a person about to authorise it. Refusals first, because
  * one of them is the reason none of the writes will happen.
  *
+ * Retentions come after both, because each one qualifies a removal named above
+ * it and a qualification reads backwards when it arrives first. A refusal
+ * empties the write list, so only one of the two lists is ever populated and
+ * this position follows the removal either way.
+ *
  * `added` and `removed` are printed in full and never summarised to a count.
  * They are the two lists someone is being asked to approve, and a count is not
  * something anyone can approve.
@@ -747,6 +752,11 @@ export function renderPlan(plan: ApplyPlan): string {
     if (write.added.length === 0 && write.removed.length === 0) {
       lines.push(`  the same options in a different order`);
     }
+  }
+
+  for (const retained of plan.retained) {
+    lines.push(`RETAINED ${retained.user_field_name} "${retained.value}"`);
+    lines.push(`  ${retained.detail}`);
   }
 
   for (const warning of plan.warnings) {

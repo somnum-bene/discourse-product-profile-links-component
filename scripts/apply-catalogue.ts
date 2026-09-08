@@ -96,10 +96,10 @@ async function main(): Promise<void> {
   const catalogue = readResolvedProducts(catalogueText);
   const declared = declaredDigest(catalogueText, CATALOGUE_FILE);
 
-  // Read for the drift comparison below and for nothing else. The Dropdown
-  // Options this command writes come from `dropdownOptionsFor(catalogue)`,
-  // which is never handed a Collection Link — that is the point of the two
-  // arrays (ADR-0021).
+  // Read for the drift comparison and the plan's retentions, and for nothing
+  // else. The Dropdown Options this command writes come from
+  // `dropdownOptionsFor(catalogue)`, which is never handed a Collection Link —
+  // that is the point of the two arrays (ADR-0021).
   const collectionLinks = readCollectionLinks(
     await readFile(COLLECTION_LINKS_FILE, "utf8")
   );
@@ -178,7 +178,10 @@ async function main(): Promise<void> {
 
   process.stdout.write(`${renderComponent(lookup, drift)}\n`);
 
-  const plan = planApply(current, catalogue, {
+  // Both arrays again, and for the same reason as the drift check above: the
+  // options come from the products alone, and the links are what let the plan
+  // say that a value it is taking out of the dropdown is still a Mapping.
+  const plan = planApply(current, catalogue, collectionLinks, {
     replace: args.replace,
     clear: args.clear,
   });

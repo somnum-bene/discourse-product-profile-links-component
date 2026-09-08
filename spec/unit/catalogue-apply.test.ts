@@ -433,18 +433,24 @@ describe("whether a plan gets sent at all", () => {
 
   it("proceeds when there is nothing in the way", () => {
     expect(
-      applyDecision(planApply(current, catalogue, { replace: true }))
+      applyDecision(planApply(current, catalogue, [], { replace: true }))
     ).toEqual({ kind: "proceed" });
   });
 
   it("proceeds when there is nothing to do either", () => {
     expect(
-      applyDecision({ writes: [], refusals: [], warnings: [], unchanged: [] })
+      applyDecision({
+        writes: [],
+        refusals: [],
+        warnings: [],
+        unchanged: [],
+        retained: [],
+      })
     ).toEqual({ kind: "proceed" });
   });
 
   it("stops on a refusal and says nothing was written", () => {
-    const decision = applyDecision(planApply(current, catalogue));
+    const decision = applyDecision(planApply(current, catalogue, []));
 
     expect(decision.kind).toBe("refused");
     expect(decision.kind === "refused" && decision.message).toContain(
@@ -457,7 +463,11 @@ describe("whether a plan gets sent at all", () => {
 
   it("counts the refusals, because one field refusing stops them all", () => {
     const decision = applyDecision(
-      planApply([...current, dropdown(9, "Mask", ["Typed by hand"])], catalogue)
+      planApply(
+        [...current, dropdown(9, "Mask", ["Typed by hand"])],
+        catalogue,
+        []
+      )
     );
 
     expect(decision.kind === "refused" && decision.message).toMatch(
@@ -467,7 +477,7 @@ describe("whether a plan gets sent at all", () => {
 
   it("stops on a clear before any request, not partway through the writes", () => {
     const decision = applyDecision(
-      planApply(current, catalogue, {
+      planApply(current, catalogue, [], {
         replace: true,
         clear: ["Sleep Position"],
       })
@@ -485,10 +495,15 @@ describe("whether a plan gets sent at all", () => {
   it("says nothing about a clear for a field that is already empty", () => {
     // Nothing to remove means no write, so there is nothing this transport
     // cannot carry out.
-    const plan = planApply([...current, dropdown(9, "Vendor", [])], catalogue, {
-      replace: true,
-      clear: ["Vendor"],
-    });
+    const plan = planApply(
+      [...current, dropdown(9, "Vendor", [])],
+      catalogue,
+      [],
+      {
+        replace: true,
+        clear: ["Vendor"],
+      }
+    );
 
     expect(plan.unchanged).toContain("Vendor");
     expect(applyDecision(plan)).toEqual({ kind: "proceed" });
@@ -774,7 +789,7 @@ describe("the two digests that have to agree", () => {
 
 describe("what a person is shown before authorising anything", () => {
   it("puts the refusals first, since they are why nothing happens", () => {
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue());
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), []);
     const rendered = renderPlan(plan);
 
     expect(rendered.startsWith("REFUSED Machine (would-remove-options)")).toBe(
@@ -785,7 +800,7 @@ describe("what a person is shown before authorising anything", () => {
 
   it("names each option it would remove and what it is probably a spelling of", () => {
     const rendered = renderPlan(
-      planApply(parseUserFields(LIVE_RESPONSE), realCatalogue())
+      planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), [])
     );
 
     expect(rendered).toContain(
@@ -795,9 +810,14 @@ describe("what a person is shown before authorising anything", () => {
   });
 
   it("prints added and removed in full rather than as a count", () => {
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), {
-      replace: true,
-    });
+    const plan = planApply(
+      parseUserFields(LIVE_RESPONSE),
+      realCatalogue(),
+      [],
+      {
+        replace: true,
+      }
+    );
     const rendered = renderPlan(plan);
     const machine = plan.writes.find(
       (write) => write.user_field_name === "Machine"
@@ -825,6 +845,7 @@ describe("what a person is shown before authorising anything", () => {
             url: "https://www.cpap.com/products/a",
           },
         ],
+        [],
         { managedFields: ["Machine"] }
       )
     );
@@ -832,9 +853,67 @@ describe("what a person is shown before authorising anything", () => {
     expect(rendered).toContain("UNCHANGED Machine");
   });
 
+  /** One product left, and the catch-all beside it that no longer resolves. */
+  function retiring(replace: boolean) {
+    return planApply(
+      [dropdown(2, "Machine", ["AirSense 11", "CPAP Machines (Discontinued)"])],
+      [
+        {
+          userFieldName: "Machine",
+          value: "AirSense 11",
+          handle: "a",
+          status: "ACTIVE",
+          url: "https://www.cpap.com/products/a",
+        },
+      ],
+      [
+        {
+          userFieldName: "Machine",
+          value: "CPAP Machines (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      { managedFields: ["Machine"], replace }
+    );
+  }
+
+  it("says what a removal keeps as well as what it takes", () => {
+    const rendered = renderPlan(retiring(true));
+
+    expect(rendered).toContain(
+      'RETAINED Machine "CPAP Machines (Discontinued)"'
+    );
+    expect(rendered).toContain("removed as a Dropdown Option");
+    expect(rendered).toContain("retained as a Mapping");
+    expect(rendered).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+    expect(rendered.indexOf("RETAINED Machine")).toBeGreaterThan(
+      rendered.indexOf('  - "CPAP Machines (Discontinued)"')
+    );
+  });
+
+  it("qualifies the refusal rather than arriving after it is decided", () => {
+    const rendered = renderPlan(retiring(false));
+
+    expect(rendered.startsWith("REFUSED Machine (would-remove-options)")).toBe(
+      true
+    );
+    expect(rendered).toContain('  - "CPAP Machines (Discontinued)"');
+    expect(rendered.indexOf("RETAINED Machine")).toBeGreaterThan(
+      rendered.indexOf('  - "CPAP Machines (Discontinued)"')
+    );
+  });
+
   it("says nothing at all about a plan with nothing in it", () => {
     expect(
-      renderPlan({ writes: [], refusals: [], warnings: [], unchanged: [] })
+      renderPlan({
+        writes: [],
+        refusals: [],
+        warnings: [],
+        unchanged: [],
+        retained: [],
+      })
     ).toBe("");
   });
 
@@ -867,9 +946,9 @@ describe("the whole decision against the instance as it stands", () => {
     const current = parseUserFields(LIVE_RESPONSE);
     const targets = dropdownOptionsFor(catalogue);
 
-    expect(planApply(current, catalogue).writes).toEqual([]);
+    expect(planApply(current, catalogue, []).writes).toEqual([]);
 
-    const plan = planApply(current, catalogue, { replace: true });
+    const plan = planApply(current, catalogue, [], { replace: true });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
@@ -901,7 +980,7 @@ describe("the whole decision against the instance as it stands", () => {
       dropdown(3, "Mask", [...targets[1].options]),
       dropdown(4, "Sleep Position", ["Side Sleeper"]),
     ];
-    const second = planApply(applied, catalogue, {
+    const second = planApply(applied, catalogue, [], {
       replace: true,
       managedFields: ["Machine", "Mask", "Sleep Position"],
     });
@@ -917,7 +996,7 @@ describe("the whole decision against the instance as it stands", () => {
 
   it("leaves Sleep Position alone when only Machine and Mask are being written", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, [], {
       replace: true,
     });
 
@@ -929,7 +1008,7 @@ describe("the whole decision against the instance as it stands", () => {
 
   it("stops before any request when Sleep Position clearing is asked for", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, [], {
       replace: true,
       clear: ["Sleep Position"],
     });
@@ -990,6 +1069,24 @@ describe("what this step is not allowed to do", () => {
     expect(command).toContain(
       "renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)"
     );
+  });
+
+  it("hands the plan the links, and not an empty array", () => {
+    // The third reader of the same two arrays, and the only one whose failure
+    // is silent in both directions: a plan built from `[]` finds no Collection
+    // Link behind any removal, so every `RETAINED` line disappears and the
+    // refusal falls back to its unqualified wording. Nothing throws and
+    // nothing looks wrong — the plan stays internally consistent and is
+    // simply mistaken about the world.
+    //
+    // Substituting `[]` for this argument left all 687 tests green, exactly
+    // as it did for `renderFieldMappings` above. The `planApply` unit tests
+    // cannot reach it: they hand the function their own links, so they pin
+    // the decision and never the wiring.
+    expect(command).toContain(
+      "planApply(current, catalogue, collectionLinks, {"
+    );
+    expect(command).not.toMatch(/planApply\([^)]*,\s*\[\]/);
   });
 
   it("writes Dropdown Options from the products alone", () => {

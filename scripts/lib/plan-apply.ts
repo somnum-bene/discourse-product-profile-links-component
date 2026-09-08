@@ -19,8 +19,14 @@
 // review document uses, and are never derived a second way. A Dropdown Option
 // with no Mapping behind it is an Unmatched Value — the User picks their machine
 // and no Profile Link appears — so the two lists have one source.
+//
+// The Collection Links are handed in beside the catalogue and never reach that
+// function. They are Mappings with no Dropdown Option behind them (ADR-0021), so
+// they cannot add an option and must not: this step is given them only so it can
+// say which of the options it is taking away are still Mappings afterwards.
 
 import {
+  type CollectionLink,
   dropdownOptionsFor,
   type FieldOptions,
   type ResolvedProduct,
@@ -120,12 +126,39 @@ export interface ApplyWarning {
   detail: string;
 }
 
+/**
+ * A value the plan takes out of a field's Dropdown Options and that the
+ * catalogue still carries as a Collection Link. Removed as an option, retained
+ * as a Mapping — the two halves of one decision (ADR-0021).
+ *
+ * It is its own disposition rather than an annotation on the removal because a
+ * reader who sees only the first half acts on it. An operator reading a bare
+ * `- "AirSense 10 Elite with HumidAir (Discontinued)"` has every reason to put
+ * the option back, and putting it back offers a machine cpap.com no longer sells
+ * to the next User choosing one, which is the bug ADR-0012 was right about.
+ * ADR-0013 authorises a destructive write by what it removes, so what this one
+ * removes has to be stated exactly: an option, and not a Profile Link.
+ */
+export interface RetainedLink {
+  user_field_name: string;
+  /** The Dropdown Option going away, which is also the Mapping's value. */
+  value: string;
+  /** The collection the value still resolves to. */
+  url: string;
+  detail: string;
+}
+
 export interface ApplyPlan {
   writes: FieldWrite[];
   refusals: ApplyRefusal[];
   warnings: ApplyWarning[];
   /** Fields already holding exactly the right options. Named, not silent. */
   unchanged: string[];
+  /**
+   * The removals that take away an option and nothing else. Distinct from a
+   * write's `removed`, which is every option going, harmless or not.
+   */
+  retained: RetainedLink[];
 }
 
 export interface ApplyOptions {
@@ -160,6 +193,37 @@ function quoted(values: readonly string[]): string {
   return values.map((value) => `"${value}"`).join(", ");
 }
 
+/**
+ * The Collection Link covering a value on a field, or `undefined`.
+ *
+ * Three separate messages ask this question — the refusal that names what it
+ * would remove, the warning about a field with no products, and the retention
+ * itself — so it is answered in one place. Three copies of a matching rule is
+ * how two of them end up disagreeing about whether a User keeps their link.
+ *
+ * **Trimmed on both sides, because that is what the runtime does.**
+ * `readLinkConfig` trims a Mapping's value and `resolveProfileLinks` trims the
+ * stored value before the lookup that resolves it
+ * (`javascripts/discourse/lib/profile-links.ts`). ADR-0013 calls this matching
+ * exact and it still is where it counts — case and every interior character are
+ * compared byte for byte, because "close enough" would be shipping to a
+ * dropdown. But "exact" there is shorthand for "whatever the runtime will do",
+ * and the plan disagreeing with the runtime about a trailing space would report
+ * a Profile Link lost that is not.
+ */
+function linkCovering(
+  collectionLinks: readonly CollectionLink[],
+  userFieldName: string,
+  value: string
+): CollectionLink | undefined {
+  const wanted = value.trim();
+
+  return collectionLinks.find(
+    (link) =>
+      link.userFieldName === userFieldName && link.value.trim() === wanted
+  );
+}
+
 function sameOptions(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
@@ -174,6 +238,72 @@ function describeRemovals(
 
     return { option, sameProductAs: match ?? null };
   });
+}
+
+/**
+ * What a `would-remove-options` refusal says, which depends on how much of what
+ * it is refusing a Collection Link still covers. Three cases rather than two,
+ * because the covered and uncovered options carry opposite consequences and the
+ * sentence naming one is false about the other.
+ *
+ * None covered is the original wording, untouched. Some covered qualifies it:
+ * the covered ones are named, the blanket claim is narrowed to "the rest".
+ * *All* covered has to drop that clause entirely — there is no rest, and a
+ * refusal that invents one is telling the operator a Profile Link is at stake
+ * when none is.
+ *
+ * That last case is the one that has to work hardest, because it is the case
+ * where the refusal looks unjustified: nothing a User holds stops resolving, so
+ * the message owes an answer to "then why am I being stopped?". The answer is
+ * ADR-0013's — a removal is authorised by what it takes out of the list, not by
+ * how harmless the removal looks — and the plan being all-or-nothing means one
+ * flag cannot have two authorisation stories depending on the reason.
+ */
+function removalRefusal(
+  name: string,
+  removed: readonly string[],
+  covered: readonly string[]
+): string {
+  const preamble =
+    `"${name}" already offers ${removed.length} option` +
+    `${removed.length === 1 ? "" : "s"} the catalogue does not carry: ` +
+    `${quoted(removed)}. `;
+
+  if (covered.length === 0) {
+    return (
+      `${preamble}Removing one silently stops every User holding it from ` +
+      `getting a Profile Link, and there is no record of whether it was ` +
+      `written by this pipeline or entered by a person, so it is treated as ` +
+      `a person's. Pass replace to authorise it.`
+    );
+  }
+
+  const one = covered.length === 1;
+
+  if (covered.length === removed.length) {
+    return (
+      `${preamble}${one ? "It is" : "Every one of them is"} still carried ` +
+      `as a Collection Link, so removing ${one ? "it" : "them"} takes away ` +
+      `the option${one ? "" : "s"} and not the Profile Link` +
+      `${one ? "" : "s"} — see the retention${one ? "" : "s"} below. No ` +
+      `User holding ${one ? "it" : "one"} stops getting a Profile Link. ` +
+      `Pass replace even so: a removal is authorised by what it takes out ` +
+      `of the list and not by how harmless it looks (ADR-0013), and the ` +
+      `plan is all-or-nothing, so one flag does not get two authorisation ` +
+      `stories.`
+    );
+  }
+
+  return (
+    `${preamble}${quoted(covered)} ${one ? "is" : "are"} still carried as a ` +
+    `Collection Link, so removing ${one ? "it" : "them"} takes away the ` +
+    `option${one ? "" : "s"} and not the Profile Link${one ? "" : "s"} — ` +
+    `see the retention${one ? "" : "s"} below. Removing any of the rest ` +
+    `silently stops every User holding it from getting one, and there is no ` +
+    `record of whether it was written by this pipeline or entered by a ` +
+    `person, so it is treated as a person's. Pass replace to authorise all ` +
+    `of it.`
+  );
 }
 
 function optionsOf(field: UserFieldDefinition): string[] {
@@ -266,10 +396,21 @@ function reasonFor(
  * destroys site data, and it must not ride along on populating `Machine` and
  * `Mask` (ADR-0012). Naming the field is the authorisation; asking for
  * `replace` as well would make the second flag noise.
+ *
+ * A removal whose value the catalogue still carries as a Collection Link is
+ * reported as a `RetainedLink` and authorised no differently. It is tempting to
+ * waive `replace` for one, since the harm the refusal guards against — a User's
+ * Profile Link silently disappearing — is exactly what a retained Mapping
+ * prevents. It is not waived, because the plan is all-or-nothing and an operator
+ * approving the removals on a field is reading the whole list anyway; a rule
+ * that let some of them through would be a second authorisation story for one
+ * flag. What a Collection Link changes is what the plan *says*, not what it
+ * needs.
  */
 export function planApply(
   currentFields: readonly UserFieldDefinition[],
   catalogue: readonly ResolvedProduct[],
+  collectionLinks: readonly CollectionLink[],
   options: ApplyOptions = {}
 ): ApplyPlan {
   const managed = options.managedFields ?? MANAGED_FIELDS;
@@ -396,16 +537,21 @@ export function planApply(
     const removed = before.filter((option) => !after.includes(option));
 
     if (removed.length > 0 && !options.replace) {
+      // The blanket claim below — removing one stops every User holding it
+      // getting a Profile Link — is false of a value a Collection Link still
+      // covers, and the retention printed alongside says the opposite in so
+      // many words. A plan that contradicts itself about the consequence is
+      // not one anybody can authorise, so the sentence is qualified where it
+      // does not hold. The decision is untouched: every removal here still
+      // needs `replace`, and the covered ones are still named.
+      const covered = removed.filter((option) =>
+        linkCovering(collectionLinks, name, option)
+      );
+
       refusals.push({
         user_field_name: name,
         reason: "would-remove-options",
-        detail:
-          `"${name}" already offers ${removed.length} option` +
-          `${removed.length === 1 ? "" : "s"} the catalogue does not carry: ` +
-          `${quoted(removed)}. Removing one silently stops every User holding ` +
-          `it from getting a Profile Link, and there is no record of whether ` +
-          `it was written by this pipeline or entered by a person, so it is ` +
-          `treated as a person's. Pass replace to authorise it.`,
+        detail: removalRefusal(name, removed, covered),
         before,
         after,
         removes: describeRemovals(removed, after),
@@ -434,15 +580,34 @@ export function planApply(
       continue;
     }
 
+    // Reaching here means the catalogue has no *products* for the field. It can
+    // still have Collection Links for it, because the options come from the
+    // products alone (ADR-0021), and a field whose every product has since
+    // retired arrives in exactly that state under the standing mechanism
+    // ADR-0020 describes. So "the catalogue has no Mappings for it" is a thing
+    // this loop may no longer assert without checking, and the sentence that
+    // used to follow from it — every option here resolves nothing — would be
+    // false about precisely the options that do resolve.
+    const linked = collectionLinks.filter(
+      (link) => link.userFieldName === name
+    );
+
     const found = lookup(currentFields, name);
 
     if (found.kind === "none") {
       warnings.push({
         user_field_name: name,
         detail:
-          `"${name}" is a field this pipeline covers, the catalogue has no ` +
-          `Mappings for it, and the instance does not define it. Nothing to ` +
-          `do here, and nothing wrong with the instance.`,
+          linked.length === 0
+            ? `"${name}" is a field this pipeline covers, the catalogue has ` +
+              `no Mappings for it, and the instance does not define it. ` +
+              `Nothing to do here, and nothing wrong with the instance.`
+            : `"${name}" is a field this pipeline covers, the catalogue ` +
+              `carries ${linked.length} Collection Link` +
+              `${linked.length === 1 ? "" : "s"} for it and no products, and ` +
+              `the instance does not define it. Creating a Custom User Field ` +
+              `is a decision about the site and outside this step, so those ` +
+              `Mappings ship and resolve for nobody until someone makes it.`,
       });
       continue;
     }
@@ -471,24 +636,146 @@ export function planApply(
       continue;
     }
 
+    // Worded exactly as it always was when nothing covers the field, which is
+    // every case that existed before Collection Links did.
+    if (linked.length === 0) {
+      warnings.push({
+        user_field_name: name,
+        detail:
+          `"${name}" offers ${before.length} option` +
+          `${before.length === 1 ? "" : "s"} and the catalogue has no ` +
+          `Mappings for it, so every User who picks one gets no Profile Link ` +
+          `and nothing is logged unless Debug Mode is on: ${quoted(before)}. ` +
+          `This run leaves the field alone, and Discourse offers no way to ` +
+          `empty a dropdown (ADR-0015), so they stay until someone deletes ` +
+          `the field.`,
+      });
+      continue;
+    }
+
+    const unmatched = before.filter(
+      (option) => !linkCovering(collectionLinks, name, option)
+    );
+
+    if (unmatched.length === 0) {
+      warnings.push({
+        user_field_name: name,
+        detail:
+          `"${name}" offers ${before.length} option` +
+          `${before.length === 1 ? "" : "s"} and the catalogue carries no ` +
+          `products for it, but a Collection Link covers every one of them, ` +
+          `so they all resolve: ${quoted(before)}. What is wrong is that they ` +
+          `are offered at all — a Collection Link is never shown to a User ` +
+          `choosing one (ADR-0021) — and Discourse offers no way to empty a ` +
+          `dropdown (ADR-0015), so removing them means naming the field in ` +
+          `clear.`,
+      });
+      continue;
+    }
+
+    const covered = before.filter((option) => !unmatched.includes(option));
+
     warnings.push({
       user_field_name: name,
       detail:
-        `"${name}" offers ${before.length} option` +
-        `${before.length === 1 ? "" : "s"} and the catalogue has no Mappings ` +
-        `for it, so every User who picks one gets no Profile Link and nothing ` +
-        `is logged unless Debug Mode is on: ${quoted(before)}. This run leaves ` +
-        `the field alone, and Discourse offers no way to empty a dropdown ` +
-        `(ADR-0015), so they stay until someone deletes the field.`,
+        `"${name}" offers ${unmatched.length} option` +
+        `${unmatched.length === 1 ? "" : "s"} no Mapping covers, so every ` +
+        `User who picks one gets no Profile Link and nothing is logged unless ` +
+        `Debug Mode is on: ${quoted(unmatched)}. The catalogue carries no ` +
+        `products for the field, and its other ${covered.length} option` +
+        `${covered.length === 1 ? " is" : "s are"} each covered by a ` +
+        `Collection Link. This run leaves the field alone, and Discourse ` +
+        `offers no way to empty a dropdown (ADR-0015), so they stay until ` +
+        `someone deletes the field.`,
     });
   }
 
+  // Everything else is decided per field; this is decided about the plan, and
+  // has to see the emptied write list rather than the one above it. A retention
+  // annotates a removal the plan reports, and a removal the plan has already
+  // withdrawn is not one.
+  const reportedWrites = refusals.length > 0 ? [] : writes;
+
   return {
-    writes: refusals.length > 0 ? [] : writes,
+    writes: reportedWrites,
     refusals,
     warnings,
     unchanged,
+    retained: retainedLinks(reportedWrites, refusals, collectionLinks),
   };
+}
+
+/**
+ * Every removal the finished plan reports, paired with the Collection Link that
+ * keeps the value resolvable.
+ *
+ * Read back off the plan rather than pushed at each of the three places a
+ * removal is decided, because a fourth place added later would silently stop
+ * being reported — and an unreported retention reads as a bare removal, which is
+ * the one thing this disposition exists to prevent.
+ *
+ * Refusals come first, in `renderPlan`'s order. They are also the case that
+ * matters most: a refusal is where an operator decides whether to authorise the
+ * removal, so the retention has to be in front of them *then* rather than after
+ * they have passed `replace`.
+ *
+ * The message says the Profile Link survives "on any instance carrying these
+ * Mappings" rather than flatly. This step reads the checked-out catalogue and
+ * has never seen the component the instance is actually running; `componentDrift`
+ * reports that gap and only warns, so an instance whose component predates these
+ * Mappings resolves nothing for the value. Stating the condition is the
+ * difference between a claim the plan can support and one it cannot.
+ *
+ * Matching is exact, for the reason all matching here is exact — Discourse
+ * stores the string the User picked, and a Mapping either equals it or resolves
+ * nothing (ADR-0013). A squashed comparison would promise a Profile Link that
+ * never appears: an option spelled `AirSense 10 Elite with HumidAir` is not the
+ * Collection Link `AirSense 10 Elite with HumidAir (Discontinued)`, and a User
+ * holding the first one really does lose their link.
+ */
+function retainedLinks(
+  writes: readonly FieldWrite[],
+  refusals: readonly ApplyRefusal[],
+  collectionLinks: readonly CollectionLink[]
+): RetainedLink[] {
+  const removals = [
+    ...refusals.map((refusal) => ({
+      name: refusal.user_field_name,
+      removed: refusal.removes.map((removal) => removal.option),
+    })),
+    ...writes.map((write) => ({
+      name: write.user_field_name,
+      removed: write.removed,
+    })),
+  ];
+
+  const retained: RetainedLink[] = [];
+
+  for (const removal of removals) {
+    for (const value of removal.removed) {
+      const link = linkCovering(collectionLinks, removal.name, value);
+
+      if (!link) {
+        continue;
+      }
+
+      retained.push({
+        user_field_name: removal.name,
+        value,
+        url: link.url,
+        detail:
+          `"${value}" is removed as a Dropdown Option on ` +
+          `"${removal.name}" and retained as a Mapping: the catalogue ships ` +
+          `it as a Collection Link to ${link.url}, so on any instance ` +
+          `carrying these Mappings a User already holding it keeps getting a ` +
+          `Profile Link, and nobody choosing one is offered equipment ` +
+          `cpap.com no longer sells (ADR-0021). Those are two halves of one ` +
+          `decision — do not re-add it as an option.`,
+      });
+    }
+  }
+
+  return retained;
 }
 
 function notDropdown(
