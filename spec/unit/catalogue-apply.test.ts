@@ -1071,6 +1071,24 @@ describe("what this step is not allowed to do", () => {
     );
   });
 
+  it("hands the plan the links, and not an empty array", () => {
+    // The third reader of the same two arrays, and the only one whose failure
+    // is silent in both directions: a plan built from `[]` finds no Collection
+    // Link behind any removal, so every `RETAINED` line disappears and the
+    // refusal falls back to its unqualified wording. Nothing throws and
+    // nothing looks wrong — the plan stays internally consistent and is
+    // simply mistaken about the world.
+    //
+    // Substituting `[]` for this argument left all 687 tests green, exactly
+    // as it did for `renderFieldMappings` above. The `planApply` unit tests
+    // cannot reach it: they hand the function their own links, so they pin
+    // the decision and never the wiring.
+    expect(command).toContain(
+      "planApply(current, catalogue, collectionLinks, {"
+    );
+    expect(command).not.toMatch(/planApply\([^)]*,\s*\[\]/);
+  });
+
   it("writes Dropdown Options from the products alone", () => {
     // The other half of the asymmetry, and the reason the two sinks take
     // different arguments: what this command pushes to a live instance comes
