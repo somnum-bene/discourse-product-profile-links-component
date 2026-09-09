@@ -880,6 +880,107 @@ describe("what the verify pass is allowed to be part of", () => {
   });
 });
 
+describe("every diagnostic a Collection Link can reach", () => {
+  // The redirect check and the two corrections learned which sink they were
+  // looking at; the messages they share with the product path did not. A
+  // Collection Link timing out was "not evidence about the product", a 503 was
+  // "the storefront failing rather than the product", and a clean run reported
+  // "Shopify admits every product" about 82 collections the Admin API says
+  // nothing reachable about (ADR-0017).
+  const collectionAnswers = (status: number) => [
+    { kind: "answered" as const, status, finalUrl: link({}).url },
+  ];
+
+  it("names the collection when the server declines to answer", () => {
+    const unresolved = resultFrom(link({}), [
+      ...collectionAnswers(429),
+      ...collectionAnswers(429),
+      ...collectionAnswers(429),
+    ]);
+
+    expect(unresolved.outcome).toBe("unresolved");
+    expect(unresolved.detail).toContain("answer about the collection");
+    expect(unresolved.detail).not.toContain("about the product");
+  });
+
+  it("names the collection in the unresolved correction", () => {
+    const correction = proposedCorrection(
+      resultFrom(link({}), [
+        ...collectionAnswers(429),
+        ...collectionAnswers(429),
+        ...collectionAnswers(429),
+      ])
+    );
+
+    expect(correction).toContain("evidence about the collection");
+    expect(correction).not.toContain("about the product");
+  });
+
+  it("names the collection when the storefront itself fails", () => {
+    const correction = proposedCorrection(
+      resultFrom(link({}), [
+        ...collectionAnswers(500),
+        ...collectionAnswers(500),
+        ...collectionAnswers(500),
+      ])
+    );
+
+    expect(correction).toContain("rather than the collection being absent");
+    expect(correction).not.toContain("than the product");
+  });
+
+  it("still names the product when the entry is one", () => {
+    // The whole point is that it says which, not that it stopped saying
+    // "product" everywhere.
+    const failing = resultFrom(entry(), [
+      { kind: "answered", status: 503, finalUrl: entry().url },
+      { kind: "answered", status: 503, finalUrl: entry().url },
+      { kind: "answered", status: 503, finalUrl: entry().url },
+    ]);
+
+    expect(failing.detail).toContain("answer about the product");
+    expect(proposedCorrection(failing)).toContain("evidence about the product");
+  });
+
+  it("counts each sink separately when it says the run is shippable", () => {
+    const results = [
+      resultFrom(entry(), [
+        { kind: "answered", status: 200, finalUrl: entry().url },
+      ]),
+      resultFrom(link({}), [
+        { kind: "answered", status: 200, finalUrl: link({}).url },
+      ]),
+    ];
+    const verdict = shippability(results);
+
+    expect(verdict.shippable).toBe(true);
+    expect(verdict.message).toContain("1 product and 1 collection");
+    expect(verdict.message).not.toContain("admits every product");
+  });
+
+  it("claims nothing about a sink that had no entries", () => {
+    const products = shippability([
+      resultFrom(entry(), [
+        { kind: "answered", status: 200, finalUrl: entry().url },
+      ]),
+    ]);
+
+    expect(products.message).toContain("1 product");
+    expect(products.message).not.toContain("collection");
+  });
+
+  it("does not call a failed collection a product in the report", () => {
+    const report = renderVerification([
+      resultFrom(link({}), [
+        { kind: "answered", status: 404, finalUrl: link({}).url },
+      ]),
+    ]);
+
+    expect(report).toContain("failed (1)");
+    expect(report).not.toContain("admits these products");
+  });
+});
+
 describe("an empty Resolved Product Catalogue", () => {
   it("is refused before anything is requested", () => {
     expect(() => refuseEmptyCatalogue(0)).toThrow(CatalogueVerifyError);

@@ -370,10 +370,10 @@ export function handleOf(kind: EntryKind, url: string): string | null {
   return kind === "product" ? productHandleOf(url) : collectionHandleOf(url);
 }
 
-function statusPhrase(status: number): string {
+function statusPhrase(status: number, kind: EntryKind): string {
   return RETRYABLE_STATUSES.includes(status)
     ? `HTTP ${status}, which is the server declining to answer rather than an ` +
-        `answer about the product`
+        `answer about the ${nounOf(kind)}`
     : `HTTP ${status}`;
 }
 
@@ -466,7 +466,7 @@ export function resultFrom(
       ...base,
       outcome: "failed",
       status: last.status,
-      detail: statusPhrase(last.status),
+      detail: statusPhrase(last.status, entry.kind),
     };
   }
 
@@ -478,7 +478,7 @@ export function resultFrom(
     status: last.kind === "answered" ? last.status : null,
     detail:
       last.kind === "answered"
-        ? `${statusPhrase(last.status)}, on all ${attempts.length} attempts`
+        ? `${statusPhrase(last.status, entry.kind)}, on all ${attempts.length} attempts`
         : `no answer on any of ${attempts.length} attempts: ${last.detail}`,
   };
 }
@@ -523,8 +523,8 @@ export function proposedCorrection(result: VerifyResult): string | null {
   if (result.outcome === "unresolved") {
     return (
       `Run pnpm verify:catalogue again when the site is quieter. This is a ` +
-      `rate limit or an outage, not evidence about the product, and the ` +
-      `catalogue is not shippable while it is unanswered either way.`
+      `rate limit or an outage, not evidence about the ${nounOf(result.kind)}` +
+      `, and the catalogue is not shippable while it is unanswered either way.`
     );
   }
 
@@ -578,9 +578,9 @@ export function proposedCorrection(result: VerifyResult): string | null {
 
   if (result.status !== null && result.status >= 500) {
     return (
-      `A ${result.status} is the storefront failing rather than the product ` +
-      `being absent. Re-run before treating it as a catalogue problem; if it ` +
-      `persists, it is a cpap.com incident.`
+      `A ${result.status} is the storefront failing rather than the ` +
+      `${nounOf(result.kind)} being absent. Re-run before treating it as a ` +
+      `catalogue problem; if it persists, it is a cpap.com incident.`
     );
   }
 
@@ -621,6 +621,33 @@ export interface Shippability {
 }
 
 /**
+ * How many of each sink a run covered, said in words.
+ *
+ * The success message used to read "Shopify admits every product", which was
+ * true of everything the pass looked at until the Collection Links joined it.
+ * Shopify admitting a collection is a different fact — the Admin API says it
+ * exists, which ADR-0017 is explicit is not the storefront serving it — so a
+ * message that folds both under "product" tells an operator the wrong thing
+ * about what was just checked.
+ *
+ * A sink with nothing in it is left out rather than printed as a zero.
+ */
+function sinkPhrase(results: readonly VerifyResult[]): string {
+  const products = results.filter((result) => result.kind === "product").length;
+  const collections = results.length - products;
+  const counted = [
+    ...(products > 0
+      ? [`${products} product${products === 1 ? "" : "s"}`]
+      : []),
+    ...(collections > 0
+      ? [`${collections} collection${collections === 1 ? "" : "s"}`]
+      : []),
+  ];
+
+  return counted.join(" and ");
+}
+
+/**
  * Whether this catalogue may be applied to an instance.
  *
  * Unresolved is not a pass. A 429 leaves a URL unchecked, and an unchecked URL
@@ -658,8 +685,8 @@ export function shippability(results: readonly VerifyResult[]): Shippability {
     return {
       shippable: true,
       message:
-        `Shippable: all ${summary.verified} URLs answered 2XX and Shopify ` +
-        `admits every product.`,
+        `Shippable: all ${summary.verified} URLs answered 2XX and every one ` +
+        `landed on the path its sink requires — ${sinkPhrase(results)}.`,
     };
   }
 
@@ -726,7 +753,7 @@ export function renderVerification(results: readonly VerifyResult[]): string {
     section(
       "failed",
       of("failed"),
-      `${CORRECTION_NOTE}\n  Shopify admits these products and cpap.com did not serve them.`
+      `${CORRECTION_NOTE}\n  Shopify admits every one of these and cpap.com did not serve them.`
     ) +
     section(
       "unresolved",
