@@ -40,6 +40,7 @@ import {
   productsByHandleQuery,
   productsFromByHandleResponse,
   renderReviewDocument,
+  REQUEST_TIMEOUT_MS,
   resolvedProductsCsv,
   REVIEW_FILE,
   SHOP_DOMAIN_VAR,
@@ -345,6 +346,7 @@ async function post(
 ): Promise<unknown> {
   const response = await fetch(endpoint, {
     method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": token,

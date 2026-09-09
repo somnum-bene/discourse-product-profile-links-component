@@ -49,6 +49,17 @@ export const IMPERSONATE_EMAIL_VAR = "GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL";
 export const SHEETS_READONLY_SCOPE =
   "https://www.googleapis.com/auth/spreadsheets.readonly";
 
+/**
+ * How long any one request may take before it is abandoned.
+ *
+ * Every `fetch` in this pipeline had no timeout, so a hung endpoint blocked
+ * indefinitely with nothing on stdout to say why — including part-way through
+ * the destructive write loop, where a hang is the worst place to be left
+ * guessing. The value matches `catalogue-verify.ts`, which had the only
+ * bounded request in the repository.
+ */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
@@ -205,6 +216,7 @@ export async function accessTokenFor(
 ): Promise<string> {
   const response = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: JWT_BEARER_GRANT,

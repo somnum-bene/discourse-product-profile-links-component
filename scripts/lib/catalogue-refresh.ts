@@ -43,6 +43,14 @@ import {
   SHEET_TABS,
 } from "./sheet-export.ts";
 
+/**
+ * How long any one request may take before it is abandoned. Same value and
+ * same reason as `catalogue-verify.ts`, which had the only bounded request in
+ * the repository: a hung endpoint otherwise blocks indefinitely with nothing
+ * on stdout to say why.
+ */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
 /** The shop to query. A bare host — `example.myshopify.com`, no scheme, no path. */
 export const SHOP_DOMAIN_VAR = "SHOPIFY_SHOP_DOMAIN";
 

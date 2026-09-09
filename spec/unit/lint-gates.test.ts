@@ -162,3 +162,46 @@ describe("what the widened gates still leave alone", () => {
     expect(prettierHook.test("common/common.scss")).toBe(true);
   });
 });
+
+describe("every request this pipeline makes is bounded", () => {
+  /**
+   * Swept rather than listed, for the reason the file header gives. Only
+   * `verify-catalogue.ts` passed a signal; the other four `fetch` calls — the
+   * Google token exchange, the Sheet read, the Shopify survey and the
+   * Discourse write loop — could hang indefinitely with nothing on stdout to
+   * say why. A fifth call site added later is covered here the moment it
+   * exists, without anybody remembering to come back.
+   */
+  const commandFiles = [
+    ...readdirSync("scripts")
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => `scripts/${name}`),
+    ...readdirSync("scripts/lib")
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => `scripts/lib/${name}`),
+  ].sort();
+
+  it("finds the call sites at all, so the sweep is not vacuous", () => {
+    const withFetch = commandFiles.filter((path) =>
+      readFileSync(path, "utf8").includes("await fetch(")
+    );
+
+    expect(withFetch.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("passes an AbortSignal to every one of them", () => {
+    for (const path of commandFiles) {
+      const source = readFileSync(path, "utf8");
+
+      for (const call of source.split("await fetch(").slice(1)) {
+        // The options object ends at the first line that closes it. A signal
+        // has to appear inside, not merely somewhere later in the file.
+        const options = call.slice(0, call.indexOf("\n  });"));
+
+        expect(options, `${path} has an unbounded fetch`).toContain(
+          "signal: AbortSignal.timeout("
+        );
+      }
+    }
+  });
+});
