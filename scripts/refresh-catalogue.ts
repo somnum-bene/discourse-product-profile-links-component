@@ -48,6 +48,7 @@ import {
   type SurveyedProduct,
   surveyPageFromResponse,
   TOKEN_VAR,
+  undecidedAssignments,
 } from "./lib/catalogue-refresh.ts";
 import {
   ASSIGNMENT_TABS,
@@ -215,35 +216,51 @@ async function main(): Promise<void> {
   // exits non-zero while any row is `undecided`." Set after the writes and
   // after the report, so the artifacts and the review document still land —
   // taking those away would take the explanation away with them.
-  const undecided = collectionFaults.filter(
-    (fault) => fault.problem === "undecided-disposition"
-  );
+  //
+  // Asked of the assignment rows themselves, not of `collectionFaults`. A
+  // fault is only ever raised while deriving a link for a row this refresh
+  // excluded, so reading `undecided` off the fault list asks a narrower
+  // question than #38 does: an `undecided` row whose Suggested Title still
+  // resolves to a product, or that matches no exported sheet row at all, or
+  // whose legacy PNum nothing claims, never reaches that loop and never
+  // becomes a fault. Refresh would then exit zero with the word sitting in
+  // the Sheet, which is the state the gate exists to refuse.
+  // `undecidedAssignments` is the same function the standalone gate asks, so
+  // the two agree by construction rather than by both being maintained.
+  const undecided = undecidedAssignments(assignments);
 
   if (undecided.length > 0) {
     process.exitCode = 1;
+    // `undecidedAssignments` filters, so it returns the same object
+    // references, and a row's position in `assignments` is its position in the
+    // Sheet. `+ 2` for the header row and for counting from one, the same
+    // convention `assignmentRowsFrom` and the standalone gate both use.
+    const undecidedRows = new Set<AssignmentRow>(undecided);
+
     process.stderr.write(
-      `\n${undeliveredValues(undecided)} legacy ` +
-        `${undeliveredValues(undecided) === 1 ? "value is" : "values are"} ` +
-        `dispositioned \`undecided\`. That is an absence of evidence rather ` +
-        `than a preference, so it blocks the ship (ADR-0021) and this ` +
-        `refresh exits non-zero. The files above were still written. ` +
-        // Named here, not only in the review document. #38 asks the failure to
-        // make the fix obvious without hunting, and a count sends a reader to
-        // a file to find out which rows it meant.
+      `\n${undecided.length} of ${assignments.length} Collection Assignment ` +
+        `${undecided.length === 1 ? "row is" : "rows are"} still ` +
+        `\`undecided\`. That is an absence of evidence rather than a ` +
+        `preference, so it blocks the ship (ADR-0021) and this refresh exits ` +
+        `non-zero. The files above were still written. ` +
+        // Located here, not only in the review document. #38 asks the failure
+        // to make the fix obvious without hunting, and a count sends a reader
+        // to a file to find out which rows it meant.
         //
-        // Identifiers only, the way the standalone gate names a
-        // `collection-link-fault`: `Field` is a Managed Field name this
-        // repository owns and the legacy `Value` is a PNum already committed
-        // in `data/collection-assignment.csv`. `Legacy Text`, `Profile Link
-        // Value` and `Rationale` are cells a curator typed and are not
-        // reported.
-        `The ${undecided.length === 1 ? "row" : "rows"}, by identifier:\n` +
-        undecided
-          .flatMap((fault) =>
-            fault.legacyValues.map(
-              (legacyValue) =>
-                `  - ${fault.userFieldName} \`Value\` ${legacyValue}`
-            )
+        // Coordinates, never cells, the way the standalone gate locates the
+        // same rows: `Field` is a Managed Field name this repository owns and
+        // a row number is a position rather than content. `Legacy PNum(s)`,
+        // `Legacy Text`, `Profile Link Value` and `Rationale` are workbook
+        // content and are not reported.
+        `The ${undecided.length === 1 ? "row is" : "rows are"} located ` +
+        `below; the cells are not reported:\n` +
+        assignments
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => undecidedRows.has(row))
+          .map(
+            ({ row, index }) =>
+              `  - ${row.field} row ${index + 2}, column ` +
+              `\`Disposition\` (\`${exportFileName(ASSIGNMENT_TABS[0])}\`)`
           )
           .join("\n") +
         `\n`

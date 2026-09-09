@@ -17,6 +17,7 @@ import {
   type SheetRow,
   undeliveredValues,
 } from "../../scripts/lib/build-catalogue";
+import { undecidedAssignments } from "../../scripts/lib/catalogue-refresh.ts";
 import { MANAGED_FIELDS } from "../../scripts/lib/plan-apply.ts";
 import type { AssignmentRow } from "../../scripts/lib/sheet-export.ts";
 
@@ -1074,6 +1075,31 @@ describe("Collection Links that cannot be derived", () => {
 
     expect(collectionLinks).toEqual([]);
     expect(collectionFaults[0].problem).toBe("undecided-disposition");
+  });
+
+  it("raises no fault for an undecided row nothing excluded", () => {
+    // Why the refresh's exit code cannot be read off `collectionFaults`. This
+    // loop only runs for a legacy value some excluded row derives a link for,
+    // so an `undecided` row that no exported sheet row claims — a PNum a
+    // curator added ahead of the export, or one whose Suggested Title still
+    // resolves to a product — produces nothing here at all. The word is in
+    // the Sheet, `undecidedAssignments` sees it, and a gate asking the fault
+    // list would let the release through (#38).
+    const orphan = assignment({
+      legacyPnums: "999999",
+      profileLinkValue: "Something Nobody Exported (Discontinued)",
+      recommendedCollectionUrl: BIPAP,
+      disposition: "undecided",
+    });
+
+    const { collectionFaults } = build(ASV_ROW, PRODUCTS, [orphan]);
+
+    expect(
+      collectionFaults.filter(
+        (fault) => fault.problem === "undecided-disposition"
+      )
+    ).toEqual([]);
+    expect(undecidedAssignments([orphan])).toEqual([orphan]);
   });
 
   it("says nothing about a plain-text row", () => {

@@ -608,8 +608,18 @@ describe("the refresh command's exit code", () => {
 
   it("goes red on an undecided row, which #38 names the command for", () => {
     // "A Catalogue Refresh exits non-zero while any row is `undecided`."
-    expect(command).toContain('fault.problem === "undecided-disposition"');
+    //
+    // Asked of the assignment rows, not of `collectionFaults`. A fault is
+    // only ever raised while deriving a link for a row this refresh excluded,
+    // so a gate reading the fault list answers a narrower question than #38
+    // asks and lets an orphaned `undecided` row through — the case
+    // `spec/unit/build-catalogue.test.ts` constructs.
+    expect(command).toContain("undecidedAssignments(assignments)");
     expect(command).toContain("process.exitCode = 1");
+
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    expect(guard).not.toContain("collectionFaults");
   });
 
   it("stays green on the faults drift causes rather than a curator", () => {
@@ -634,8 +644,20 @@ describe("the refresh command's exit code", () => {
     // bare count sends a reader off to a file to find out which rows it meant.
     const guard = command.slice(command.indexOf("process.exitCode = 1"));
 
-    expect(guard).toContain("fault.legacyValues");
-    expect(guard).toContain("fault.userFieldName");
+    // Coordinates rather than cells, the same pair the standalone gate
+    // prints: a Managed Field name and a row number. Nothing a curator typed
+    // reaches this stream.
+    expect(guard).toContain("- ${row.field} row ${index + 2}, column");
+    expect(guard).toContain("exportFileName(ASSIGNMENT_TABS[0])");
+
+    for (const cell of [
+      "legacyText",
+      "profileLinkValue",
+      "rationale",
+      "legacyPnums",
+    ]) {
+      expect(guard).not.toContain(cell);
+    }
   });
 
   it("names the rows by identifier and quotes no cell a curator typed", () => {
@@ -740,7 +762,7 @@ describe("undecidedAssignments", () => {
     const library = readFileSync("scripts/lib/catalogue-refresh.ts", "utf8");
     const refresh = readFileSync("scripts/refresh-catalogue.ts", "utf8");
 
-    expect(refresh).toContain('fault.problem === "undecided-disposition"');
+    expect(refresh).toContain("undecidedAssignments(assignments)");
     expect(library).not.toContain("stays zero on\n * purpose");
     expect(library).not.toContain("which stays zero");
   });
