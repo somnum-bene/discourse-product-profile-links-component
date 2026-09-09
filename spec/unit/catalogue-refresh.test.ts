@@ -26,6 +26,7 @@ import {
   declaredDigest,
   digestOf,
   DISPOSITION_COLUMNS,
+  DISPOSITION_FILE,
   dispositionTableCsv,
   divisionFieldsOf,
   DIVISIONS,
@@ -1799,6 +1800,82 @@ describe("the review document", () => {
     expect(review).toContain("None.");
   });
 
+  /**
+   * The disposition section's own assertions.
+   *
+   * Everything else in this describe passed `dispositions` through and never
+   * looked at what came out, so a regression in these counts stayed green —
+   * which is not hypothetical: the prose in this section shipped claiming
+   * `undecided` and `collection-link-fault` were "the last two rows" of a table
+   * that puts the curator's four words first, and no test noticed. These are
+   * the numbers a reviewer reads to decide whether an unexpected number of
+   * members lost a link (#28), so they are worth pinning.
+   */
+  describe("the disposition table section", () => {
+    // Two of the fixture's six legacy values resolve; the other four earn a
+    // Collection Link and get none, because this document is rendered with no
+    // assignment rows behind it.
+    const linked = built.dispositions.filter((row) => row.url !== "").length;
+    const unlinked = built.dispositions.length - linked;
+
+    it("heads the section with the legacy values it covers", () => {
+      expect(linked).toBeGreaterThan(0);
+      expect(unlinked).toBeGreaterThan(0);
+      expect(review).toContain(
+        `## Disposition table — ${built.dispositions.length} legacy values`
+      );
+      expect(review).toContain(
+        `- Disposition table: \`data/disposition-table.csv\`, ` +
+          `${built.dispositions.length} legacy values`
+      );
+    });
+
+    it("splits the values by whether a Profile Link resolves", () => {
+      expect(review).toContain(
+        `${linked} of these resolve a Profile Link and ${unlinked} do not`
+      );
+    });
+
+    it("counts every disposition, including the ones nothing fell under", () => {
+      // An absent row and a zero say different things: a zero is the pipeline
+      // reporting that nothing reached that outcome, and an absent row is a
+      // reader wondering whether the outcome still exists.
+      expect(review).toContain("| `resolves-to-product` | 2 | yes |");
+      expect(review).toContain("| `collection-link-fault` | 4 | no |");
+      expect(review).toContain("| `collection` | 0 | yes |");
+      expect(review).toContain("| `plain-text` | 0 | no |");
+      expect(review).toContain("| `undecided` | 0 | no |");
+      expect(review).toContain("| `blank-title` | 0 | no |");
+      expect(review).toContain("| `ambiguous-title-match` | 0 | no |");
+    });
+
+    it("names the two fault-side dispositions rather than pointing at rows", () => {
+      // The regression this section shipped with. Pointing at positions in a
+      // table that is deliberately ordered another way sent a reviewer to
+      // `ambiguous-title-match` — which is evidence the Sheet Export is wrong
+      // (ADR-0020), not an undelivered link, and a different job entirely.
+      expect(review).toContain(
+        "`undecided` and `collection-link-fault` are the section above"
+      );
+      expect(review).not.toContain("The last two rows are the section above");
+    });
+
+    it("says one value in the singular", () => {
+      const one = renderReviewDocument({
+        catalogue: built.catalogue,
+        exclusions: built.exclusions,
+        collectionLinks: built.collectionLinks,
+        collectionFaults: built.collectionFaults,
+        dispositions: built.dispositions.slice(0, 1),
+        sheetRows: SHEET_ROWS,
+        products: PRODUCTS,
+        digest: "0".repeat(64),
+      });
+
+      expect(one).toContain("1 of these resolves a Profile Link and 0 do not");
+    });
+  });
+
   it("is the same document twice, because there is no clock in it", () => {
     const again = renderReviewDocument({
       catalogue: built.catalogue,
@@ -1895,10 +1972,35 @@ describe("what each file is allowed to do", () => {
     // writing them: `build` and `apply` read the catalogue by the same constant.
     expect(command).not.toContain(CATALOGUE_FILE);
     expect(command).not.toContain(COLLECTION_LINKS_FILE);
+    expect(command).not.toContain(DISPOSITION_FILE);
     expect(command).not.toContain(REVIEW_FILE);
     expect(command).toContain("writeFile(CATALOGUE_FILE, csv)");
     expect(command).toContain("writeFile(COLLECTION_LINKS_FILE, linksCsv)");
+    expect(command).toContain("writeFile(DISPOSITION_FILE, dispositionCsv)");
     expect(command).toContain("writeFile(REVIEW_FILE, review)");
+  });
+
+  it("still writes the disposition table, which nothing else would notice", () => {
+    // `main` cannot run without a Shopify token, so this source-level contract
+    // is the only thing standing between the command and a silently dropped
+    // write. Every other test around this artifact would stay green: the
+    // formatter tests call `dispositionTableCsv` directly, and
+    // `spec/unit/disposition-table.test.ts` compares the committed file against
+    // a fresh derivation — neither asks whether the command still emits it. The
+    // file would simply stop being regenerated and go stale, which for the one
+    // artifact another repository consumes is the quietest possible failure.
+    expect(command).toContain("dispositionTableCsv(dispositions)");
+    expect(command).toContain("writeFile(DISPOSITION_FILE, dispositionCsv)");
+  });
+
+  it("builds the disposition table before it writes anything", () => {
+    // The refusals in `dispositionTableCsv` are only free if nothing has been
+    // written when one fires. A refusal after the catalogue had been
+    // regenerated would leave the two files disagreeing, with the handoff
+    // missing and no obvious sign of it.
+    expect(command.indexOf("dispositionTableCsv(dispositions)")).toBeLessThan(
+      command.indexOf("await writeFile(CATALOGUE_FILE, csv)")
+    );
   });
 
   it("derives the Collection Links rather than reading them back in", () => {

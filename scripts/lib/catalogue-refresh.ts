@@ -1642,8 +1642,10 @@ function renderDispositions(dispositions: readonly DispositionRow[]): string {
       `three columns Discourse asked for — member identifier, custom field ` +
       `name, value — and that join is the only thing on either side that ` +
       `touches a member (#28).`,
-    `${linked} of these values resolve a Profile Link and ` +
-      `${dispositions.length - linked} do not. A value that resolves one ` +
+    `${linked} of these ${linked === 1 ? "resolves" : "resolve"} a Profile ` +
+      `Link and ${dispositions.length - linked} ` +
+      `${dispositions.length - linked === 1 ? "does" : "do"} not. A value ` +
+      `that resolves one ` +
       `carries the Mapping's own bytes; a value that does not carries the ` +
       `legacy display text unchanged, so the member keeps what they entered ` +
       `and simply gets no link. No suffix is added to an unlinked value: ` +
