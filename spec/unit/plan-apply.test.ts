@@ -991,11 +991,21 @@ describe("refusing to clear the wrong thing", () => {
   });
 
   it("throws when the same field is named twice", () => {
+    // Matched on the message as well as the type, the way the duplicate-value
+    // sibling is. `planApply` has several `PlanApplyError`s reachable from
+    // this call, so the type alone would be satisfied by a different refusal
+    // firing first — and then this would go on passing while the duplicate
+    // check it names had stopped running.
     expect(() =>
       planApply(emptyFields(), CATALOGUE, [], {
         clear: ["Vendor", "Vendor"],
       })
     ).toThrow(PlanApplyError);
+    expect(() =>
+      planApply(emptyFields(), CATALOGUE, [], {
+        clear: ["Vendor", "Vendor"],
+      })
+    ).toThrow(/twice/);
   });
 });
 
