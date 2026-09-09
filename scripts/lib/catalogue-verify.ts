@@ -721,8 +721,14 @@ function sinkPhrase(results: readonly VerifyResult[]): string {
 }
 
 /**
- * How many distinct URLs a set of results covers, which is how many requests
- * the pass actually made — one per group, not one per Mapping.
+ * How many distinct URLs a set of results covers — one per group the pass
+ * asked about, rather than one per Mapping.
+ *
+ * The number of *targets*, and deliberately not called the number of requests.
+ * `attemptsFor` retries a URL up to `MAX_ATTEMPTS` on a 429 or a timeout, so a
+ * run that met the storefront's rate limiter covers the same targets with more
+ * requests than this. Both are floors on the same thing and only one of them
+ * can be counted from the results.
  */
 export function distinctUrls(results: readonly VerifyResult[]): number {
   return new Set(results.map((result) => result.url)).size;
@@ -771,7 +777,9 @@ export function shippability(results: readonly VerifyResult[]): Shippability {
         // share a URL and asks each distinct URL once, so calling the count
         // URLs overstates the network pass by every shared collection page.
         // Both numbers are said, because both are things an operator wants:
-        // how much shipped, and how much was asked of the storefront.
+        // how much shipped, and how many pages were asked about. "distinct
+        // URLs" rather than "requests" for the reason `distinctUrls` gives:
+        // a retried URL is asked more than once and is still one URL.
         `Shippable: all ${summary.verified} Mappings answered 2XX across ` +
         `${distinctUrls(results)} distinct ` +
         `${distinctUrls(results) === 1 ? "URL" : "URLs"}, and every one ` +

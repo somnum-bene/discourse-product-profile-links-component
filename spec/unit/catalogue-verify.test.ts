@@ -16,6 +16,7 @@ import {
   collectionHandleOf,
   collectionUrlFor,
   delayBeforeAttempt,
+  distinctUrls,
   entriesByUrl,
   handleOf,
   isEligible,
@@ -1198,6 +1199,42 @@ describe("an empty Resolved Product Catalogue", () => {
   });
 });
 
+describe("what distinctUrls promises about the number it returns", () => {
+  const library = readFileSync("scripts/lib/catalogue-verify.ts", "utf8");
+
+  it("does not call a target count a request count", () => {
+    // The docblock said this was "how many requests the pass actually made",
+    // which holds only when every URL answers first time. `attemptsFor`
+    // retries a URL up to `MAX_ATTEMPTS` on a 429 or a timeout, so a throttled
+    // run covers the same targets with more requests — and the results this
+    // counts cannot see the difference. A contract that overstates what a
+    // number means is the same defect as a message that does.
+    const docblock = library.slice(
+      library.lastIndexOf(
+        "/**",
+        library.indexOf("export function distinctUrls")
+      ),
+      library.indexOf("export function distinctUrls")
+    );
+
+    expect(docblock).not.toContain("how many requests");
+    expect(docblock).toContain("MAX_ATTEMPTS");
+    expect(library).toContain("export const MAX_ATTEMPTS");
+  });
+
+  it("still counts one per URL and not one per result", () => {
+    const shared = "https://www.cpap.com/collections/nasal-cpap-masks";
+
+    expect(
+      distinctUrls([
+        result({ kind: "collection", url: shared, value: "Viva Nasal" }),
+        result({ kind: "collection", url: shared, value: "Wisp Nasal" }),
+        result(),
+      ])
+    ).toBe(2);
+  });
+});
+
 describe("what scripts/README.md claims about the reachability pass", () => {
   // The prose used to say the pass "asks cpap.com whether each of the 137
   // URLs this pipeline ships serves a page", which stopped being true the
@@ -1220,7 +1257,7 @@ describe("what scripts/README.md claims about the reachability pass", () => {
     expect(readme).toContain(`the\n${links.length} Collection Links alike`);
   });
 
-  it("counts the requests apart from the Mappings", () => {
+  it("counts the request targets apart from the Mappings", () => {
     expect(readme).toContain(
       `${products.length + links.length} Mappings over ${urls.size} distinct URLs`
     );
