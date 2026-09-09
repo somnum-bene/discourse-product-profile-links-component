@@ -620,13 +620,19 @@ replans against whatever the instance now holds.
 
 ## The reachability pass is the one check that is not a gate
 
-`pnpm verify:catalogue` asks cpap.com whether each of the 137 URLs this
-pipeline ships serves a page — the 55 from the catalogue and the 82 Collection
-Links alike. The collection URLs are included because the two questions are
-different: whether Shopify _admits_ a collection is asked on refresh
-(ADR-0020), and a collection can be admitted in the admin, be unpublished to
-the Online Store, and still 404 for a member. That second question is this
-pass's, deliberately (ADR-0017). It is in no pre-commit hook and no CI step, unlike every other
+`pnpm verify:catalogue` asks cpap.com whether the URL behind each of the 137
+Mappings this pipeline ships serves a page — the 55 from the catalogue and the
+82 Collection Links alike. That is 137 Mappings over 65 distinct URLs, and 65
+is the number of requests: the Collection Links point at ten collection pages
+between them, so the pass groups the Mappings sharing a URL, asks each page
+once and files a result under every Mapping in the group. The verdict line
+says both numbers for that reason.
+
+The collection URLs are included because the two questions are different:
+whether Shopify _admits_ a collection is asked on refresh (ADR-0020), and a
+collection can be admitted in the admin, be unpublished to the Online Store,
+and still 404 for a member. That second question is this pass's, deliberately
+(ADR-0017). It is in no pre-commit hook and no CI step, unlike every other
 check here, and unit tests read `package.json`, `.pre-commit-config.yaml` and
 `.github/workflows/ci.yml` to keep it that way — including inside another npm
 script, because anything `pnpm build:settings` called would gate CI just as

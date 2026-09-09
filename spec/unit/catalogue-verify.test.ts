@@ -5,6 +5,10 @@ import {
   type ProductStatus,
 } from "../../scripts/lib/build-catalogue";
 import {
+  readCollectionLinks,
+  readResolvedProducts,
+} from "../../scripts/lib/catalogue-refresh.ts";
+import {
   type Attempt,
   BACKOFF_MS,
   CatalogueVerifyError,
@@ -1191,5 +1195,44 @@ describe("an empty Resolved Product Catalogue", () => {
     // missing because of it, so it is not this guard's business.
     expect(() => refuseEmptyCatalogue(1)).not.toThrow();
     expect(() => refuseEmptyCatalogue(55)).not.toThrow();
+  });
+});
+
+describe("what scripts/README.md claims about the reachability pass", () => {
+  // The prose used to say the pass "asks cpap.com whether each of the 137
+  // URLs this pipeline ships serves a page", which stopped being true the
+  // moment the pass started grouping Mappings that share a collection page:
+  // 137 is the Mapping count and 65 is the request count. Counted from the
+  // committed sinks rather than restated, so the next refresh that moves
+  // either number fails here instead of leaving the document quietly wrong.
+  const readme = readFileSync("scripts/README.md", "utf8");
+  const products = readResolvedProducts(
+    readFileSync("data/resolved-products.csv", "utf8")
+  );
+  const links = readCollectionLinks(
+    readFileSync("data/collection-links.csv", "utf8")
+  );
+  const urls = new Set([...products, ...links].map((shipped) => shipped.url));
+
+  it("counts the Mappings the pass files a result for", () => {
+    expect(readme).toContain(`each of the ${products.length + links.length}`);
+    expect(readme).toContain(`the ${products.length} from the catalogue`);
+    expect(readme).toContain(`the\n${links.length} Collection Links alike`);
+  });
+
+  it("counts the requests apart from the Mappings", () => {
+    expect(readme).toContain(
+      `${products.length + links.length} Mappings over ${urls.size} distinct URLs`
+    );
+    expect(readme).toContain(`and ${urls.size}\nis the number of requests`);
+  });
+
+  it("counts the collection pages the 82 links share", () => {
+    const collectionUrls = new Set(links.map((shipped) => shipped.url));
+
+    // Spelled as a word in the prose, so this is the one that has to be kept
+    // in step by hand if it ever moves — which is why it is asserted at all.
+    expect(collectionUrls.size).toBe(10);
+    expect(readme).toContain("ten collection pages");
   });
 });
