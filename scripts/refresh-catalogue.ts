@@ -201,6 +201,34 @@ async function main(): Promise<void> {
     );
   }
 
+  // The one fault that does go red, because it is the one a person typed.
+  //
+  // The paragraph above is about drift: a product retiring at Shopify creates
+  // an `unassigned-legacy-value` or an `unadmitted-collection` through nobody's
+  // action, and a command that failed every time the catalogue moved is a
+  // command people stop reading. `undecided` is not that. It cannot appear
+  // unless a curator opened the Sheet and wrote the word, so a refresh going
+  // red on it is never a refresh going red on something it did not cause.
+  //
+  // #38 asks for exactly this and names the command: "A Catalogue Refresh
+  // exits non-zero while any row is `undecided`." Set after the writes and
+  // after the report, so the artifacts and the review document still land —
+  // taking those away would take the explanation away with them.
+  const undecided = collectionFaults.filter(
+    (fault) => fault.problem === "undecided-disposition"
+  );
+
+  if (undecided.length > 0) {
+    process.exitCode = 1;
+    process.stderr.write(
+      `\n${undeliveredValues(undecided)} legacy ` +
+        `${undeliveredValues(undecided) === 1 ? "value is" : "values are"} ` +
+        `dispositioned \`undecided\`. That is an absence of evidence rather ` +
+        `than a preference, so it blocks the ship (ADR-0021) and this ` +
+        `refresh exits non-zero. The files above were still written.\n`
+    );
+  }
+
   for (const division of DIVISIONS) {
     const mappings = catalogue.filter(
       (entry) => entry.userFieldName === division.userFieldName

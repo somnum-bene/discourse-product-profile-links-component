@@ -552,6 +552,41 @@ describe("collectionHandlesFrom", () => {
   });
 });
 
+describe("the refresh command's exit code", () => {
+  const command = readFileSync("scripts/refresh-catalogue.ts", "utf8");
+
+  it("goes red on an undecided row, which #38 names the command for", () => {
+    // "A Catalogue Refresh exits non-zero while any row is `undecided`."
+    expect(command).toContain('fault.problem === "undecided-disposition"');
+    expect(command).toContain("process.exitCode = 1");
+  });
+
+  it("stays green on the faults drift causes rather than a curator", () => {
+    // The distinction the exit code turns on. A product retiring at Shopify
+    // creates an `unassigned-legacy-value` through nobody's action, and a
+    // command that failed every time the catalogue moved is one people stop
+    // reading. `undecided` cannot appear unless somebody typed it.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    for (const drift of [
+      "unassigned-legacy-value",
+      "unadmitted-collection",
+      "stale-product-resolution",
+      "curation-disagreement",
+    ]) {
+      expect(guard).not.toContain(drift);
+    }
+  });
+
+  it("writes the artifacts before it decides the exit code", () => {
+    // The report is where a fault gets explained one at a time, so exiting
+    // must not take it away. Both writes precede the guard.
+    expect(command.indexOf("process.exitCode = 1")).toBeGreaterThan(
+      command.indexOf(REVIEW_FILE)
+    );
+  });
+});
+
 describe("unfinishedCollectionLinks", () => {
   const dispositionRow = (
     legacyValue: string,
