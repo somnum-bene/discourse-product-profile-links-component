@@ -290,6 +290,23 @@ all the same kind of thing:
   the column is the field's place in its record, and the message says so,
   because a quoted value spanning lines makes the two disagree.
 
+  The rule is now **swept rather than listed**, in both directions and on
+  both boundaries. Listing the refusals that quote a cell has been tried
+  three times and found one more each time, which is a fair verdict on the
+  method: the list is written from the refusals that exist, so it cannot
+  cover the one added next, and each round fixed where the leak was rather
+  than what let it be there. So a canary is driven through every column of
+  every allowlisted tab and every column of this file, in each direction, and
+  the assertion made of whatever comes back is only that the canary is not in
+  it. A refusal added later, in a function nobody has written yet, is covered
+  as soon as it is reachable. Two details are what make it worth anything:
+  the fixtures put the canary in a *valid* row and in one whose range has
+  slid, because a correct header row is what makes the per-row refusals
+  reachable and what makes the header refusal unreachable; and every case
+  pairs the canary with a fault and asserts a refusal fired, because a name
+  is a legal `legacy_text` and a sweep that refuses nothing asserts nothing
+  and passes.
+
   Every rule below is checked on read as well as on write, by one shared
   validator rather than two that agree until they drift.
 

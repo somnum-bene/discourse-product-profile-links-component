@@ -317,7 +317,7 @@ const PRODUCT_FIELDS = `handle
 export function handlesFromSheetRows(rows: readonly SheetRow[]): string[] {
   const handles = new Set<string>();
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const handle = handleFromSuggestedUrl(row.suggestedUrl);
 
     if (!handle) {
@@ -325,9 +325,18 @@ export function handlesFromSheetRows(rows: readonly SheetRow[]): string[] {
     }
 
     if (!HANDLE_SHAPE.test(handle)) {
+      // Neither the URL nor the handle it yields is quoted, on the same terms
+      // as every other refusal that touches a workbook cell. This one is
+      // narrow — the cell has to hold `/products/` and then a segment that is
+      // not a handle, which free text rarely manages — but narrow is a
+      // statement about how often it fires, not about what it prints when it
+      // does. `userFieldName` comes from `SHEET_TABS` and is this
+      // repository's own word for the field, not anything the tab said.
       throw new CatalogueRefreshError(
-        `the Suggested URL "${row.suggestedUrl}" yields "${handle}", which is ` +
-          `not a Shopify product handle. Refusing to guess what it meant.`
+        `row ${index + 1} of the exports, under ${row.userFieldName}, has a ` +
+          `Suggested URL that names a product whose handle does not match ` +
+          `${HANDLE_SHAPE.source}. Refusing to guess what it meant, and not ` +
+          `reporting the cell.`
       );
     }
 

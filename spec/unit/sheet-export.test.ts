@@ -7,8 +7,10 @@ import {
   assignmentTabNamed,
   columnLetter,
   DISPOSITIONS,
+  EMAIL_SHAPED,
   EXPORT_TABS,
   exportFileName,
+  type ExportTab,
   MAX_DATA_ROWS,
   parseCsv,
   readSheetTab,
@@ -766,9 +768,16 @@ describe("assignmentRowsFrom", () => {
       SheetExportError
     );
     expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
-      /unrecognised Disposition "colection"/
+      /a word this table cannot express/
     );
-    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(/row 2/);
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      /row 2, column K \(`Disposition`\)/
+    );
+    // This assertion used to read `/unrecognised Disposition "colection"/`,
+    // and it was green because the refusal echoed the cell.
+    expect(() => assignmentRowsFrom(assignment, typo)).toThrow(
+      /^(?!.*colection)/s
+    );
   });
 
   it("refuses an empty Disposition rather than reading it as undecided", () => {
@@ -778,7 +787,7 @@ describe("assignmentRowsFrom", () => {
     const blank = ASSIGNMENT_CSV.replace(`,"undecided"`, `,""`);
 
     expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
-      /an empty Disposition/
+      /column K \(`Disposition`\) holds nothing/
     );
     expect(() => assignmentRowsFrom(assignment, blank)).toThrow(
       /not the same as "undecided"/
@@ -985,6 +994,90 @@ describe("valuesToCsv", () => {
     expect(() => valuesToCsv(noTitleTab, widened)).toThrow(SheetExportError);
     expect(() => valuesToCsv(noTitleTab, widened)).toThrow(/column D/);
   });
+});
+
+describe("no refusal on this boundary quotes a cell, whatever the cell holds", () => {
+  // The point of this block is that it enumerates nothing. Three rounds of
+  // review have each found one more diagnostic on this boundary printing what
+  // it read, and each was fixed where it was found — which is a bet that the
+  // list of such diagnostics is now complete. This does not take the bet. It
+  // drives a canary through every column of every allowlisted tab, through
+  // every reader that takes CSV, and asserts of whatever comes back only that
+  // it does not contain the canary. A refusal added later, in a function that
+  // does not exist yet, is covered the moment it can be reached from here.
+  //
+  // The canary is a name rather than an address, and deliberately: an address
+  // is the one shape `EMAIL_SHAPED` can see, so a canary shaped like one would
+  // test the tripwire and nothing behind it. A name is what this workbook's
+  // member data mostly looks like and it sails straight through.
+  const CANARY = "Marjorie Fenwick-Abara";
+
+  it("uses a canary the email guard cannot see", () => {
+    expect(EMAIL_SHAPED.test(CANARY)).toBe(false);
+  });
+
+  const readers: {
+    what: string;
+    tabs: readonly ExportTab[];
+    read: (tab: never, csvText: string) => unknown;
+  }[] = [
+    { what: "readSheetTab", tabs: EXPORT_TABS, read: readSheetTab },
+    { what: "sheetRowsFrom", tabs: SHEET_TABS, read: sheetRowsFrom },
+    {
+      what: "assignmentRowsFrom",
+      tabs: ASSIGNMENT_TABS,
+      read: assignmentRowsFrom,
+    },
+  ];
+
+  // Two shapes, because a valid header row is what makes most of the per-row
+  // refusals reachable and it is what makes the header refusal unreachable.
+  // The first pass alone missed the header echo entirely: it built a correct
+  // header every time, so the diagnostic that prints the row it found never
+  // fired. `slid` is the case that boundary exists for — a range that moved,
+  // leaving a data row where row 1 should be.
+  const shapes = [
+    {
+      how: "under a valid header",
+      csv: (tab: ExportTab, row: readonly string[]) =>
+        [quoted(tab.headers), quoted(row)].join("\n"),
+    },
+    {
+      how: "as row 1, the range having slid",
+      csv: (tab: ExportTab, row: readonly string[]) =>
+        [quoted(row), quoted(tab.headers)].join("\n"),
+    },
+  ];
+
+  function quoted(row: readonly string[]): string {
+    return row.map((value) => `"${value}"`).join(",");
+  }
+
+  for (const { what, tabs, read } of readers) {
+    for (const tab of tabs) {
+      for (const [at, column] of tab.headers.entries()) {
+        for (const { how, csv } of shapes) {
+          it(`${what}: ${tab.tab}, a name in ${columnLetter(at + 1)} (${column}) ${how}`, () => {
+            // Otherwise as valid as the fixtures, so the canary is the only
+            // thing wrong with the row and whichever refusal fires is firing
+            // about the canary's own cell.
+            const row = tab.headers.map((_, index) =>
+              index === at ? CANARY : "x"
+            );
+
+            // Throwing is not required. Several of these columns are free
+            // text and a name in one of them is a valid row — the assertion
+            // is about what a refusal says, not that there is one.
+            try {
+              read(tab as never, csv(tab, row));
+            } catch (error) {
+              expect((error as Error).message).not.toContain(CANARY);
+            }
+          });
+        }
+      }
+    }
+  }
 });
 
 describe("what each file is allowed to do", () => {

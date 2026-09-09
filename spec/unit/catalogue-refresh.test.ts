@@ -290,6 +290,34 @@ describe("handlesFromSheetRows", () => {
     ).toThrow(CatalogueRefreshError);
   });
 
+  it("refuses that Suggested URL without printing the cell it read", () => {
+    // A Suggested URL is a workbook cell, and the tab it comes from sits in a
+    // workbook whose other tabs hold member data. This refusal used to quote
+    // both the URL and the handle it yielded. It is a narrow way in — the cell
+    // has to hold `/products/` and then something that is not a handle — but
+    // that bounds how often it fires, not what it prints when it does.
+    const canary = "Marjorie Fenwick-Abara";
+    const contaminated = [
+      {
+        userFieldName: "Machine",
+        legacyValue: "9999",
+        legacyText: "Something legacy",
+        suggestedTitle: "Something",
+        suggestedUrl: `${canary} /products/Not A Handle`,
+      },
+    ];
+
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /row 1 of the exports, under Machine/
+    );
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /^(?!.*Marjorie)/s
+    );
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /^(?!.*Not A Handle)/s
+    );
+  });
+
   it("has nothing to look for when there are no rows", () => {
     expect(handlesFromSheetRows([])).toEqual([]);
   });
@@ -1948,6 +1976,96 @@ describe("the disposition table file", () => {
         // nothing a reader could act on.
         expect(message).toMatch(/(row|line) \d+/);
       });
+    }
+
+    // The table above enumerates the refusals that exist, which is a bet that
+    // I have listed them all — and the record of this review says otherwise
+    // three times over. So this does not enumerate. It puts the canary in each
+    // column in turn, drives it through both directions of the boundary, and
+    // asserts of whatever comes back only that the canary is not in it. A rule
+    // added later is covered without anybody remembering to come back here.
+    // Each case pairs the canary with a fault, and asserts a refusal actually
+    // fired. Without the fault most of these rows are valid — a name is a
+    // legal `legacy_text` — so the sweep would run, refuse nothing, assert
+    // nothing, and pass. It read that way first; the probe that showed ten of
+    // twelve cases reaching no refusal at all is why it does not now.
+    const faults: {
+      named: string;
+      break: (row: DispositionRow) => DispositionRow[];
+    }[] = [
+      {
+        named: "a duplicated key",
+        break: (row) => [row, row],
+      },
+      {
+        named: "a blank column beside it",
+        break: (row) => [
+          { ...row, url: "", value: row.legacyText, disposition: " " as never },
+        ],
+      },
+    ];
+
+    for (const [at, column] of DISPOSITION_COLUMNS.entries()) {
+      const contaminatedRow = (): DispositionRow =>
+        rowWith({
+          userFieldName: at === 0 ? CANARY : "Machine",
+          legacyValue: at === 1 ? CANARY : "6240",
+          legacyText: at === 2 ? CANARY : "Aircurve 11 asv",
+          value: at === 3 ? CANARY : "AirCurve 11 ASV (Discontinued)",
+          url: at === 4 ? CANARY : CPAP_MACHINES,
+          disposition: at === 5 ? (CANARY as never) : "collection",
+        });
+
+      for (const fault of faults) {
+        const contaminated = () =>
+          withEveryField(fault.break(contaminatedRow()));
+
+        it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on write`, () => {
+          let message = "";
+
+          try {
+            dispositionTableCsv(contaminated());
+          } catch (error) {
+            message = (error as Error).message;
+          }
+
+          expect(message).not.toBe("");
+          expect(message).not.toContain(CANARY);
+        });
+
+        it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on read`, () => {
+          // Built by hand rather than by the writer, because the writer
+          // refuses these rows and the reader has to be held to the same rule
+          // on a file that reached the repository some other way — a hand
+          // edit, a merge, an older version of this command.
+          const body = [
+            DISPOSITION_COLUMNS.join(","),
+            ...contaminated().map((row) =>
+              [
+                row.userFieldName,
+                row.legacyValue,
+                row.legacyText,
+                row.value,
+                row.url,
+                row.disposition,
+              ]
+                .map((value) => `"${value.replace(/"/g, '""')}"`)
+                .join(",")
+            ),
+          ].join("\n");
+
+          let message = "";
+
+          try {
+            readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`);
+          } catch (error) {
+            message = (error as Error).message;
+          }
+
+          expect(message).not.toBe("");
+          expect(message).not.toContain(CANARY);
+        });
+      }
     }
   });
 

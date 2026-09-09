@@ -743,14 +743,27 @@ export function assignmentRowsFrom(
   for (const [rowIndex, dataRow] of dataRows.entries()) {
     const found = dataRow[dispositionIndex] ?? "";
     if (!isDisposition(found)) {
+      // The cell is not quoted. It used to be, and the argument for quoting it
+      // was that a `Disposition` is a closed set of this repository's own
+      // words, so whatever sits there is a typo of one of them. That argument
+      // describes the tab working. The case this refusal exists for is the tab
+      // not working — a range that slid onto a neighbour, or a column inserted
+      // upstream — and then this column holds whatever the workbook holds
+      // there, in a workbook whose other tabs hold member data. The scan in
+      // `readSheetTab` has already passed by here and only ever ruled out one
+      // shape: a name is not shaped like an email address.
+      //
+      // Empty versus unrecognised stays, because that distinction is the
+      // point of the message rather than a description of the cell.
       throw new SheetExportError(
-        `${tab.tab}: row ${rowIndex + 2} holds ` +
-          `${found === "" ? "an empty" : `an unrecognised`} ` +
-          `${tab.columns.disposition}${found === "" ? "" : ` "${found}"`}. ` +
+        `${tab.tab}: row ${rowIndex + 2}, column ` +
+          `${columnLetter(dispositionIndex + 1)} (\`${tab.columns.disposition}\`) ` +
+          `holds ${found === "" ? "nothing" : "a word this table cannot express"}. ` +
           `One of ${DISPOSITIONS.map((value) => `"${value}"`).join(", ")} is ` +
-          `expected. An empty cell is not the same as "undecided": ` +
-          `"undecided" is a curator saying nobody has looked yet, and a blank ` +
-          `is a row that cannot say even that.`
+          `expected, and what the cell holds instead is not reported. An ` +
+          `empty cell is not the same as "undecided": "undecided" is a ` +
+          `curator saying nobody has looked yet, and a blank is a row that ` +
+          `cannot say even that.`
       );
     }
   }
