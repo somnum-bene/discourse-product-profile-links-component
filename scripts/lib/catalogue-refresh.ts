@@ -751,15 +751,19 @@ export function collectionLinksCsv(
 /**
  * The disposition table as a file, in the same digested shape as the other two.
  *
- * The email guard is the reason this does the writing rather than a caller.
+ * It validates rather than serialising, and it validates with
+ * `assertDispositionRow` — the same function the reader uses, so this cannot
+ * emit a file `readDispositionTable` would reject. That is not a nicety: the
+ * command calls this *before* any write precisely so a refusal costs nothing,
+ * which only holds if the refusal is complete. A writer enforcing a subset of
+ * its reader's rules is a gate that reports success on the way out and failure
+ * on the way in, and the file in between is already committed.
+ *
  * Nothing in the pipeline can put member data in these columns — a legacy
- * identifier, a product name and a URL is all they hold — so the check is a
- * tripwire rather than a filter, and a tripwire belongs at the boundary it
- * guards. `readSheetTab` carries the same one facing the other way, refusing to
- * let member data *in* from the spreadsheet, and the reasoning is copied
- * wholesale: the row and the column are reported and the cell itself is not,
- * because a refusal that logged the value would have written it into the
- * repository by way of the error message.
+ * identifier, a product name and a URL is all they hold — so the email check
+ * inside that validator is a tripwire rather than a filter, and a tripwire
+ * belongs at the boundary it guards. `readSheetTab` carries the same one
+ * facing the other way, refusing to let member data *in* from the spreadsheet.
  */
 export function dispositionTableCsv(
   dispositions: readonly DispositionRow[]
@@ -783,55 +787,14 @@ export function dispositionTableCsv(
   // pipeline whose emptiness reads as an answer rather than as an error.
   if (rows.length === 0) {
     throw new CatalogueRefreshError(
-      `${DISPOSITION_FILE} would have no rows. Every legacy option value in ` +
-        `the Sheet Exports earns one, so a table with none means the exports ` +
-        `arrived empty — and an empty table is not a small version of this ` +
-        `file, it is a claim that no member holds any equipment. Refusing to ` +
-        `write; check the committed \`data/user_*.csv\` first.`
+      emptyTableMessage(
+        "this one would have none, so the exports arrived empty"
+      )
     );
   }
 
   for (const [index, row] of rows.entries()) {
-    const where = `${DISPOSITION_FILE}: row ${index + 2}`;
-    const offending = row.findIndex((field) => EMAIL_SHAPED.test(field));
-
-    if (offending !== -1) {
-      throw new CatalogueRefreshError(
-        `${where}, column ${offending + 1} holds something shaped like an ` +
-          `email address. This file is the interface to the repository that ` +
-          `joins against member data, and it carries no member data of any ` +
-          `kind; refusing to write.`
-      );
-    }
-
-    // Refused here as well as on read, because a writer that emits what its
-    // own reader rejects is the actual defect: the file would pass every gate
-    // that produced it and fail the one that consumes it. A row reaches this
-    // state when its legacy row carries neither a `Suggested Title` to resolve
-    // nor a `Text` to fall back on, so there is no string in the world to hand
-    // the non-public side for that identifier.
-    // Whitespace-only counts as blank, and the check has to say so explicitly
-    // because nothing upstream trims any more: the display text is carried
-    // verbatim on purpose, so `"   "` reaches here as three real characters
-    // rather than collapsing to `""` on the way. A value of spaces is not a
-    // name — it renders as nothing and matches nothing — and it is worse than
-    // an empty one because it looks populated in every diff and every reader.
-    const blank = row.findIndex(
-      (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
-    );
-
-    if (blank !== -1) {
-      throw new CatalogueRefreshError(
-        `${where} names no ${DISPOSITION_COLUMNS[blank]}, for legacy value ` +
-          `${JSON.stringify(row[1])}. Only \`url\` may be empty, and only ` +
-          `\`url\` may be empty by being absent — everything else has to hold ` +
-          `something that is not just whitespace. A row with no URL carries ` +
-          `the legacy display text as its value, so a blank one means its ` +
-          `option-table row has an empty \`Text\` and nothing names the ` +
-          `equipment at all. Refusing to write: a blank there is a member's ` +
-          `equipment quietly deleted.`
-      );
-    }
+    assertDispositionRow(row, `${DISPOSITION_FILE} row ${index + 2}`);
   }
 
   const body = `${[
@@ -847,12 +810,12 @@ export function dispositionTableCsv(
  * what `dispositionTableCsv` writes.
  *
  * Read by no command — the far side of it is a different repository — and that
- * is precisely why it exists. The file is reviewed once and then
- * consumed by a join this repository cannot see, so the checks that would
- * normally be a reader's incidental strictness are the only ones the artifact
- * will ever get: the digest, the six columns, a value on every row, a
- * disposition this repository has a word for, and the pairing of a value with a
- * URL. A gate running here is a gate that runs before the file leaves.
+ * is precisely why it exists. The file is reviewed once and then consumed by a
+ * join this repository cannot see, so the checks that would normally be a
+ * reader's incidental strictness are the only ones the artifact will ever get:
+ * the digest and the six columns here, and then everything
+ * `assertDispositionRow` insists on, which is the same list the writer is held
+ * to. A gate running here is a gate that runs before the file leaves.
  */
 export function readDispositionTable(text: string): DispositionRow[] {
   const dataRows = dataRowsOf(
@@ -862,70 +825,139 @@ export function readDispositionTable(text: string): DispositionRow[] {
     DISPOSITION_BLANKABLE
   );
 
+  if (dataRows.length === 0) {
+    throw new CatalogueRefreshError(emptyTableMessage("It holds none"));
+  }
+
   return dataRows.map((row, index) => {
-    const [userFieldName, legacyValue, legacyText, value, url, disposition] =
-      row;
-    const where = `${DISPOSITION_FILE} row ${index + 2}`;
-
-    // `dataRowsOf` refuses an absent field; this refuses one holding only
-    // whitespace, which it cannot see. Both sides of the boundary have to
-    // agree, and the writer refuses the same thing.
-    const blank = row.findIndex(
-      (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
+    const [userFieldName, legacyValue, legacyText, value, url] = row;
+    const disposition = assertDispositionRow(
+      row,
+      `${DISPOSITION_FILE} row ${index + 2}`
     );
-
-    if (blank !== -1) {
-      throw new CatalogueRefreshError(
-        `${where} has a ${DISPOSITION_COLUMNS[blank]} of ` +
-          `${JSON.stringify(row[blank])}, which is whitespace and nothing ` +
-          `else. Only \`url\` may be empty; a column that looks populated in ` +
-          `a diff and holds no name is worse than one that is plainly absent.`
-      );
-    }
-
-    if (!isDispositionOutcome(disposition)) {
-      throw new CatalogueRefreshError(
-        `${where} has the disposition ${JSON.stringify(disposition)}, which ` +
-          `is not one of ${DISPOSITION_OUTCOMES.join(", ")}. The non-public ` +
-          `side reads this column to decide what to do with the row, so a ` +
-          `word it has never heard of is a row it cannot act on.`
-      );
-    }
-
-    // The pairing, asked of the transform rather than restated here. A reader
-    // keeping its own list of which dispositions carry a link could refuse a
-    // file the writer had just produced, or admit one whose value nothing
-    // ships — and it is the second that reaches a member.
-    if (resolvesALink(disposition)) {
-      if (url === "") {
-        throw new CatalogueRefreshError(
-          `${where} is \`${disposition}\` and carries no URL. That ` +
-            `disposition means a Mapping ships for this value, so a row ` +
-            `saying so with nowhere to point is a Profile Link that renders ` +
-            `nothing — the failure this whole effort exists to remove.`
-        );
-      }
-    } else if (url !== "") {
-      throw new CatalogueRefreshError(
-        `${where} is \`${disposition}\` and carries the URL ` +
-          `${JSON.stringify(url)}. That disposition means no Profile Link ` +
-          `ships for the value, so a URL beside it is a link nobody assigned ` +
-          `— and on a \`plain-text\` row it is a curator's decision overruled.`
-      );
-    } else if (value !== legacyText) {
-      throw new CatalogueRefreshError(
-        `${where} carries no URL, so its value has to be the legacy display ` +
-          `text and it is ${JSON.stringify(value)} against a legacy text of ` +
-          `${JSON.stringify(legacyText)}. A value with no Mapping behind it ` +
-          `is a string invented for a member to hold that resolves for ` +
-          `nobody, and the member's own text is the one string that is ` +
-          `theirs to keep (ADR-0020 puts the suffix on anchor text, and an ` +
-          `unlinked value has none).`
-      );
-    }
 
     return { userFieldName, legacyValue, legacyText, value, url, disposition };
   });
+}
+
+/**
+ * Every rule one row of the disposition table obeys, in the one place both
+ * sides of the boundary call.
+ *
+ * Shared rather than written twice, because the two callers are a writer and
+ * the reader of what it wrote, and rules kept in two places drift into a
+ * writer that emits what its own reader rejects — a file that passes every
+ * gate that produced it and fails the one that consumes it. That already
+ * happened once here with the blank-value rule, which is why the shape is now
+ * a single validator rather than a habit of keeping them in step.
+ *
+ * It takes the row as raw fields rather than a `DispositionRow` for the same
+ * reason: the reader has six strings out of a CSV and the writer has six
+ * strings on their way in, so one signature serves both, and the narrowed
+ * `DispositionOutcome` comes back out for the reader to build its row from.
+ * `DispositionRow` cannot encode the value/URL correlation in its type, so it
+ * has to be enforced somewhere, and somewhere had better be once.
+ */
+function assertDispositionRow(
+  row: readonly string[],
+  where: string
+): DispositionOutcome {
+  const [, legacyValue, legacyText, value, url, disposition] = row;
+
+  // Reported by row and column and never by content: this is the tripwire that
+  // keeps member data out of the one file that leaves, and a refusal that
+  // logged the cell would have published it in the error message.
+  // `readSheetTab` carries the same guard facing the other way.
+  const offending = row.findIndex((field) => EMAIL_SHAPED.test(field));
+
+  if (offending !== -1) {
+    throw new CatalogueRefreshError(
+      `${where}, column ${offending + 1} holds something shaped like an ` +
+        `email address. This file is the interface to the repository that ` +
+        `joins against member data, and it carries no member data of any kind.`
+    );
+  }
+
+  // Whitespace-only counts as blank, and it has to be said explicitly because
+  // nothing upstream trims any more: the display text is carried verbatim on
+  // purpose, so `"   "` arrives as three real characters rather than
+  // collapsing to `""` on the way. A name of spaces renders as nothing and
+  // matches nothing, and it is worse than an empty one because it looks
+  // populated in every diff and every reader. `dataRowsOf` cannot catch it
+  // either — the field is present.
+  const blank = row.findIndex(
+    (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
+  );
+
+  if (blank !== -1) {
+    throw new CatalogueRefreshError(
+      `${where} names no ${DISPOSITION_COLUMNS[blank]}, for legacy value ` +
+        `${JSON.stringify(legacyValue)}. Only \`url\` may be empty, and every ` +
+        `other column has to hold something that is not just whitespace. A ` +
+        `row with no URL carries the legacy display text as its value, so a ` +
+        `blank one means its option-table row has an empty \`Text\` and ` +
+        `nothing names the equipment at all — a member's equipment quietly ` +
+        `deleted.`
+    );
+  }
+
+  if (!isDispositionOutcome(disposition)) {
+    throw new CatalogueRefreshError(
+      `${where} has the disposition ${JSON.stringify(disposition)}, which is ` +
+        `not one of ${DISPOSITION_OUTCOMES.join(", ")}. The non-public side ` +
+        `reads this column to decide what to do with the row, so a word it ` +
+        `has never heard of is a row it cannot act on.`
+    );
+  }
+
+  // The pairing, asked of the transform rather than restated here. A copy of
+  // the rule kept beside the check could refuse a row the transform had just
+  // produced, or admit one whose value nothing ships — and it is the second
+  // that reaches a member.
+  if (resolvesALink(disposition)) {
+    if (url === "") {
+      throw new CatalogueRefreshError(
+        `${where} is \`${disposition}\` and carries no URL. That disposition ` +
+          `means a Mapping ships for this value, so a row saying so with ` +
+          `nowhere to point is a Profile Link that renders nothing — the ` +
+          `failure this whole effort exists to remove.`
+      );
+    }
+  } else if (url !== "") {
+    throw new CatalogueRefreshError(
+      `${where} is \`${disposition}\` and carries the URL ` +
+        `${JSON.stringify(url)}. That disposition means no Profile Link ships ` +
+        `for the value, so a URL beside it is a link nobody assigned — and on ` +
+        `a \`plain-text\` row it is a curator's decision overruled.`
+    );
+  } else if (value !== legacyText) {
+    throw new CatalogueRefreshError(
+      `${where} carries no URL, so its value has to be the legacy display ` +
+        `text and it is ${JSON.stringify(value)} against a legacy text of ` +
+        `${JSON.stringify(legacyText)}. A value with no Mapping behind it is ` +
+        `a string invented for a member to hold that resolves for nobody, and ` +
+        `the member's own text is the one string that is theirs to keep ` +
+        `(ADR-0020 puts the suffix on anchor text, and an unlinked value has ` +
+        `none).`
+    );
+  }
+
+  return disposition;
+}
+
+/**
+ * Why an empty disposition table is refused, said the same way on both sides.
+ * `holds` differs because the remedy does — a writer sends someone to the Sheet
+ * Exports, a reader to the file in front of them — but the reason does not.
+ */
+function emptyTableMessage(holds: string): string {
+  return (
+    `${DISPOSITION_FILE}: every legacy option value in the Sheet Exports ` +
+    `earns a row, and ${holds}. An empty table is not a small version of this ` +
+    `file, it is a claim that no member holds any equipment — valid, ` +
+    `digested, correctly shaped and entirely wrong. Check the committed ` +
+    `\`data/user_*.csv\` first.`
+  );
 }
 
 /**

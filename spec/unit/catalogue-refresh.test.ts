@@ -1332,7 +1332,19 @@ describe("the disposition table file", () => {
     // file: it is a claim that no member holds any equipment, and it would be
     // valid, digested and correctly shaped.
     expect(() => dispositionTableCsv([])).toThrow(CatalogueRefreshError);
-    expect(() => dispositionTableCsv([])).toThrow(/would have no rows/);
+    expect(() => dispositionTableCsv([])).toThrow(
+      /no member holds any equipment/
+    );
+  });
+
+  it("refuses to read a table with no rows either", () => {
+    // Same rule on the way back in. A header-only file is a valid, digested,
+    // correctly-shaped artifact, so nothing else about it would complain.
+    const body = `${HEADER}\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /no member holds any equipment/
+    );
   });
 
   it("refuses to write a row that names no value", () => {
@@ -1398,12 +1410,102 @@ describe("the disposition table file", () => {
 
   it("refuses to read a row whose value is only whitespace", () => {
     // `dataRowsOf` cannot see this one — it refuses an absent field, and this
-    // field is present. Writer and reader have to agree on it.
+    // field is present. Writer and reader share the check, so they share the
+    // wording too.
     const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
-      /has a legacy_text of "   ", which is whitespace and nothing else/
+      /names no legacy_text, for legacy value "3006"/
     );
+  });
+
+  /**
+   * The writer is held to every rule the reader is, because the command calls
+   * it before any write precisely so a refusal costs nothing — and that only
+   * holds if the refusal is complete. `DispositionRow` cannot encode the
+   * value/URL correlation in its type, so nothing but a check enforces it, and
+   * a check on one side only is a gate reporting success on the way out and
+   * failure on the way in, with a committed file in between.
+   */
+  describe("the pairing rules, enforced on the way out as well as in", () => {
+    /** One row, overridden into whichever violation is under test. */
+    function rowWith(overrides: Partial<DispositionRow>): DispositionRow[] {
+      return [
+        {
+          userFieldName: "Machine",
+          legacyValue: "6240",
+          legacyText: "Aircurve 11 asv",
+          value: "AirCurve 11 ASV (Discontinued)",
+          url: CPAP_MACHINES,
+          disposition: "collection",
+          ...overrides,
+        },
+      ];
+    }
+
+    it("refuses to write a linked disposition with no URL", () => {
+      expect(() => dispositionTableCsv(rowWith({ url: "" }))).toThrow(
+        /`collection` and carries no URL/
+      );
+    });
+
+    it("refuses to write an unlinked disposition carrying a URL", () => {
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({ disposition: "plain-text", value: "Aircurve 11 asv" })
+        )
+      ).toThrow(/`plain-text` and carries the URL/);
+    });
+
+    it("refuses to write an unlinked value that is not the legacy text", () => {
+      // Where an appended suffix would land. The reader caught this and the
+      // writer did not, so a regression could have committed it.
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({
+            disposition: "plain-text",
+            value: "Aircurve 11 asv (Discontinued)",
+            url: "",
+          })
+        )
+      ).toThrow(/its value has to be the legacy display text/);
+    });
+
+    it("refuses to write a disposition this repository has no word for", () => {
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({ disposition: "retired" as DispositionRow["disposition"] })
+        )
+      ).toThrow(/which is not one of/);
+    });
+
+    it("says the same thing whichever side of the boundary refuses", () => {
+      // The point of one shared validator: identical rules, identical wording,
+      // no drift. Only the row number differs, and only because the writer
+      // counts rows it has not written yet.
+      const bad = rowWith({ url: "" });
+      let onWrite = "";
+      let onRead = "";
+
+      try {
+        dispositionTableCsv(bad);
+      } catch (error) {
+        onWrite = (error as Error).message;
+      }
+
+      const body =
+        `${HEADER}\nMachine,6240,Aircurve 11 asv,` +
+        `AirCurve 11 ASV (Discontinued),,collection\n`;
+
+      try {
+        readDispositionTable(digested(body));
+      } catch (error) {
+        onRead = (error as Error).message;
+      }
+
+      expect(onWrite).not.toBe("");
+      expect(onRead).toBe(onWrite);
+    });
   });
 
   it("writes an empty URL without complaint, which is the only blank it allows", () => {
