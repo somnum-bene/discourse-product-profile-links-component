@@ -709,4 +709,29 @@ describe("what the verify pass is allowed to be part of", () => {
     expect(command).not.toContain("parseCsv");
     expect(command).not.toContain('.split("\\n")');
   });
+
+  it("reads the Collection Links through their own reader too", () => {
+    // Both committed sinks, both re-validated on the way in. Reading one by
+    // hand would skip the suffix and collection-URL rules the reader holds.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("COLLECTION_LINKS_FILE");
+  });
+
+  it("asks the storefront about the Collection Links, not just the products", () => {
+    // A Catalogue Refresh asks the Admin API only whether a collection exists,
+    // and assigns public-page reachability here (ADR-0017) — a collection can
+    // exist in the admin, be unpublished to the Online Store, and still 404 for
+    // a member. The loop has to run over both or that question is assigned and
+    // never asked, and a newly shipped Collection Link 404s while this reports
+    // success.
+    const loop = command.slice(
+      command.indexOf("const results: VerifyResult[]")
+    );
+
+    expect(loop).toContain("entries.entries()");
+    expect(command).toMatch(
+      /const entries: ResolvedProduct\[\] = \[\s*\.\.\.catalogue,/
+    );
+    expect(command).toContain("...collectionLinks.map(");
+  });
 });

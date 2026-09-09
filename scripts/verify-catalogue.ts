@@ -1,6 +1,6 @@
-// The Catalogue Verify. Asks cpap.com whether every URL in the Resolved Product
-// Catalogue actually serves a page, one request at a time. Run it with
-// `pnpm verify:catalogue`.
+// The Catalogue Verify. Asks cpap.com whether every URL this pipeline ships
+// actually serves a page — the Resolved Product Catalogue and the Collection
+// Links alike — one request at a time. Run it with `pnpm verify:catalogue`.
 //
 // It is a deliberate command and it is absent from every build script and every
 // pre-commit hook on purpose: it takes about a minute, it depends on a third
@@ -9,7 +9,9 @@
 //
 // It needs no credentials at all — not Shopify's, not Discourse's. Shopify's
 // verdict on each product already travels in the catalogue's `status` column, so
-// the only thing this asks for is a public product page.
+// the only thing this asks for is a public page. That is the whole reason the
+// Collection Links belong here too: the Admin API admitting a collection is not
+// the storefront serving it.
 //
 // Every judgement is in lib/catalogue-verify.ts: what a status code means, how
 // long to wait, when to stop asking, what to propose, and whether the catalogue
@@ -18,11 +20,16 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ResolvedProduct } from "./lib/build-catalogue.ts";
+import {
+  collectionHandleFromUrl,
+  ResolvedProduct,
+} from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINKS_FILE,
   declaredDigest,
+  readCollectionLinks,
   readResolvedProducts,
 } from "./lib/catalogue-refresh.ts";
 import {
@@ -46,20 +53,50 @@ import {
 async function main(): Promise<void> {
   refuseArguments(process.argv.slice(2));
 
-  // Through the catalogue's own reader, so a file edited after it was approved
-  // is refused rather than verified.
+  // Through each file's own reader, so one edited after it was approved is
+  // refused rather than verified.
   const catalogueText = await readFile(CATALOGUE_FILE, "utf8");
   const catalogue = readResolvedProducts(catalogueText);
+  const linksText = await readFile(COLLECTION_LINKS_FILE, "utf8");
+  const collectionLinks = readCollectionLinks(linksText);
+
+  // Both sinks, in one bounded pass. A Catalogue Refresh asks Shopify's Admin
+  // API only whether a collection exists, and says so at its `COLLECTION_LOOKUP`
+  // — "a collection can exist in the admin, be unpublished to the Online Store,
+  // and still 404 for a member — and that question is Catalogue Verify's,
+  // deliberately (ADR-0017)". That question was assigned here and then not
+  // asked: this loop read the catalogue alone, so a newly shipped Collection
+  // Link could 404 for every member holding the value while the command
+  // reported success.
+  //
+  // A Collection Link is deliberately not a `ResolvedProduct` (ADR-0021) and
+  // this does not make it one. The shape below exists for the length of one
+  // request loop and never leaves this command: `status` is `ACTIVE` because
+  // eligibility here means "there is a public page to ask about", which is true
+  // of every committed Collection Link by construction, and `handle` is the one
+  // Shopify was asked to admit.
+  const entries: ResolvedProduct[] = [
+    ...catalogue,
+    ...collectionLinks.map((link) => ({
+      userFieldName: link.userFieldName,
+      value: link.value,
+      handle: collectionHandleFromUrl(link.url),
+      status: "ACTIVE" as const,
+      url: link.url,
+    })),
+  ];
 
   process.stdout.write(
     `catalogue: ${declaredDigest(catalogueText, CATALOGUE_FILE)}\n` +
-      `${catalogue.length} URLs, one request at a time, ${PACE_MS}ms apart, ` +
-      `up to ${MAX_ATTEMPTS} attempts each\n\n`
+      `links:     ${declaredDigest(linksText, COLLECTION_LINKS_FILE)}\n` +
+      `${entries.length} URLs (${catalogue.length} products, ` +
+      `${collectionLinks.length} collections), one request at a time, ` +
+      `${PACE_MS}ms apart, up to ${MAX_ATTEMPTS} attempts each\n\n`
   );
 
   const results: VerifyResult[] = [];
 
-  for (const [index, entry] of catalogue.entries()) {
+  for (const [index, entry] of entries.entries()) {
     if (index > 0 && isEligible(entry)) {
       await sleep(PACE_MS);
     }
@@ -68,7 +105,7 @@ async function main(): Promise<void> {
 
     results.push(result);
     process.stdout.write(
-      `${`${index + 1}`.padStart(3)}/${catalogue.length} ` +
+      `${`${index + 1}`.padStart(3)}/${entries.length} ` +
         `${result.outcome.padEnd(10)} ${result.status ?? "—"} ${result.url}\n`
     );
   }
