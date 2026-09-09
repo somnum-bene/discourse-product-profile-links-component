@@ -721,6 +721,14 @@ function sinkPhrase(results: readonly VerifyResult[]): string {
 }
 
 /**
+ * How many distinct URLs a set of results covers, which is how many requests
+ * the pass actually made — one per group, not one per Mapping.
+ */
+export function distinctUrls(results: readonly VerifyResult[]): number {
+  return new Set(results.map((result) => result.url)).size;
+}
+
+/**
  * Whether this catalogue may be applied to an instance.
  *
  * Unresolved is not a pass. A 429 leaves a URL unchecked, and an unchecked URL
@@ -758,7 +766,15 @@ export function shippability(results: readonly VerifyResult[]): Shippability {
     return {
       shippable: true,
       message:
-        `Shippable: all ${summary.verified} URLs answered 2XX and every one ` +
+        // Mappings, not URLs. `summary.verified` counts `VerifyResult`s, and
+        // there is one of those per Mapping — the pass groups Mappings that
+        // share a URL and asks each distinct URL once, so calling the count
+        // URLs overstates the network pass by every shared collection page.
+        // Both numbers are said, because both are things an operator wants:
+        // how much shipped, and how much was asked of the storefront.
+        `Shippable: all ${summary.verified} Mappings answered 2XX across ` +
+        `${distinctUrls(results)} distinct ` +
+        `${distinctUrls(results) === 1 ? "URL" : "URLs"}, and every one ` +
         `landed on the path its sink requires — ${sinkPhrase(results)}.`,
     };
   }

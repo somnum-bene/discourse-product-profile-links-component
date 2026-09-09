@@ -604,7 +604,37 @@ describe("whether the catalogue may be applied to an instance", () => {
     const verdict = shippability([result(), result()]);
 
     expect(verdict.shippable).toBe(true);
-    expect(verdict.message).toContain("all 2 URLs");
+    expect(verdict.message).toContain("all 2 Mappings");
+  });
+
+  it("counts Mappings and the URLs actually asked apart", () => {
+    // `summary.verified` counts results, and there is one per Mapping. Two
+    // Mappings sharing a collection page are one request, so a message
+    // calling that count "2 URLs" told an operator the pass hit the
+    // storefront twice as often as it did. Both numbers are said because both
+    // are real: how much shipped, and how much was asked.
+    const shared = "https://www.cpap.com/collections/nasal-cpap-masks";
+    const verdict = shippability([
+      result({ kind: "collection", url: shared, value: "Viva Nasal" }),
+      result({ kind: "collection", url: shared, value: "Wisp Nasal" }),
+    ]);
+
+    expect(verdict.shippable).toBe(true);
+    expect(verdict.message).toContain("all 2 Mappings");
+    expect(verdict.message).toContain("1 distinct URL,");
+    expect(verdict.message).not.toContain("2 distinct");
+  });
+
+  it("says URLs in the plural only when there is more than one", () => {
+    const verdict = shippability([
+      result(),
+      result({
+        url: "https://www.cpap.com/products/airmini",
+        value: "AirMini",
+      }),
+    ]);
+
+    expect(verdict.message).toContain("2 distinct URLs,");
   });
 
   it("blocks on a failure", () => {
