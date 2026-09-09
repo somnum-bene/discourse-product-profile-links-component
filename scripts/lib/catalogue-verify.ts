@@ -16,7 +16,10 @@
 // to approve, because the fix for a dead product URL is upstream in the
 // spreadsheet or in Shopify (ADR-0009), not a hand edit to a generated file.
 
-import type { ResolvedProduct } from "./build-catalogue.ts";
+import {
+  COLLECTION_URL_ORIGIN,
+  type ResolvedProduct,
+} from "./build-catalogue.ts";
 
 /**
  * Which sink an entry came from, and therefore which storefront path a
@@ -311,6 +314,21 @@ export function collectionHandleOf(url: string): string | null {
   try {
     parsed = new URL(url);
   } catch {
+    return null;
+  }
+
+  // The origin, not only the path. A Collection Link is written against
+  // `COLLECTION_URL_ORIGIN` and refused at the boundary if it is not — so a
+  // redirect landing on some other host's `/collections/` is not the same
+  // collection under a new handle, it is a URL that left cpap.com. Without
+  // this, `https://example.com/collections/apap-machines` reads as a pass and
+  // the combined run reports the catalogue shippable.
+  //
+  // `productHandleOf` deliberately does not do this: a product URL is whatever
+  // Shopify's `onlineStoreUrl` hands back (ADR-0009), so this repository is not
+  // the authority on its origin. A Collection Link is curated here (ADR-0021),
+  // and here the origin is a committed constant.
+  if (parsed.origin !== COLLECTION_URL_ORIGIN) {
     return null;
   }
 

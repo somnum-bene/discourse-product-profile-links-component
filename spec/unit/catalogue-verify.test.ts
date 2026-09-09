@@ -368,6 +368,24 @@ describe("the outcome of one entry", () => {
     expect(collectionHandleOf("not a url")).toBeNull();
   });
 
+  it("refuses a collection path on any other origin", () => {
+    // The path alone is not the question. A redirect that leaves cpap.com has
+    // not moved the collection, and a landing page on someone else's host that
+    // happens to be spelled /collections/ is not a Collection Link resolving.
+    expect(
+      collectionHandleOf("https://example.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      collectionHandleOf("http://www.cpap.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      collectionHandleOf("https://cpap.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      handleOf("collection", "https://example.com/collections/x")
+    ).toBeNull();
+  });
+
   it("asks the question that matches the sink", () => {
     const product = "https://www.cpap.com/products/airsense-11";
     const collection = "https://www.cpap.com/collections/apap-machines";
