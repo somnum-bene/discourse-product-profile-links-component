@@ -33,22 +33,34 @@ async function main(): Promise<void> {
   const undecided = undecidedAssignments(assignments);
 
   if (undecided.length > 0) {
+    // Located, never quoted. This runs in CI on a public repository, so its
+    // output is a public artifact, and every column that would identify the
+    // row by its content — `Legacy PNum(s)`, `Legacy Text`, `Profile Link
+    // Value` — is workbook content read across the boundary. `Legacy Text` in
+    // particular is free text a curator typed into a bulletin board. `Field`
+    // is safe because it is a Managed Field name, a closed set this
+    // repository owns, and the row number is a coordinate rather than a cell.
+    //
+    // `undecidedAssignments` filters, so it returns the same object
+    // references, and a row's position in `assignments` is its position in
+    // the Sheet. `+ 2` for the header row and for counting from one, the same
+    // convention `assignmentRowsFrom` reports its own refusals in.
+    const undecidedRows = new Set<AssignmentRow>(undecided);
+
     throw new CatalogueRefreshError(
       `${undecided.length} of ${assignments.length} Collection Assignment ` +
         `${undecided.length === 1 ? "row is" : "rows are"} still \`undecided\`, ` +
-        `naming ${undecided.length === 1 ? "it" : "them"} below. Each is an ` +
+        `locating ${undecided.length === 1 ? "it" : "them"} below. Each is an ` +
         `absence of evidence rather than a preference, so it blocks the ` +
         `release the way an Unresolved URL does, until a curator sets its ` +
-        `\`Disposition\`:\n` +
-        undecided
+        `\`Disposition\`. The cells are not reported:\n` +
+        assignments
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => undecidedRows.has(row))
           .map(
-            (row) =>
-              // `legacyPnums` is empty on the rows that only ever carry
-              // `legacyText` — the four retired catch-all titles — so this
-              // falls back rather than naming the row with an empty string.
-              `  - ${row.field} ${JSON.stringify(row.legacyPnums || row.legacyText)}` +
-              ` — proposed \`Profile Link Value\` ` +
-              `${JSON.stringify(row.profileLinkValue.trim())}`
+            ({ row, index }) =>
+              `  - ${row.field} row ${index + 2}, column ` +
+              `\`Disposition\` (\`${exportFileName(ASSIGNMENT_TABS[0])}\`)`
           )
           .join("\n")
     );

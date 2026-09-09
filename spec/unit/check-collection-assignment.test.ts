@@ -38,9 +38,35 @@ describe("what the check-collection-assignment command is allowed to do", () => 
     expect(command).toContain("undecidedAssignments(");
   });
 
-  it("names the affected rows in its failure rather than just a count", () => {
+  it("locates the affected rows in its failure rather than just a count", () => {
     // The failure a curator reads has to point at rows, not just say how many.
+    // `row.field` is a Managed Field name and `index + 2` is the Sheet row, so
+    // together they locate the row without quoting any of it.
     expect(command).toContain("row.field");
-    expect(command).toMatch(/legacyPnums|legacyText/);
+    expect(command).toContain("index + 2");
+  });
+
+  it("locates those rows without echoing a cell it read", () => {
+    // This command's output is a public artifact: it runs in CI on a public
+    // repository. Every column below is workbook content read across the
+    // boundary, and `Legacy Text` is free text a curator typed into a bulletin
+    // board. Naming a row is a coordinate; quoting one is a disclosure.
+    for (const column of [
+      "legacyPnums",
+      "legacyText",
+      "profileLinkValue",
+      "rationale",
+      "override",
+      "recommendedCollectionTitle",
+      "recommendedCollectionUrl",
+      "baseNameSource",
+      "confidence",
+    ]) {
+      expect(command).not.toContain(column);
+    }
+
+    // `refuseArguments` does quote what it was given, which is the operator's
+    // own argv rather than anything read out of the workbook — so the ban is
+    // on the columns above, not on quoting as such.
   });
 });
