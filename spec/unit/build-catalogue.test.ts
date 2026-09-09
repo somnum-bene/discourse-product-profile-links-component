@@ -1004,6 +1004,29 @@ describe("Collection Links that cannot be derived", () => {
     expect(collectionFaults[0].problem).toBe("unadmitted-collection");
   });
 
+  it("ships the canonical collection URL, not the cell a curator pasted", () => {
+    // A query string and a fragment pass `collectionHandleFromUrl` on purpose,
+    // because neither changes which collection resolves — but that admits the
+    // cell, it does not mean the cell is what ships. A curator copying the
+    // page out of a browser brings `?utm_source=…` with it, and the Mapping
+    // URL is what every member holding this value clicks.
+    const { collectionLinks } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: `${BIPAP}?utm_source=sheet&sscid=abc#erid5131`,
+      }),
+    ]);
+
+    expect(collectionLinks).toEqual([
+      {
+        userFieldName: "Machine",
+        value: "AirCurve 11 ASV (Discontinued)",
+        url: BIPAP,
+      },
+    ]);
+  });
+
   it("reports a cell that names no collection at all", () => {
     const { collectionFaults } = build(ASV_ROW, PRODUCTS, [
       assignment({
