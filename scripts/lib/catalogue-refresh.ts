@@ -797,6 +797,8 @@ export function dispositionTableCsv(
     assertDispositionRow(row, `${DISPOSITION_FILE} row ${index + 2}`);
   }
 
+  assertNoResolvingCollisions(dispositions, DISPOSITION_FILE);
+
   const body = `${[
     csvLine([...DISPOSITION_COLUMNS]),
     ...rows.map((row) => csvLine(row)),
@@ -829,7 +831,7 @@ export function readDispositionTable(text: string): DispositionRow[] {
     throw new CatalogueRefreshError(emptyTableMessage("It holds none"));
   }
 
-  return dataRows.map((row, index) => {
+  const rows = dataRows.map((row, index) => {
     const [userFieldName, legacyValue, legacyText, value, url] = row;
     const disposition = assertDispositionRow(
       row,
@@ -838,6 +840,10 @@ export function readDispositionTable(text: string): DispositionRow[] {
 
     return { userFieldName, legacyValue, legacyText, value, url, disposition };
   });
+
+  assertNoResolvingCollisions(rows, DISPOSITION_FILE);
+
+  return rows;
 }
 
 /**
@@ -901,6 +907,25 @@ function assertDispositionRow(
     );
   }
 
+  // `url` is the one column allowed to be empty, which makes `""` the sentinel
+  // every consumer reads as "no link" — `resolvingValues`, the review
+  // document's counts, and the committed-file gate all test it exactly. So the
+  // column has to be *either* empty or a real URL, with no third state: a
+  // whitespace-only cell is not empty and not a URL, and it would slip past
+  // both the blank check (which skips this column) and the pairing check
+  // (because `"   " !== ""`), leaving a resolving disposition pointing nowhere.
+  // Padding around a real URL is refused on the same grounds this file refuses
+  // it around a value — the bytes are the interface.
+  if (url !== url.trim()) {
+    throw new CatalogueRefreshError(
+      `${where} has a url of ${JSON.stringify(url)}, which carries ` +
+        `whitespace. This column is either empty or a URL and there is no ` +
+        `third state: every consumer reads an empty \`url\` as "no Profile ` +
+        `Link resolves", so a cell of spaces is a linked row pointing nowhere ` +
+        `that no check downstream would question.`
+    );
+  }
+
   if (!isDispositionOutcome(disposition)) {
     throw new CatalogueRefreshError(
       `${where} has the disposition ${JSON.stringify(disposition)}, which is ` +
@@ -943,6 +968,71 @@ function assertDispositionRow(
   }
 
   return disposition;
+}
+
+/**
+ * Refuses an unlinked row whose value the runtime would resolve anyway.
+ *
+ * The per-row rules cannot see this one, because it is not a fact about a row:
+ * it is a fact about a row *against every other row*. An unlinked row says the
+ * member keeps their text and gets no Profile Link. Resolution is a **trimmed**
+ * match on both sides, though (`javascripts/discourse/lib/profile-links.ts`
+ * trims each Mapping value into `urlsByValue` and trims the stored value before
+ * the lookup), so a legacy text of `"  AirSense 11 AutoSet  "` resolves the
+ * `AirSense 11 AutoSet` Mapping perfectly well. The member gets a link and this
+ * table says they get none — the row contradicts what it describes.
+ *
+ * It compares against the table's own linked rows rather than against
+ * `settings.yml`, and the two are the same set: every Mapping this repository
+ * ships is some linked row's value, because both sinks are built from the same
+ * catalogue and Collection Links. So the check needs no second input, which is
+ * what lets the writer run it as well as the reader — and the writer is the one
+ * that matters, since it runs before anything is committed.
+ *
+ * Refused rather than reconciled. Which of the two the row should have been is
+ * a curator's answer: the collision may be a legacy name that happens to match
+ * a product exactly, in which case the row wants `resolves-to-product`, or it
+ * may be padding nobody noticed. Deciding here would pick one silently, and
+ * this is the artifact where a silent guess reaches a member.
+ *
+ * The exposure exists *because* the legacy text is now carried verbatim. While
+ * it was trimmed the two could not disagree, and trimming was the wrong fix for
+ * a different reason (see ADR-0023 and `DispositionRow`).
+ */
+function assertNoResolvingCollisions(
+  rows: readonly DispositionRow[],
+  file: string
+): void {
+  const resolvable = new Map<string, DispositionRow>();
+
+  for (const row of rows) {
+    if (row.url !== "") {
+      resolvable.set(`${row.userFieldName}\u0000${row.value.trim()}`, row);
+    }
+  }
+
+  for (const [index, row] of rows.entries()) {
+    if (row.url !== "") {
+      continue;
+    }
+
+    const collides = resolvable.get(
+      `${row.userFieldName}\u0000${row.value.trim()}`
+    );
+
+    if (collides) {
+      throw new CatalogueRefreshError(
+        `${file} row ${index + 2} is \`${row.disposition}\`, so it says legacy ` +
+          `value ${JSON.stringify(row.legacyValue)} resolves no Profile Link ` +
+          `— but its value ${JSON.stringify(row.value)} trims to the same ` +
+          `string as legacy value ${JSON.stringify(collides.legacyValue)}, ` +
+          `which ships a Mapping to ${JSON.stringify(collides.url)}. ` +
+          `Resolution is a trimmed match on both sides, so the member would ` +
+          `get that link and this row says they get none. Which of the two is ` +
+          `meant is a curator's answer and not one this can take.`
+      );
+    }
+  }
 }
 
 /**

@@ -90,6 +90,26 @@ const shippedByValue = new Map(
   ])
 );
 
+/**
+ * The same Mappings keyed the way the *runtime* keys them.
+ *
+ * `profile-links.ts` trims each Mapping value into `urlsByValue` and trims the
+ * stored value before the lookup, so this is the map that answers "will a
+ * member holding this string get a link". Deliberately not the map the
+ * byte-identity check uses: that one asks whether we can reproduce a Mapping
+ * exactly and this one asks what the member actually experiences, and ADR-0023
+ * is the argument that those are different questions asked by different
+ * consumers. A raw `Map.has` answers the first while reading like the second,
+ * which is how a padded unlinked value could claim to resolve nothing while
+ * resolving perfectly well.
+ */
+const resolvableByValue = new Map(
+  shippedMappings.map((mapping) => [
+    `${mapping.userFieldName}\u0000${mapping.value.trim()}`,
+    mapping.url,
+  ])
+);
+
 function keyOf(row: { userFieldName: string; legacyValue: string }): string {
   return `${row.userFieldName}\u0000${row.legacyValue}`;
 }
@@ -186,12 +206,19 @@ describe("the disposition table this repository commits", () => {
 
     for (const row of unlinked) {
       expect(row.value).toBe(row.legacyText);
+      // Asked the way the *runtime* asks it, not with a raw lookup. A member
+      // holding `"  AirSense 11 AutoSet  "` resolves the `AirSense 11 AutoSet`
+      // Mapping, because `profile-links.ts` trims both sides — so a row can
+      // claim to resolve nothing while resolving perfectly well, and an exact
+      // `Map.has` would agree with the claim. The exposure is a consequence of
+      // carrying the legacy text verbatim, which is right for its own reasons
+      // (ADR-0023); this is the check that keeps the two decisions honest.
       expect(
-        shippedByValue.has(`${row.userFieldName}\u0000${row.value}`),
+        resolvableByValue.has(`${row.userFieldName}\u0000${row.value.trim()}`),
         `${DISPOSITION_FILE} gives legacy value ${row.legacyValue} no URL, ` +
-          `and ${SETTINGS_FILE} ships a Mapping for ${JSON.stringify(
-            row.value
-          )} — one of the two is wrong about whether it resolves`
+          `and ${SETTINGS_FILE} ships a Mapping that ` +
+          `${JSON.stringify(row.value)} resolves once both sides are ` +
+          `trimmed — the member gets a link this row says they do not`
       ).toBe(false);
     }
   });

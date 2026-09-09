@@ -1480,6 +1480,109 @@ describe("the disposition table file", () => {
       ).toThrow(/which is not one of/);
     });
 
+    it("refuses a URL that is only whitespace", () => {
+      // The gap between the two checks either side of it: `dataRowsOf` lets
+      // `url` be blank, the whitespace check skips `url` for that reason, and
+      // `"   " !== ""` — so a resolving disposition pointing nowhere sailed
+      // through both. `""` is the sentinel every consumer reads as "no link",
+      // so the column gets no third state.
+      expect(() => dispositionTableCsv(rowWith({ url: "   " }))).toThrow(
+        /carries whitespace/
+      );
+    });
+
+    it("refuses a URL padded around a real one", () => {
+      expect(() =>
+        dispositionTableCsv(rowWith({ url: ` ${CPAP_MACHINES} ` }))
+      ).toThrow(/carries whitespace/);
+    });
+
+    it("refuses an unlinked value the runtime would resolve anyway", () => {
+      // The consequence of carrying the legacy text verbatim, which is right
+      // for its own reasons (ADR-0023). Resolution is a trimmed match on both
+      // sides, so a padded legacy text resolves the Mapping its trimmed form
+      // names — the member gets a link while the row says they get none.
+      //
+      // Refused rather than reconciled: whether the row wanted
+      // `resolves-to-product` or the padding was an accident is a curator's
+      // answer, and this is the artifact where a silent guess reaches a member.
+      const collision: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "AirSense 11 AutoSet",
+          value: "AirSense 11 AutoSet",
+          url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Machine",
+          legacyValue: "9001",
+          legacyText: "  AirSense 11 AutoSet  ",
+          value: "  AirSense 11 AutoSet  ",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(() => dispositionTableCsv(collision)).toThrow(
+        /trims to the same string as legacy value "4801"/
+      );
+    });
+
+    it("allows an unlinked value that only looks similar", () => {
+      // The check is a trimmed equality, not a fuzzy one. A different name is
+      // a different value, and refusing those would make the guard unusable.
+      const near: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "AirSense 11 AutoSet",
+          value: "AirSense 11 AutoSet",
+          url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Machine",
+          legacyValue: "9001",
+          legacyText: "AirSense 11 AutoSet Card-to-Cloud",
+          value: "AirSense 11 AutoSet Card-to-Cloud",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(readDispositionTable(dispositionTableCsv(near))).toHaveLength(2);
+    });
+
+    it("lets the same value collide across two different fields", () => {
+      // Mappings are keyed per Custom User Field, so a Machine value and a
+      // Mask value that read the same resolve independently and neither
+      // shadows the other.
+      const acrossFields: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "Bedside Unit",
+          value: "Bedside Unit",
+          url: "https://www.cpap.com/products/bedside-unit",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Mask",
+          legacyValue: "9001",
+          legacyText: "Bedside Unit",
+          value: "Bedside Unit",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(
+        readDispositionTable(dispositionTableCsv(acrossFields))
+      ).toHaveLength(2);
+    });
+
     it("says the same thing whichever side of the boundary refuses", () => {
       // The point of one shared validator: identical rules, identical wording,
       // no drift. Only the row number differs, and only because the writer
