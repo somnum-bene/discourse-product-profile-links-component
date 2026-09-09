@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import {
   buildCatalogue,
   COLLECTION_LINK_SUFFIX,
+  DISPOSITION_OUTCOMES,
   type DispositionRow,
   type FieldMapping,
   type ProductRecord,
@@ -337,9 +338,22 @@ describe("the disposition table this repository commits", () => {
       counted.set(row.disposition, under);
     }
 
-    expect(
-      [...counted.values()].reduce((total, under) => total + under.length, 0)
-    ).toBe(rows.length);
+    // `counted` is built by partitioning `rows`, so summing the partition
+    // sizes and comparing to `rows.length` is an identity that holds for any
+    // input — it was asserting arithmetic, not the file. What actually makes
+    // the table reconcilable is that every disposition in it is one this
+    // repository has a word for: a row under a word `DISPOSITION_OUTCOMES`
+    // does not enumerate is a row the far side cannot classify, and it would
+    // still sum correctly.
+    const vocabulary = DISPOSITION_OUTCOMES as readonly string[];
+
+    for (const disposition of counted.keys()) {
+      expect(vocabulary, `${disposition} is not a disposition`).toContain(
+        disposition
+      );
+    }
+
+    expect(counted.size).toBeGreaterThan(1);
 
     // Both of the two that carry a URL are represented, which is what says the
     // table covers products as well as Collection Links — the third acceptance
