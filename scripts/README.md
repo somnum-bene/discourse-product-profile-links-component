@@ -256,6 +256,17 @@ all the same kind of thing:
   echoing the cell, on the same reasoning as `readSheetTab`'s guard pointing the
   other way.
 
+  That guard is the **first** check in each direction, ahead of the digest and
+  the header, and no diagnostic in either path quotes the file to explain
+  itself. Both properties are load-bearing rather than fastidious. A file
+  missing its digest line presents a data row as line 1, and a tab with a row
+  inserted above its header presents one as row 1 — so the two earliest
+  diagnostics are reached by exactly the malformations that hand them file
+  content to print. And the guard is a tripwire for one *shape* of member data
+  rather than a filter for member data, so a clean pass through it is not
+  licence to echo a row: a name goes straight through. Coordinates locate a
+  cell exactly and carry nothing, which is why that is all any refusal gives.
+
   Every rule below is checked on read as well as on write, by one shared
   validator rather than two that agree until they drift.
 

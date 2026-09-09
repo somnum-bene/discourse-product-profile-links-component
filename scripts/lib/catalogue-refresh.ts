@@ -1144,6 +1144,25 @@ function isDispositionOutcome(value: string): value is DispositionOutcome {
  * fault in `data/collection-links.csv`. That is the same defaulted-parameter
  * footgun `renderFieldMappings` and `CatalogueInput` both refuse, in the same
  * module, so it does not get an exception here.
+ *
+ * The refusal does **not** quote the line it found, and this is the earliest
+ * point in every read path, so that matters more here than anywhere else. A
+ * file missing its digest line presents its *first data row* as line 1 — that
+ * is what "missing" looks like — and quoting it published a row of whatever the
+ * file holds before a single other check had run. On the disposition table that
+ * is the one artifact that leaves this repository, and this function is the
+ * first thing its reader calls.
+ *
+ * Four commands call it directly, without going through `dataRowsOf`, so the
+ * redaction belongs in here rather than in a guard placed in front of it:
+ * `refresh`, `apply`, `verify` and `build:settings` each ask a file for its
+ * digest before doing anything else. A scan sitting at the top of the reader
+ * would have covered one path of the five.
+ *
+ * Nothing is lost. The line number is always 1, the expectation is spelled out
+ * in full, and the reader is one keystroke from the line the message is about.
+ * What the echo added was the ability to read file content out of a terminal,
+ * which is not a diagnostic feature.
  */
 export function declaredDigest(text: string, file: string): string {
   const firstLine = text.split("\n", 1)[0] ?? "";
@@ -1152,7 +1171,9 @@ export function declaredDigest(text: string, file: string): string {
   if (!match) {
     throw new CatalogueRefreshError(
       `${file} should start with a "${DIGEST_PREFIX}<64 hex digits>" ` +
-        `line. It starts with ${JSON.stringify(firstLine)}.`
+        `line on line 1, and does not. Its first line is not quoted here: a ` +
+        `file with no digest line presents a data row as its first, and this ` +
+        `runs before anything has checked what that row holds.`
     );
   }
 
@@ -1208,33 +1229,43 @@ function dataRowsOf(
   columns: readonly string[],
   blankable: readonly string[]
 ): string[][] {
+  // The very first thing, ahead of the digest and everything after it.
+  //
+  // This guard has now been moved twice, each time one step earlier, because
+  // each time a diagnostic *above* it turned out to quote the file to explain
+  // itself: the header refusal prints the row it found, and `declaredDigest`
+  // printed line 1. Placing it third and then second was fixing instances of a
+  // class. Placing it first is the fix for the class — every check below it
+  // now runs on text that has already been refused if it is contaminated, so a
+  // diagnostic added later inherits the guarantee instead of quietly reopening
+  // the hole.
+  //
+  // It reads the raw text, before the digest is verified, which is why it
+  // reports a physical **line** rather than a row. It cannot speak in rows:
+  // whether line 1 is a digest line or a data row is exactly what is still
+  // unknown here, and that ambiguity is the leak it exists to close.
+  //
+  // A line-level regex test is equivalent to a cell-level one for this pattern
+  // — `EMAIL_SHAPED` excludes commas and quotes, so a match cannot span a cell
+  // boundary — so scanning lines loses no coverage. The column is recovered
+  // afterwards, from that one line alone, purely to point at the cell.
+  const lines = text.split("\n");
+  const line = lines.findIndex((candidate) => EMAIL_SHAPED.test(candidate));
+
+  if (line !== -1) {
+    const cells = parseCsv(lines[line] ?? "")[0] ?? [];
+    const column = cells.findIndex((field) => EMAIL_SHAPED.test(field));
+
+    throw new CatalogueRefreshError(
+      `${file} line ${line + 1}${column === -1 ? "" : `, column ${column + 1}`} ` +
+        `holds something shaped like an email address. Refusing to read ` +
+        `further, and reporting neither the cell nor the line it sits in.`
+    );
+  }
+
   const optional = new Set(blankable);
   const rows = parseCsv(verifiedBody(text, file));
   const [header, ...dataRows] = rows;
-
-  // Ahead of every diagnostic below, for the reason `readSheetTab` runs its
-  // copy first: the header refusal prints the row it found, and the row that
-  // makes it fire is a data row sitting where the header should be. The digest
-  // makes this far less reachable here than there — a file has to verify
-  // against its own contents to get this far — but "less reachable" is the
-  // wrong standard for the guard whose entire job is that member data never
-  // reaches a log, and this reader is the last gate before the artifact leaves
-  // for the repository that joins against members.
-  const emailRow = rows.findIndex((row) =>
-    row.some((f) => EMAIL_SHAPED.test(f))
-  );
-
-  if (emailRow !== -1) {
-    const column = (rows[emailRow] ?? []).findIndex((f) =>
-      EMAIL_SHAPED.test(f)
-    );
-
-    throw new CatalogueRefreshError(
-      `${file} row ${emailRow + 1}, column ${column + 1} holds something ` +
-        `shaped like an email address. Refusing to read further, and ` +
-        `reporting neither the cell nor the row it sits in.`
-    );
-  }
 
   if (
     !header ||

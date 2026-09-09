@@ -1612,16 +1612,68 @@ describe("the disposition table file", () => {
       // which is worth keeping — but a file whose header row is absent hands
       // it a data row to print. The scan runs first so this refuses as
       // contamination rather than as a header, and prints neither.
+      //
+      // A *line*, not a row: the scan reads the raw text before the digest is
+      // verified, so line 1 is the digest line and the contaminated row is
+      // line 2. It cannot number in rows without assuming the file structure
+      // that is precisely what is still in doubt.
       const body =
         `Machine,6240,someone@example.com,v,,plain-text\n` +
         `Machine,6241,Other,Other,,plain-text\n`;
 
       expect(() =>
         readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
-      ).toThrow(/row 1, column 3 holds something shaped like an email/);
+      ).toThrow(/line 2, column 3 holds something shaped like an email/);
       expect(() =>
         readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
       ).toThrow(/^(?!.*someone@example\.com)/s);
+    });
+
+    it("refuses a contaminated file that has no digest line at all", () => {
+      // The earliest reachable diagnostic in the whole read path, and it used
+      // to quote line 1. "No digest line" *means* a data row is line 1, so the
+      // one case that reaches this refusal is the one case where quoting it
+      // prints file content — the two are the same condition, which is what
+      // makes it worth a test rather than a tidy-up.
+      const body =
+        `Machine,6240,someone@example.com,v,,plain-text\n` +
+        `Machine,6241,Other,Other,,plain-text\n`;
+
+      expect(() => readDispositionTable(body)).toThrow(
+        /line 1, column 3 holds something shaped like an email/
+      );
+      expect(() => readDispositionTable(body)).toThrow(
+        /^(?!.*someone@example\.com)/s
+      );
+    });
+
+    it("names no line content when a digest line is merely absent", () => {
+      // The ordinary case, with nothing contaminated in it: the refusal still
+      // has to be useful. It says which file, which line, and exactly what was
+      // expected there — everything except the bytes it found.
+      const body = "user_field_name,legacy_value\nMachine,6240\n";
+
+      expect(() => readDispositionTable(body)).toThrow(
+        /should start with a "# sha256 <64 hex digits>" line on line 1/
+      );
+      expect(() => readDispositionTable(body)).toThrow(
+        /^(?!.*user_field_name,legacy_value)/s
+      );
+    });
+
+    it("redacts for the four commands that ask for a digest directly", () => {
+      // `refresh`, `apply`, `verify` and `build:settings` each call
+      // `declaredDigest` on a file they have just read, without going through
+      // any reader. A guard placed at the top of `dataRowsOf` would cover one
+      // path of the five, so the redaction lives in the function itself.
+      const contaminated = `Machine,6240,someone@example.com,v\n`;
+
+      expect(() => declaredDigest(contaminated, CATALOGUE_FILE)).toThrow(
+        /^(?!.*someone@example\.com)/s
+      );
+      expect(() => declaredDigest(contaminated, CATALOGUE_FILE)).toThrow(
+        /data\/resolved-products\.csv should start with/
+      );
     });
 
     it("refuses two rows claiming the same legacy value", () => {
