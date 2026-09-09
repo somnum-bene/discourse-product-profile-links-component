@@ -622,11 +622,16 @@ replans against whatever the instance now holds.
 
 `pnpm verify:catalogue` asks cpap.com whether the URL behind each of the 137
 Mappings this pipeline ships serves a page — the 55 from the catalogue and the
-82 Collection Links alike. That is 137 Mappings over 65 distinct URLs, and 65
-is the number of requests: the Collection Links point at ten collection pages
-between them, so the pass groups the Mappings sharing a URL, asks each page
-once and files a result under every Mapping in the group. The verdict line
-says both numbers for that reason.
+82 Collection Links alike. That is 137 Mappings over 65 distinct URLs: the
+Collection Links point at ten collection pages between them, so the pass groups
+the Mappings sharing a URL, asks each page once and files a result under every
+Mapping in the group. The verdict line says both numbers for that reason.
+
+65 is the number of request _targets_, not a promise about how many requests go
+out. A URL that answers 429 or times out is retried up to `MAX_ATTEMPTS`, so a
+run that meets the rate limiter asks the same 65 pages more than 65 times — the
+floor is 65 and the ceiling is four times that. A clean run makes exactly 65,
+which is what the last one did.
 
 The collection URLs are included because the two questions are different:
 whether Shopify _admits_ a collection is asked on refresh (ADR-0020), and a

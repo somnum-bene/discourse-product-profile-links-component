@@ -1261,7 +1261,12 @@ describe("what scripts/README.md claims about the reachability pass", () => {
     expect(readme).toContain(
       `${products.length + links.length} Mappings over ${urls.size} distinct URLs`
     );
-    expect(readme).toContain(`and ${urls.size}\nis the number of requests`);
+    // Targets, not requests. A URL answering 429 is retried up to
+    // `MAX_ATTEMPTS`, so 65 is a floor on the request count rather than the
+    // count — the same overstatement the verdict line carried, in prose.
+    expect(readme).toContain(`${urls.size} is the number of request _targets_`);
+    expect(readme).not.toContain(`${urls.size}\nis the number of requests`);
+    expect(readme).toContain("`MAX_ATTEMPTS`");
   });
 
   it("counts the collection pages the 82 links share", () => {
