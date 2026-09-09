@@ -236,9 +236,13 @@ describe("every request this pipeline makes is bounded", () => {
    * The leading character class is what keeps `client.fetch(` and
    * `prefetch(` out: a member call on some other object is a different
    * function, and the global `fetch` is the only one this pipeline has to
-   * bound.
+   * bound. `globalThis.fetch(` is the one member call that *is* that global,
+   * so it is spelled out — excluding it by the same rule that excludes
+   * `client.fetch(` left a standard spelling of the API this sweep exists to
+   * bound invisible, and an unbounded one could be added with the floor
+   * assertion still green.
    */
-  const FETCH_CALL = /(^|[^\w.$])fetch\s*\(/gu;
+  const FETCH_CALL = /(^|[^\w.$])(?:globalThis\.)?fetch\s*\(/gu;
 
   function fetchCallsIn(
     path: string,
@@ -264,11 +268,12 @@ describe("every request this pipeline makes is bounded", () => {
       "const pending = fetch(url, { signal });",
       "  return fetch(url, { signal });",
       "await fetch (url, { signal });",
+      "await globalThis.fetch(url, { signal });",
       "const body = await client.fetch(url);",
       "const cached = prefetch(url);",
     ].join("\n");
 
-    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(3);
+    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(4);
   });
 
   it("parses every call it found, so no scan runs off the end", () => {
