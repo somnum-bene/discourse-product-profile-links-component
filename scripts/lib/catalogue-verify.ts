@@ -365,6 +365,17 @@ export function collectionHandleOf(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * The one spelling of a Collection Link URL the transform will take back.
+ *
+ * `collectionHandleFromUrl` is the far side of this: origin, one path segment,
+ * no trailing slash. Anything a correction recommends has to survive that, so
+ * it is built from the validated handle rather than passed through.
+ */
+export function collectionUrlFor(handle: string): string {
+  return `${COLLECTION_URL_ORIGIN}${pathPrefixOf("collection")}${handle}`;
+}
+
 /** The landing check for whichever sink the entry came from. */
 export function handleOf(kind: EntryKind, url: string): string | null {
   return kind === "product" ? productHandleOf(url) : collectionHandleOf(url);
@@ -501,16 +512,45 @@ export function proposedCorrection(result: VerifyResult): string | null {
     // typed by a curator into the Collection Assignment tab (ADR-0021), and no
     // refresh will ever correct it — telling an operator to re-run one would
     // send them to a command that cannot help.
-    return result.kind === "product"
-      ? `The storefront redirects this to ${result.redirectedTo}. The link ` +
-          `works, so this is not a failure, but the catalogue is carrying a ` +
-          `handle Shopify has moved on from. Re-run pnpm refresh:catalogue and ` +
-          `see whether onlineStoreUrl has caught up.`
-      : `The storefront redirects this to ${result.redirectedTo}. The link ` +
-          `works, so this is not a failure, but the Collection Assignment is ` +
-          `carrying a handle cpap.com has moved on from. This URL is curated ` +
-          `rather than derived (ADR-0021), so a refresh will not correct it — ` +
-          `update the Collection URL in the Sheet.`;
+    if (result.kind === "product") {
+      return (
+        `The storefront redirects this to ${result.redirectedTo}. The link ` +
+        `works, so this is not a failure, but the catalogue is carrying a ` +
+        `handle Shopify has moved on from. Re-run pnpm refresh:catalogue and ` +
+        `see whether onlineStoreUrl has caught up.`
+      );
+    }
+
+    // The URL to paste, not the URL the storefront happened to answer from.
+    //
+    // The two functions do not accept the same strings, and this correction is
+    // read by someone who will type its output into the Sheet.
+    // `collectionHandleOf` allows a trailing slash and ignores a query string,
+    // because a landing URL is whatever the storefront redirected to;
+    // `collectionHandleFromUrl` refuses both, because a Collection Link is one
+    // path segment by Shopify's definition. Recommending the raw landing URL
+    // therefore sends a curator to paste `/collections/apap-machines/` and the
+    // next refresh answers `unadmitted-collection`.
+    const canonical = collectionUrlFor(
+      collectionHandleOf(result.redirectedTo) as string
+    );
+
+    // And when the handle did not change, there is nothing to update. A
+    // redirect that only added a slash is the storefront normalising a URL, not
+    // cpap.com moving a collection, so the Sheet already holds the right value
+    // and a correction here would be busywork with a wrong-looking diff.
+    if (canonical === result.url) {
+      return null;
+    }
+
+    return (
+      `The storefront redirects this to ${result.redirectedTo}. The link ` +
+      `works, so this is not a failure, but the Collection Assignment is ` +
+      `carrying a handle cpap.com has moved on from. This URL is curated ` +
+      `rather than derived (ADR-0021), so a refresh will not correct it — ` +
+      `set the Collection URL in the Sheet to ${canonical}, which is the ` +
+      `spelling the transform accepts.`
+    );
   }
 
   if (result.outcome === "excluded") {
@@ -740,8 +780,12 @@ export function renderVerification(results: readonly VerifyResult[]): string {
   const of = (outcome: VerifyOutcome) =>
     results.filter((result) => result.outcome === outcome);
 
+  // A redirect with nothing to correct — the storefront normalising a slash —
+  // is not listed. The section's title promises a proposed correction, and an
+  // entry printed under it with none reads as a bug in the report.
   const redirected = of("verified").filter(
-    (result) => result.redirectedTo !== undefined
+    (result) =>
+      result.redirectedTo !== undefined && proposedCorrection(result) !== null
   );
 
   return (

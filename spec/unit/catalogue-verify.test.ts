@@ -1,12 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { ProductStatus } from "../../scripts/lib/build-catalogue";
+import {
+  collectionHandleFromUrl,
+  type ProductStatus,
+} from "../../scripts/lib/build-catalogue";
 import {
   type Attempt,
   BACKOFF_MS,
   CatalogueVerifyError,
   classifyAttempt,
   collectionHandleOf,
+  collectionUrlFor,
   delayBeforeAttempt,
   handleOf,
   isEligible,
@@ -877,6 +881,72 @@ describe("what the verify pass is allowed to be part of", () => {
 
     expect(guardAt).toBeGreaterThan(-1);
     expect(mergeAt).toBeGreaterThan(guardAt);
+  });
+});
+
+describe("the correction offered for a redirected Collection Link", () => {
+  const redirectedTo = (finalUrl: string) =>
+    resultFrom(link({}), [
+      { kind: "answered" as const, status: 200, finalUrl },
+    ]);
+
+  it("recommends a URL the transform will accept back", () => {
+    // The two handle readers do not accept the same strings.
+    // `collectionHandleOf` allows the trailing slash a storefront redirect
+    // adds; `collectionHandleFromUrl` refuses it, because a Collection Link is
+    // one path segment. Pasting the raw landing URL into the Sheet is how the
+    // next refresh answers `unadmitted-collection`.
+    const correction = proposedCorrection(
+      redirectedTo("https://www.cpap.com/collections/travel-cpap-machines/")
+    );
+
+    expect(correction).toContain(
+      "set the Collection URL in the Sheet to " +
+        "https://www.cpap.com/collections/travel-cpap-machines,"
+    );
+    expect(
+      collectionHandleFromUrl(collectionUrlFor("travel-cpap-machines"))
+    ).toBe("travel-cpap-machines");
+  });
+
+  it("drops the query string a landing URL carried", () => {
+    const correction = proposedCorrection(
+      redirectedTo(
+        "https://www.cpap.com/collections/travel-cpap-machines?utm_source=x"
+      )
+    );
+
+    // The landing URL is still quoted as what the storefront answered from —
+    // that is the diagnosis. What must be clean is the URL it tells a curator
+    // to type.
+    expect(correction).toContain(
+      "set the Collection URL in the Sheet to " +
+        "https://www.cpap.com/collections/travel-cpap-machines,"
+    );
+  });
+
+  it("proposes nothing when only the slash changed", () => {
+    // Same handle, so the Sheet already holds the right value. A correction
+    // here is busywork with a wrong-looking diff.
+    expect(proposedCorrection(redirectedTo(`${link({}).url}/`))).toBeNull();
+  });
+
+  it("keeps that entry out of the section that promises one", () => {
+    const report = renderVerification([redirectedTo(`${link({}).url}/`)]);
+
+    expect(report).toContain("verified   1");
+    expect(report).not.toContain("verified, with a proposed correction");
+  });
+
+  it("still proposes one when the handle actually moved", () => {
+    const moved = redirectedTo(
+      "https://www.cpap.com/collections/travel-cpap-machines"
+    );
+
+    expect(proposedCorrection(moved)).toContain("travel-cpap-machines");
+    expect(renderVerification([moved])).toContain(
+      "verified, with a proposed correction"
+    );
   });
 });
 
