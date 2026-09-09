@@ -1,20 +1,31 @@
 // The Collection Assignment gate. Exits non-zero while any committed row is
-// `undecided`, and names every one so the fix is obvious without hunting. Run
-// it with `pnpm check:collection-assignment`.
+// `undecided`, or while any legacy value earned a Collection Link and did not
+// get one, and locates every one so the fix is obvious without hunting. Run it
+// with `pnpm check:collection-assignment`.
 //
-// A Catalogue Refresh reports `undecided` rows but stays green while they
-// exist — deliberately, because its exit code is a statement about Shopify and
-// the Sheet, which move without anyone committing anything. This check is a
-// statement about the repository instead: it reads only the committed Sheet
-// Export, so it needs no credentials and no network, which is what lets it run
-// in CI and as a pre-commit hook beside `build:settings --check`.
+// Two halves, because `undecided` alone leaves a hole. `undecided` only exists
+// where a curator typed the word; a value that newly starts earning a link has
+// no assignment row at all, and an absent row types nothing. The second half
+// reads the disposition table, where that case lands as a
+// `collection-link-fault`.
+//
+// A Catalogue Refresh reports both but stays green while they exist —
+// deliberately, because its exit code is a statement about Shopify and the
+// Sheet, which move without anyone committing anything. This check is a
+// statement about the repository instead: it reads only committed files, so it
+// needs no credentials and no network, which is what lets it run in CI and as
+// a pre-commit hook beside `build:settings --check`.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import {
   CatalogueRefreshError,
+  COLLECTION_LINK_FAULT,
+  DISPOSITION_FILE,
+  readDispositionTable,
   undecidedAssignments,
+  unfinishedCollectionLinks,
 } from "./lib/catalogue-refresh.ts";
 import {
   ASSIGNMENT_TABS,
@@ -66,9 +77,29 @@ async function main(): Promise<void> {
     );
   }
 
+  const faults = unfinishedCollectionLinks(
+    readDispositionTable(await readFile(DISPOSITION_FILE, "utf8"))
+  );
+
+  if (faults.length > 0) {
+    throw new CatalogueRefreshError(
+      `${faults.length} legacy ${faults.length === 1 ? "value" : "values"} ` +
+        `earned a Collection Link and did not get one, ` +
+        `${faults.length === 1 ? "it is" : "they are"} named below. ` +
+        `A \`${COLLECTION_LINK_FAULT}\` row is the pipeline unable to finish a job it was ` +
+        `asked to do, so it blocks the release for the same reason an ` +
+        `\`undecided\` row does — a member holding one of these values gets ` +
+        `no Profile Link at all, which is the outcome ADR-0021 rejected:\n` +
+        faults
+          .map((row) => `  - ${row.userFieldName} \`Value\` ${row.legacyValue}`)
+          .join("\n")
+    );
+  }
+
   process.stdout.write(
     `${assignments.length} Collection Assignment ` +
-      `${assignments.length === 1 ? "row" : "rows"}, none \`undecided\`.\n`
+      `${assignments.length === 1 ? "row" : "rows"}, none \`undecided\`. ` +
+      `No \`${COLLECTION_LINK_FAULT}\` row in \`${DISPOSITION_FILE}\`.\n`
   );
 }
 

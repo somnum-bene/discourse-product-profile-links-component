@@ -614,6 +614,38 @@ export function undecidedAssignments(
   });
 }
 
+/** The disposition a legacy value carries when it earned a link and has none. */
+export const COLLECTION_LINK_FAULT = "collection-link-fault";
+
+/**
+ * The rows of the disposition table that earned a Collection Link and did not
+ * get one — the other half of the gate `undecidedAssignments` opens, and the
+ * half that catches the case an `undecided` row cannot.
+ *
+ * `undecided` is a curator saying nobody has looked yet, so it only ever exists
+ * where somebody typed the word. A legacy value that newly starts earning a
+ * Collection Link — a product Shopify stops selling six months from now — has
+ * no Collection Assignment row at all, and an absent row types nothing. It
+ * derives `unassigned-legacy-value`, lands here as a `collection-link-fault`,
+ * and every other gate stays green: a Catalogue Refresh reports it and exits
+ * zero on purpose, and the assignment half of the check reads the curated tab,
+ * where the row it is looking for does not exist.
+ *
+ * The result is the exact outcome ADR-0021 says was rejected — a newly
+ * discontinued product silently degrading to no Profile Link, "with nothing to
+ * show it had". This is the something to show it.
+ *
+ * Every one of the nine `CollectionLinkProblem`s reaches the table under this
+ * one disposition and every one of them means the same thing, so the gate
+ * blocks on the disposition rather than enumerating the reasons behind it: a
+ * tenth added later is covered without being listed.
+ */
+export function unfinishedCollectionLinks(
+  rows: readonly DispositionRow[]
+): DispositionRow[] {
+  return rows.filter((row) => row.disposition === COLLECTION_LINK_FAULT);
+}
+
 /** One request asking whether Shopify admits each collection in a batch. */
 export function collectionsByHandleQuery(handles: readonly string[]): string {
   return byHandleQuery(COLLECTION_LOOKUP, handles);

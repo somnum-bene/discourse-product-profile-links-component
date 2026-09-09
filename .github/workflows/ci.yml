@@ -61,5 +61,5 @@ jobs:
       # about Shopify, so it lives here rather than in refresh:catalogue's exit
       # code. Needs no credentials either, for the same reason build:settings
       # doesn't.
-      - name: no Collection Assignment row is still undecided
+      - name: no Collection Assignment row is undecided or unfinished
         run: pnpm check:collection-assignment

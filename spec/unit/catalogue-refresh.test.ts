@@ -49,6 +49,7 @@ import {
   surveyPageFromResponse,
   TOKEN_VAR,
   undecidedAssignments,
+  unfinishedCollectionLinks,
 } from "../../scripts/lib/catalogue-refresh";
 import {
   ASSIGNMENT_TABS,
@@ -548,6 +549,72 @@ describe("collectionHandlesFrom", () => {
 
     expect(undisposed.length).toBeGreaterThan(0);
     expect(collectionHandlesFrom(undisposed)).toEqual([]);
+  });
+});
+
+describe("unfinishedCollectionLinks", () => {
+  const dispositionRow = (
+    legacyValue: string,
+    disposition: string
+  ): DispositionRow =>
+    ({
+      userFieldName: "Machine",
+      legacyValue,
+      legacyText: "DreamStation CPAP Machine",
+      value: disposition === "collection" ? "Something (Discontinued)" : "",
+      url:
+        disposition === "collection"
+          ? "https://www.cpap.com/collections/cpap-machines"
+          : "",
+      disposition,
+    }) as DispositionRow;
+
+  it("flags a value that earned a Collection Link and did not get one", () => {
+    // The case an `undecided` row cannot catch: nobody typed `undecided`,
+    // because nobody typed anything — there is no Collection Assignment row
+    // for this value at all. It reaches the table as `collection-link-fault`.
+    const fault = dispositionRow("9999", "collection-link-fault");
+
+    const rows = [
+      dispositionRow("5022", "collection"),
+      dispositionRow("5023", "plain-text"),
+      dispositionRow("5024", "resolves-to-product"),
+      fault,
+    ];
+
+    expect(unfinishedCollectionLinks(rows)).toEqual([fault]);
+  });
+
+  it("does not flag a row that carries a decision", () => {
+    // A `plain-text` row is a curator saying no link on purpose, and a
+    // `resolves-to-product` row was never a Collection Link candidate. Neither
+    // is the pipeline failing to finish a job, so neither blocks a release.
+    const rows = [
+      dispositionRow("5022", "collection"),
+      dispositionRow("5023", "plain-text"),
+      dispositionRow("5024", "resolves-to-product"),
+    ];
+
+    expect(unfinishedCollectionLinks(rows)).toEqual([]);
+  });
+
+  it("passes an empty table, which does not by itself prove the check works", () => {
+    // Pinned separately for the same reason the sibling above is: "no faults"
+    // and "no rows at all" both return `[]`, and a suite asserting only the
+    // empty case would pass against a function that never detected anything.
+    expect(unfinishedCollectionLinks([])).toEqual([]);
+  });
+
+  it("is green on the committed disposition table", () => {
+    // The gate has to be green on the data as it ships, or it is a gate
+    // nobody can land anything past. This is also what makes the three tests
+    // above non-vacuous: the fault they detect is one this file constructs,
+    // not one the repository already carries.
+    const committed = readFileSync(DISPOSITION_FILE, "utf8");
+
+    expect(unfinishedCollectionLinks(readDispositionTable(committed))).toEqual(
+      []
+    );
   });
 });
 
