@@ -581,11 +581,18 @@ export function collectionHandlesFrom(
 /**
  * The Collection Assignment rows still `undecided`, in Sheet order. `undecided`
  * is an absence of evidence rather than a preference, so it blocks a release
- * the way an Unresolved URL does (ADR-0021) — but that gate belongs on the
- * committed files, not on a Catalogue Refresh's exit code, which stays zero on
- * purpose (see `refresh-catalogue.ts`). This is what a standalone check runs
- * over `data/collection-assignment.csv` alone, with no Shopify call and no
- * Excluded Product to join against.
+ * the way an Unresolved URL does (ADR-0021), and it blocks in both places: a
+ * Catalogue Refresh exits non-zero when the Sheet it just read holds one
+ * (issue #38, see `refresh-catalogue.ts`), and the standalone check exits
+ * non-zero when the committed file does. A refresh still exits zero for the
+ * drift faults — `unassigned-legacy-value`, `unadmitted-collection`,
+ * `stale-product-resolution`, `curation-disagreement` — which are reported and
+ * deliberately not fatal, because they describe a Sheet that has moved rather
+ * than a decision nobody has made.
+ *
+ * This function is what both of them ask. The standalone check runs it over
+ * `data/collection-assignment.csv` alone, with no Shopify call and no Excluded
+ * Product to join against.
  *
  * A `switch` rather than `=== "undecided"`, so a fifth `Disposition` added to
  * `DISPOSITIONS` fails to compile here instead of silently reading as decided.

@@ -731,6 +731,20 @@ describe("unfinishedCollectionLinks", () => {
 });
 
 describe("undecidedAssignments", () => {
+  it("is not documented as belonging only to the committed-file gate", () => {
+    // The docblock said the gate belongs on the committed files and that a
+    // Catalogue Refresh's exit code "stays zero on purpose" — the opposite of
+    // what the command now does for `undecided`. A contract that contradicts
+    // the caller is worse than no contract: the next person adding a caller
+    // reads it and reasons from the wrong half.
+    const library = readFileSync("scripts/lib/catalogue-refresh.ts", "utf8");
+    const refresh = readFileSync("scripts/refresh-catalogue.ts", "utf8");
+
+    expect(refresh).toContain('fault.problem === "undecided-disposition"');
+    expect(library).not.toContain("stays zero on\n * purpose");
+    expect(library).not.toContain("which stays zero");
+  });
+
   it("flags only the rows still undecided", () => {
     // All four words the schema allows, one row each, so a decided disposition
     // slipping through would be caught here rather than by an accident of
