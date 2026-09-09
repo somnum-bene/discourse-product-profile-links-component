@@ -1,4 +1,4 @@
-# sha256 10b505f91906ce3b69e5ea463b7dc1d910eed1a8bc2952290bc37ac707e94b2f
+# sha256 977342b8f6fd96811cbbb87295fa641fb2d1893835e6b7f082d193ae92de88d3
 user_field_name,legacy_value,legacy_text,value,url,disposition
 Machine,4068,PR System One REMStar 60 Series Auto CPAP Machine,PR System One REMStar 60 Series Auto CPAP Machine (Discontinued),https://www.cpap.com/collections/apap-machines,collection
 Machine,4799,AirSense 10 CPAP Machine with HumidAir Heated Humidifier,AirSense 10 CPAP with HumidAir (Discontinued),https://www.cpap.com/collections/cpap-machines,collection
@@ -6,7 +6,7 @@ Machine,4800,AirSense 10 Elite CPAP Machine with HumidAir Heated Humidifier,AirS
 Machine,4801,ResMed AirSense 10 AutoSet CPAP Machine with HumidAir Heated Humidifier,AirSense 10 AutoSet with HumidAir,https://www.cpap.com/products/resmed-airsense-10-autoset-cpap-machine-with-humidair-heated-humidifier-and-climateline,resolves-to-product
 Machine,4808,AirSense 10 AutoSet Connected Tripack,AirSense 10 AutoSet with HumidAir,https://www.cpap.com/products/resmed-airsense-10-autoset-cpap-machine-with-humidair-heated-humidifier-and-climateline,resolves-to-product
 Machine,4872,AirCurve 10 VAuto BiLevel Machine with HumidAir Heated Humidifier,AirCurve 10 VAuto BiLevel Machine,https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine,resolves-to-product
-Machine,5022,DreamStation CPAP Machine,DreamStation CPAP Machine (Discontinued),https://www.cpap.com/collections/cpap-machines,collection
+Machine,5022,DreamStation CPAP Machine,DreamStation CPAP Machine (Discontinued),https://www.cpap.com/collections/apap-machines,collection
 Machine,5024,DreamStation Auto CPAP Machine,DreamStation Auto CPAP Machine (Discontinued),https://www.cpap.com/collections/apap-machines,collection
 Machine,5026,DreamStation BiPAP® Auto Machine,DreamStation BiPAP® Auto Machine (Discontinued),https://www.cpap.com/collections/bipap-machines,collection
 Machine,5062,DreamStation BiPAP Pro Machine with Heated Humidifier Core,DreamStation BiPAP Pro Machine with Heated Humidifier Core (Discontinued),https://www.cpap.com/collections/bipap-machines,collection
