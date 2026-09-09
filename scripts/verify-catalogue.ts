@@ -33,6 +33,7 @@ import {
   type Attempt,
   CatalogueVerifyError,
   delayBeforeAttempt,
+  entriesByUrl,
   isEligible,
   MAX_ATTEMPTS,
   PACE_MS,
@@ -96,27 +97,54 @@ async function main(): Promise<void> {
     })),
   ];
 
+  // Asked once per URL, answered for every Mapping that carries it. Collection
+  // Links share a page by design — 82 committed rows over 10 collections — and
+  // the pass used to request each one, which is a minute of pacing spent
+  // re-asking a question already answered and 72 avoidable hits on a rate
+  // limiter this repository does not own.
+  const grouped = entriesByUrl(entries);
+
   process.stdout.write(
     `catalogue: ${declaredDigest(catalogueText, CATALOGUE_FILE)}\n` +
       `links:     ${declaredDigest(linksText, COLLECTION_LINKS_FILE)}\n` +
-      `${entries.length} URLs (${catalogue.length} products, ` +
-      `${collectionLinks.length} collections), one request at a time, ` +
-      `${PACE_MS}ms apart, up to ${MAX_ATTEMPTS} attempts each\n\n`
+      `${entries.length} Mappings (${catalogue.length} products, ` +
+      `${collectionLinks.length} collections) over ${grouped.size} distinct ` +
+      `URLs, one request at a time, ${PACE_MS}ms apart, up to ` +
+      `${MAX_ATTEMPTS} attempts each\n\n`
   );
 
   const results: VerifyResult[] = [];
+  let requested = 0;
 
-  for (const [index, entry] of entries.entries()) {
-    if (index > 0 && isEligible(entry)) {
+  for (const [index, [url, sharing]] of [...grouped].entries()) {
+    // Eligibility is a property of the entry, not of the URL, so it is asked of
+    // each one again below. A group nothing in it is eligible for is never
+    // requested at all, which is what keeps an excluded product silent here.
+    const eligible = sharing.some((entry) => isEligible(entry));
+
+    if (eligible && requested > 0) {
       await sleep(PACE_MS);
     }
 
-    const result = await verify(entry);
+    const attempts = eligible ? await attemptsFor(url) : [];
 
-    results.push(result);
+    if (eligible) {
+      requested += 1;
+    }
+
+    const groupResults = sharing.map((entry) =>
+      resultFrom(entry, isEligible(entry) ? attempts : [])
+    );
+
+    results.push(...groupResults);
+
+    const shown = groupResults[0] as VerifyResult;
+
     process.stdout.write(
-      `${`${index + 1}`.padStart(3)}/${entries.length} ` +
-        `${result.outcome.padEnd(10)} ${result.status ?? "—"} ${result.url}\n`
+      `${`${index + 1}`.padStart(3)}/${grouped.size} ` +
+        `${shown.outcome.padEnd(10)} ${shown.status ?? "—"} ${url}` +
+        (sharing.length > 1 ? ` (${sharing.length} Mappings)` : "") +
+        `\n`
     );
   }
 
@@ -127,21 +155,23 @@ async function main(): Promise<void> {
   }
 }
 
-/** One entry, asked for as many times as the retry policy allows. */
-async function verify(entry: VerifyEntry): Promise<VerifyResult> {
-  if (!isEligible(entry)) {
-    return resultFrom(entry, []);
-  }
-
+/**
+ * One URL, asked for as many times as the retry policy allows.
+ *
+ * Attempts rather than a result: the answer belongs to the URL and the verdict
+ * belongs to the entry, and since several Mappings can share one URL, the
+ * judgement has to be made once per Mapping from the attempts made once.
+ */
+async function attemptsFor(url: string): Promise<Attempt[]> {
   const attempts: Attempt[] = [];
 
   for (;;) {
-    const attempt = await request(entry.url);
+    const attempt = await request(url);
 
     attempts.push(attempt);
 
     if (!shouldRetry(attempt, attempts.length)) {
-      return resultFrom(entry, attempts);
+      return attempts;
     }
 
     const asked =

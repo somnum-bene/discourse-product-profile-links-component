@@ -189,6 +189,39 @@ export function refuseEmptyCatalogue(productCount: number): void {
 }
 
 /**
+ * The entries grouped by the URL they share, in first-appearance order.
+ *
+ * The two sinks are not shaped alike here. Every product resolves to its own
+ * handle, so the catalogue's URLs are distinct by construction; a Collection
+ * Link is a whole range of discontinued equipment pointed at one collection
+ * page, so many Mappings share one URL on purpose — the committed 82 rows carry
+ * 10 distinct URLs between them. Asking cpap.com the same question 72 extra
+ * times is about a minute of pacing spent on answers already in hand, and 72
+ * avoidable hits on a rate limiter belonging to somebody else.
+ *
+ * Grouping is only about the requests. Every entry still gets its own
+ * `VerifyResult`, because a Mapping is what ships and a report that collapsed
+ * them would name a URL where an operator needs a `Field` and a `Value`.
+ */
+export function entriesByUrl(
+  entries: readonly VerifyEntry[]
+): Map<string, VerifyEntry[]> {
+  const grouped = new Map<string, VerifyEntry[]>();
+
+  for (const entry of entries) {
+    const sharing = grouped.get(entry.url);
+
+    if (sharing === undefined) {
+      grouped.set(entry.url, [entry]);
+    } else {
+      sharing.push(entry);
+    }
+  }
+
+  return grouped;
+}
+
+/**
  * Whether a catalogue entry is eligible to be requested at all.
  *
  * Shopify's verdict travels in the catalogue's `status` column, so this needs no

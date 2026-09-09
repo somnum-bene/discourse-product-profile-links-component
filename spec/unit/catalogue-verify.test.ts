@@ -12,6 +12,7 @@ import {
   collectionHandleOf,
   collectionUrlFor,
   delayBeforeAttempt,
+  entriesByUrl,
   handleOf,
   isEligible,
   MAX_ATTEMPTS,
@@ -861,7 +862,7 @@ describe("what the verify pass is allowed to be part of", () => {
       command.indexOf("const results: VerifyResult[]")
     );
 
-    expect(loop).toContain("entries.entries()");
+    expect(loop).toContain("[...grouped].entries()");
     expect(command).toMatch(/const entries: VerifyEntry\[\] = \[/);
     expect(command).toContain("...collectionLinks.map(");
 
@@ -870,6 +871,23 @@ describe("what the verify pass is allowed to be part of", () => {
     // this file would otherwise reintroduce silently.
     expect(command).toContain('kind: "product" as const');
     expect(command).toContain('kind: "collection" as const');
+  });
+
+  it("requests each distinct URL once and judges each Mapping", () => {
+    // The saving has to be in the requests and nowhere else: one `attemptsFor`
+    // per group, and a `resultFrom` per entry in it.
+    expect(command).toContain("const grouped = entriesByUrl(entries)");
+    expect(command).toContain("await attemptsFor(url)");
+    expect(command).toContain("sharing.map((entry) =>");
+    expect(command).toContain(
+      "resultFrom(entry, isEligible(entry) ? attempts : [])"
+    );
+
+    // One request per group, paced against the previous request rather than
+    // the previous entry — pacing off `index` would sleep 750ms for a URL it
+    // never asked about.
+    expect(command).toContain("eligible && requested > 0");
+    expect(command).not.toContain("index > 0 && isEligible(entry)");
   });
 
   it("counts the catalogue before the two sinks become one list", () => {
@@ -881,6 +899,72 @@ describe("what the verify pass is allowed to be part of", () => {
 
     expect(guardAt).toBeGreaterThan(-1);
     expect(mergeAt).toBeGreaterThan(guardAt);
+  });
+});
+
+describe("the URLs a pass actually requests", () => {
+  it("asks a shared page once and answers for every Mapping on it", () => {
+    // 82 committed Collection Links over 10 collections. The pass used to
+    // request each row, which is 72 answers already in hand, about a minute of
+    // pacing, and 72 avoidable hits on somebody else's rate limiter.
+    const shared = [
+      link({ value: "DreamStation CPAP Machine (Discontinued)" }),
+      link({ value: "DreamStation Go (Discontinued)" }),
+      link({
+        value: "AirMini (Discontinued)",
+        url: "https://www.cpap.com/collections/travel-cpap-machines",
+      }),
+    ];
+    const grouped = entriesByUrl(shared);
+
+    expect(grouped.size).toBe(2);
+    expect(grouped.get(link({}).url)).toHaveLength(2);
+    expect(
+      grouped.get("https://www.cpap.com/collections/travel-cpap-machines")
+    ).toHaveLength(1);
+  });
+
+  it("keeps the order the entries arrived in", () => {
+    // Products first, then collections, is the order the command builds and the
+    // order the progress lines read in. Grouping is not licence to reshuffle.
+    const grouped = entriesByUrl([
+      entry(),
+      link({}),
+      { ...entry(), url: "https://www.cpap.com/products/airsense-10" },
+    ]);
+
+    expect([...grouped.keys()]).toEqual([
+      entry().url,
+      link({}).url,
+      "https://www.cpap.com/products/airsense-10",
+    ]);
+  });
+
+  it("still produces one result per Mapping, not per URL", () => {
+    // What ships is a Mapping. A report that collapsed them would name a URL
+    // where an operator needs a `Field` and a `Value`.
+    const sharing = [
+      link({ value: "DreamStation CPAP Machine (Discontinued)" }),
+      link({ value: "DreamStation Go (Discontinued)" }),
+    ];
+    const attempts = [
+      { kind: "answered" as const, status: 200, finalUrl: link({}).url },
+    ];
+    const results = sharing.map((entryOnPage) =>
+      resultFrom(entryOnPage, attempts)
+    );
+
+    expect(results.map((shipped) => shipped.value)).toEqual([
+      "DreamStation CPAP Machine (Discontinued)",
+      "DreamStation Go (Discontinued)",
+    ]);
+    expect(summarize(results).verified).toBe(2);
+  });
+
+  it("groups nothing that is not actually the same URL", () => {
+    const grouped = entriesByUrl([link({}), link({ url: `${link({}).url}/` })]);
+
+    expect(grouped.size).toBe(2);
   });
 });
 
