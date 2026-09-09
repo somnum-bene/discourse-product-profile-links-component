@@ -55,11 +55,18 @@ jobs:
       - name: settings.yml matches the catalogue and the Collection Links
         run: pnpm build:settings --check
 
-      # The release gate. An `undecided` Collection Assignment row is an
-      # absence of evidence, not a preference, and blocks the way an Unresolved
-      # URL does (ADR-0021) — but that is a fact about the repository, not
-      # about Shopify, so it lives here rather than in refresh:catalogue's exit
-      # code. Needs no credentials either, for the same reason build:settings
+      # The release gate on the committed files. An `undecided` Collection
+      # Assignment row is an absence of evidence, not a preference, and blocks
+      # the way an Unresolved URL does (ADR-0021); a value that earned a
+      # Collection Link and did not get one blocks for the same reason.
+      #
+      # refresh:catalogue also exits non-zero on `undecided`, so that half is
+      # defence in depth — this catches the row that is committed, which is a
+      # different question from the row a refresh happened to see, because
+      # nobody has to run a refresh before merging. The unfinished half is
+      # gated only here: a refresh stays green on it because it is drift.
+      #
+      # Needs no credentials either, for the same reason build:settings
       # doesn't.
       - name: no Collection Assignment row is undecided or unfinished
         run: pnpm check:collection-assignment

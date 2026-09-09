@@ -9,12 +9,21 @@
 // reads the disposition table, where that case lands as a
 // `collection-link-fault`.
 //
-// A Catalogue Refresh reports both but stays green while they exist —
-// deliberately, because its exit code is a statement about Shopify and the
-// Sheet, which move without anyone committing anything. This check is a
-// statement about the repository instead: it reads only committed files, so it
-// needs no credentials and no network, which is what lets it run in CI and as
-// a pre-commit hook beside `build:settings --check`.
+// A Catalogue Refresh now goes red on `undecided` too — #38 names that command
+// as well — so this is not the only thing standing between an undecided row and
+// a release. It is the thing standing between an undecided *committed* row and
+// one, which is a different question: a refresh reports on the Sheet as it was
+// the moment it ran, and nobody has to run one before merging.
+//
+// A `collection-link-fault` is not gated there at all. A refresh stays green on
+// it deliberately, because it is drift — a product retiring at Shopify creates
+// one through nobody's action, and a command that failed every time the
+// catalogue moved is a command people stop reading. It blocks here instead,
+// where the fault is a committed file rather than a passing observation.
+//
+// Either way this is a statement about the repository: it reads only committed
+// files, so it needs no credentials and no network, which is what lets it run
+// in CI and as a pre-commit hook beside `build:settings --check`.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

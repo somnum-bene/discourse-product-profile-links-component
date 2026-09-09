@@ -93,12 +93,17 @@ repos:
         pass_filenames: false
         files: ^settings\.yml$|^data/(resolved-products|collection-links)\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
 
-      # The release gate. `undecided` blocks the way an Unresolved URL does
-      # (ADR-0021), and so does a value that earned a Collection Link and did
-      # not get one — the case no curator typed a word for. Both are facts
-      # about committed files rather than about Shopify, so they run here
-      # rather than gating refresh:catalogue's exit code. No network, no
-      # credentials — the same reason build-settings above can run as a hook.
+      # The release gate on the committed files. `undecided` blocks the way an
+      # Unresolved URL does (ADR-0021), and so does a value that earned a
+      # Collection Link and did not get one — the case no curator typed a word
+      # for.
+      #
+      # refresh:catalogue exits non-zero on `undecided` as well, so that half
+      # is defence in depth: this asks about the committed row rather than the
+      # one a refresh saw, and nobody has to run a refresh before committing.
+      # The unfinished half is gated only here, because a refresh stays green
+      # on drift by design. No network, no credentials — the same reason
+      # build-settings above can run as a hook.
       #
       # `disposition-table.csv` is in `files` because the second half of the
       # gate reads it: a refresh that lands a new fault row has to trip the
