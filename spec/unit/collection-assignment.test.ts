@@ -166,7 +166,17 @@ describe("the committed Collection Assignment", () => {
 
       return readSheetTab(tab, committedExport(tab))
         .map((row) => row[valueAt] ?? "")
-        .filter((value) => !seen.add(value))
+        .filter((value) => {
+          // `seen.add(value)` returns the Set, which is always truthy, so
+          // `!seen.add(value)` was always `false` and this filter returned
+          // nothing whatever the export held. `Set.prototype.has` before the
+          // add is what actually asks the question.
+          const duplicate = seen.has(value);
+
+          seen.add(value);
+
+          return duplicate;
+        })
         .map((value) => `${tab.userFieldName}: PNum ${value}`);
     });
 
