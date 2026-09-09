@@ -9,6 +9,7 @@ import {
   type CollectionLink,
   type DispositionRow,
   type ProductRecord,
+  type ProductStatus,
   type ResolvedProduct,
   type SheetRow,
   undeliveredValues,
@@ -549,6 +550,56 @@ describe("collectionHandlesFrom", () => {
 
     expect(undisposed.length).toBeGreaterThan(0);
     expect(collectionHandlesFrom(undisposed)).toEqual([]);
+  });
+});
+
+describe("the two writers beside the disposition table", () => {
+  it("refuses to write a Collection Link its reader would reject", () => {
+    // The reader insists every value carries `COLLECTION_LINK_SUFFIX`. Without
+    // the round-trip the writer emitted this happily, `refresh-catalogue.ts`
+    // committed it, and the refusal fired on the next read — leaving the
+    // repository holding a regenerated catalogue beside a links file no
+    // command can load.
+    expect(() =>
+      collectionLinksCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirCurve 11 ASV",
+          url: "https://www.cpap.com/collections/bipap-machines",
+        },
+      ])
+    ).toThrow(CatalogueRefreshError);
+  });
+
+  it("writes one its reader accepts", () => {
+    // Non-vacuity for the test above: the same shape with the suffix passes,
+    // so the refusal is about the rule and not about writing at all.
+    expect(() =>
+      collectionLinksCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirCurve 11 ASV (Discontinued)",
+          url: "https://www.cpap.com/collections/bipap-machines",
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses to write a catalogue entry its reader would reject", () => {
+    // `readResolvedProducts` holds `status` to Shopify's vocabulary, so that
+    // is the rule this round-trip picks up. A derivation emitting a status the
+    // reader has no word for used to be written and refused afterwards.
+    expect(() =>
+      resolvedProductsCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirSense 11 AutoSet",
+          handle: "airsense-11-autoset",
+          status: "RETIRED" as ProductStatus,
+          url: "https://www.cpap.com/products/airsense-11-autoset",
+        },
+      ])
+    ).toThrow(CatalogueRefreshError);
   });
 });
 

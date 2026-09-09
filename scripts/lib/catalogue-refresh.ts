@@ -803,8 +803,20 @@ export function resolvedProductsCsv(
     ])
   );
   const body = `${[csvLine([...CATALOGUE_COLUMNS]), ...rows].join("\n")}\n`;
+  const text = `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
 
-  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+  // Held to its reader, for the reason `dispositionTableCsv` is. A writer
+  // enforcing a subset of its reader's rules is a gate that reports success on
+  // the way out and failure on the way in, and the file in between is already
+  // committed — `refresh-catalogue.ts` writes this one first, so a file the
+  // reader would reject leaves the repository holding a regenerated catalogue
+  // that no later command can load.
+  //
+  // Round-tripped rather than restating the rules, so the two cannot drift:
+  // whatever `readResolvedProducts` insists on is what this refuses to emit.
+  readResolvedProducts(text);
+
+  return text;
 }
 
 /**
@@ -819,8 +831,15 @@ export function collectionLinksCsv(
     csvLine([entry.userFieldName, entry.value, entry.url])
   );
   const body = `${[csvLine([...COLLECTION_LINK_COLUMNS]), ...rows].join("\n")}\n`;
+  const text = `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
 
-  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+  // Same round-trip, same reason. This reader is the stricter of the two: it
+  // holds every value to carrying `COLLECTION_LINK_SUFFIX` and every URL to
+  // being a cpap.com collection URL, and a derivation change that broke either
+  // would otherwise be written here and only refused on the next read.
+  readCollectionLinks(text);
+
+  return text;
 }
 
 /**
