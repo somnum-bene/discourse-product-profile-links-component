@@ -267,6 +267,17 @@ all the same kind of thing:
   licence to echo a row: a name goes straight through. Coordinates locate a
   cell exactly and carry nothing, which is why that is all any refusal gives.
 
+  *Any* refusal, and the rule needs stating that widely because the columns it
+  protects are not the ones intent would suggest. `legacy_text` is free text a
+  curator typed into a bulletin board, carried verbatim (ADR-0023), and on an
+  unlinked row `value` is a copy of it — so a contaminated cell lands in the
+  two columns the pairing rules are about. Which of the six a refusal may quote
+  is not a judgement worth making per rule, so none of them quotes any: the
+  coordinates come from `columnAt`, and a test reads the validators' own source
+  to keep `JSON.stringify` out of them, alongside a table that drives every
+  refusal with a name and asserts none of them prints it. A name rather than an
+  email, because the tripwire would otherwise be what passed the test.
+
   Every rule below is checked on read as well as on write, by one shared
   validator rather than two that agree until they drift.
 

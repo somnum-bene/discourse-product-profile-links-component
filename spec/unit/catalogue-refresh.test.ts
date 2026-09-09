@@ -54,6 +54,7 @@ import {
   ASSIGNMENT_TABS,
   type AssignmentRow,
   assignmentRowsFrom,
+  EMAIL_SHAPED,
   exportFileName,
   SHEET_TABS,
   sheetRowsFrom,
@@ -886,7 +887,7 @@ describe("the catalogue file", () => {
 
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/unexpected header row/);
+    ).toThrow(/line 2 should be the header row/);
   });
 
   it("refuses a row that is not as wide as the header says", () => {
@@ -1071,7 +1072,7 @@ describe("the collection-links file", () => {
 
     expect(() =>
       readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/unexpected header row/);
+    ).toThrow(/line 2 should be the header row/);
   });
 
   it("refuses a row with an empty field", () => {
@@ -1284,7 +1285,7 @@ describe("the disposition table file", () => {
     const body = `${HEADER}\nMask,3005,Unlisted mask,Unlisted mask,,retired\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
-      /"retired", which is not one of/
+      /column 6 \(`disposition`\) is not one of/
     );
   });
 
@@ -1302,7 +1303,7 @@ describe("the disposition table file", () => {
     const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv,${CPAP_MACHINES},plain-text\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
-      /`plain-text` and carries the URL/
+      /`plain-text` and its column 5 \(`url`\) is not empty/
     );
   });
 
@@ -1313,7 +1314,7 @@ describe("the disposition table file", () => {
     const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv (Discontinued),,plain-text\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
-      /carries no URL, so its value has to be the legacy display text/
+      /carries no URL, so its column 4 \(`value`\) has to hold what/
     );
   });
 
@@ -1366,7 +1367,7 @@ describe("the disposition table file", () => {
     ];
 
     expect(() => dispositionTableCsv(nameless)).toThrow(
-      /names no legacy_text, for legacy value "5854"/
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
     );
   });
 
@@ -1388,7 +1389,7 @@ describe("the disposition table file", () => {
     ];
 
     expect(() => dispositionTableCsv(whitespace)).toThrow(
-      /names no legacy_text, for legacy value "3006"/
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
     );
   });
 
@@ -1416,7 +1417,7 @@ describe("the disposition table file", () => {
     const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
-      /names no legacy_text, for legacy value "3006"/
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
     );
   });
 
@@ -1455,7 +1456,7 @@ describe("the disposition table file", () => {
         dispositionTableCsv(
           rowWith({ disposition: "plain-text", value: "Aircurve 11 asv" })
         )
-      ).toThrow(/`plain-text` and carries the URL/);
+      ).toThrow(/`plain-text` and its column 5 \(`url`\) is not empty/);
     });
 
     it("refuses to write an unlinked value that is not the legacy text", () => {
@@ -1469,7 +1470,7 @@ describe("the disposition table file", () => {
             url: "",
           })
         )
-      ).toThrow(/its value has to be the legacy display text/);
+      ).toThrow(/its column 4 \(`value`\) has to hold what/);
     });
 
     it("refuses to write a disposition this repository has no word for", () => {
@@ -1477,7 +1478,7 @@ describe("the disposition table file", () => {
         dispositionTableCsv(
           rowWith({ disposition: "retired" as DispositionRow["disposition"] })
         )
-      ).toThrow(/which is not one of/);
+      ).toThrow(/column 6 \(`disposition`\) is not one of/);
     });
 
     it("refuses a URL that is only whitespace", () => {
@@ -1526,7 +1527,7 @@ describe("the disposition table file", () => {
       ];
 
       expect(() => dispositionTableCsv(collision)).toThrow(
-        /trims to the same string as legacy value "4801"/
+        /trims to the same string as that of row 2/
       );
     });
 
@@ -1691,7 +1692,7 @@ describe("the disposition table file", () => {
       ];
 
       expect(() => dispositionTableCsv(duplicated)).toThrow(
-        /repeats the legacy value "6240" under "Machine", already claimed by row 2/
+        /row 3 repeats the column 2 \(`legacy_value`\) and column 1 \(`user_field_name`\) already claimed by row 2/
       );
     });
 
@@ -1706,7 +1707,7 @@ describe("the disposition table file", () => {
 
       expect(() =>
         readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
-      ).toThrow(/repeats the legacy value "6240"/);
+      ).toThrow(/row 3 repeats the column 2 \(`legacy_value`\)/);
     });
 
     it("lets one legacy value appear under two different fields", () => {
@@ -1735,7 +1736,7 @@ describe("the disposition table file", () => {
       // table cannot afford, because nothing in this repository can observe it.
       expect(() =>
         dispositionTableCsv(rowWith({ legacyValue: " 6240 " }))
-      ).toThrow(/legacy value of " 6240 ", which carries whitespace/);
+      ).toThrow(/column 2 \(`legacy_value`\) carries whitespace/);
     });
 
     it("says the same thing whichever side of the boundary refuses", () => {
@@ -1765,6 +1766,159 @@ describe("the disposition table file", () => {
       expect(onWrite).not.toBe("");
       expect(onRead).toBe(onWrite);
     });
+  });
+
+  /**
+   * The no-echo rule, checked across every refusal rather than argued once.
+   *
+   * `scripts/README.md` records it as a property of this whole boundary, and it
+   * was true of the two earliest diagnostics while nine refusals below them
+   * still printed the cell — the coordinate-only rewrite reached the function
+   * being edited at the time and stopped there. A table is what stops that
+   * being a per-round discovery.
+   *
+   * The canary is a **name**, and that is the load-bearing choice. An email
+   * address is caught by `EMAIL_SHAPED` before any of these refusals runs, so
+   * every case below would pass with the echo fully restored — which is how an
+   * earlier version of this test passed for the wrong reason. A name is what
+   * the tripwire cannot see, and a legacy display text is where one would
+   * land.
+   */
+  describe("what a refusal is allowed to say", () => {
+    const CANARY = "Marjorie Fenwick-Abara";
+
+    function rowWith(overrides: Partial<DispositionRow>): DispositionRow {
+      return {
+        userFieldName: "Machine",
+        legacyValue: "6240",
+        legacyText: "Aircurve 11 asv",
+        value: "AirCurve 11 ASV (Discontinued)",
+        url: CPAP_MACHINES,
+        disposition: "collection",
+        ...overrides,
+      };
+    }
+
+    /** Every way this boundary can refuse a row, each carrying the canary. */
+    const refusals: readonly (readonly [string, () => unknown])[] = [
+      [
+        "a column holding only whitespace",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: CANARY, legacyText: "  " }),
+          ]),
+      ],
+      [
+        "a url carrying whitespace",
+        () => dispositionTableCsv([rowWith({ url: ` ${CANARY} ` })]),
+      ],
+      [
+        "a join key carrying whitespace",
+        () => dispositionTableCsv([rowWith({ legacyValue: ` ${CANARY} ` })]),
+      ],
+      [
+        "a disposition it has no word for",
+        () =>
+          dispositionTableCsv([
+            rowWith({ disposition: CANARY as DispositionRow["disposition"] }),
+          ]),
+      ],
+      [
+        "an unlinked row carrying a url",
+        () =>
+          dispositionTableCsv([
+            rowWith({
+              disposition: "plain-text",
+              url: CANARY,
+              value: "Aircurve 11 asv",
+            }),
+          ]),
+      ],
+      [
+        "an unlinked value that is not the legacy text",
+        () =>
+          dispositionTableCsv([
+            rowWith({ disposition: "plain-text", url: "", value: CANARY }),
+          ]),
+      ],
+      [
+        "an unlinked row the runtime would resolve anyway",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: "1", value: CANARY }),
+            rowWith({
+              legacyValue: "2",
+              disposition: "plain-text",
+              url: "",
+              legacyText: ` ${CANARY} `,
+              value: ` ${CANARY} `,
+            }),
+          ]),
+      ],
+      [
+        "two rows claiming the same key",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: CANARY }),
+            rowWith({
+              legacyValue: CANARY,
+              disposition: "plain-text",
+              url: "",
+              value: "Aircurve 11 asv",
+            }),
+          ]),
+      ],
+      [
+        "a file that has lost its header row",
+        () =>
+          readDispositionTable(
+            digested(`"Machine","6240","${CANARY}","AirFit","","plain-text"\n`)
+          ),
+      ],
+      [
+        "a committed row with a blank column",
+        () =>
+          readDispositionTable(
+            digested(
+              `${HEADER}\n"Machine","${CANARY}","","x","","plain-text"\n`
+            )
+          ),
+      ],
+      [
+        "a committed row with a padded join key",
+        () =>
+          readDispositionTable(
+            digested(
+              `${HEADER}\n"Machine"," ${CANARY} ","x","x","","plain-text"\n`
+            )
+          ),
+      ],
+    ];
+
+    it("uses a canary the email guard cannot see", () => {
+      // If this ever fails, every case below is being caught by the tripwire
+      // and none of them is proving anything about the refusal it names.
+      expect(EMAIL_SHAPED.test(CANARY)).toBe(false);
+    });
+
+    for (const [what, refuse] of refusals) {
+      it(`quotes no cell when it refuses ${what}`, () => {
+        let message = "";
+
+        try {
+          refuse();
+        } catch (error) {
+          message = (error as Error).message;
+        }
+
+        expect(message).not.toBe("");
+        expect(message).not.toContain(CANARY);
+        // The coordinate is the entire diagnostic once the value is gone, so a
+        // refusal naming neither would satisfy the line above by saying
+        // nothing a reader could act on.
+        expect(message).toMatch(/(row|line) \d+/);
+      });
+    }
   });
 
   it("writes an empty URL without complaint, which is the only blank it allows", () => {
@@ -2208,6 +2362,42 @@ describe("what each file is allowed to do", () => {
     expect(builtins).toEqual(["node:crypto"]);
     expect(lib).not.toContain("fetch(");
     expect(lib).not.toContain("writeFile");
+  });
+
+  it("gives the disposition validators no way to quote a cell", () => {
+    /** A top-level function's source, declaration to closing brace. */
+    function bodyOf(name: string): string {
+      const start = lib.indexOf(`function ${name}(`);
+      const end = lib.indexOf("\n}\n", start);
+
+      expect(start).not.toBe(-1);
+      expect(end).not.toBe(-1);
+
+      return lib.slice(start, end);
+    }
+
+    // Blunt on purpose. Inside these three every string in scope came out of
+    // the file, so there is nothing here that `JSON.stringify` could be
+    // quoting except a cell — which makes a ban cheaper to keep than a
+    // judgement about which columns are safe, and it was exactly that
+    // judgement ("a legacy identifier, a product name and a URL is all they
+    // hold") that left nine refusals printing one.
+    //
+    // The canary table above pins the refusals that exist today; this pins the
+    // ones added later, which is the half a table of cases cannot cover
+    // because a new refusal arrives without a case.
+    //
+    // `dataRowsOf` is deliberately not on this list: its header diagnostic
+    // quotes the *expected* column names, which are a constant of this
+    // repository rather than file content. What it must not echo is pinned by
+    // the canary table instead.
+    for (const validator of [
+      "assertDispositionRow",
+      "assertNoResolvingCollisions",
+      "assertNoDuplicateKeys",
+    ]) {
+      expect(bodyOf(validator)).not.toContain("JSON.stringify");
+    }
   });
 
   it("never lets the command name the credential it uses", () => {

@@ -229,6 +229,22 @@ export const DISPOSITION_COLUMNS = [
  */
 const DISPOSITION_BLANKABLE = ["url"];
 
+/**
+ * Where a column sits, for a refusal about it to point at.
+ *
+ * Every refusal in this file locates a cell and declines to quote it, which
+ * makes the coordinate the entire diagnostic rather than a convenience beside
+ * the value. So it is derived from `DISPOSITION_COLUMNS` rather than written
+ * into the prose: a hand-numbered coordinate that drifted when a column moved
+ * would send a reader to the wrong cell with nothing else to go on, and the
+ * usual defence against that — printing the value too — is the one thing these
+ * messages may not do. The parameter takes the tuple's element type, so a
+ * column renamed in one place stops compiling in the other.
+ */
+function columnAt(name: (typeof DISPOSITION_COLUMNS)[number]): string {
+  return `column ${DISPOSITION_COLUMNS.indexOf(name) + 1} (\`${name}\`)`;
+}
+
 const DIGEST_PREFIX = "# sha256 ";
 const DIGEST_LINE = /^# sha256 ([0-9a-f]{64})$/;
 
@@ -759,11 +775,18 @@ export function collectionLinksCsv(
  * its reader's rules is a gate that reports success on the way out and failure
  * on the way in, and the file in between is already committed.
  *
- * Nothing in the pipeline can put member data in these columns — a legacy
- * identifier, a product name and a URL is all they hold — so the email check
- * inside that validator is a tripwire rather than a filter, and a tripwire
- * belongs at the boundary it guards. `readSheetTab` carries the same one
- * facing the other way, refusing to let member data *in* from the spreadsheet.
+ * Nothing in the pipeline *intends* to put member data in these columns — a
+ * legacy identifier, a product name and a URL is what they are for — so the
+ * email check inside that validator is a tripwire rather than a filter, and a
+ * tripwire belongs at the boundary it guards. `readSheetTab` carries the same
+ * one facing the other way, refusing to let member data *in* from the
+ * spreadsheet.
+ *
+ * Intent is the whole of that claim, though, which is why no refusal in here
+ * leans on it. `legacy_text` is free text a curator typed into a bulletin
+ * board years ago and this pipeline carries verbatim (ADR-0023), and on an
+ * unlinked row `value` is a copy of it. Those two columns hold whatever that
+ * option table holds, so the refusals name coordinates and quote nothing.
  */
 export function dispositionTableCsv(
   dispositions: readonly DispositionRow[]
@@ -876,6 +899,18 @@ function assertDispositionRow(
   // keeps member data out of the one file that leaves, and a refusal that
   // logged the cell would have published it in the error message.
   // `readSheetTab` carries the same guard facing the other way.
+  //
+  // The same rule binds every refusal below it, and not as a matter of style.
+  // This guard catches one *shape* of member data, so passing it says an email
+  // address is not present and nothing more — a name, an address or a member
+  // id goes straight through. Treating a clean pass as licence to quote the
+  // cell would turn the tripwire into a filter it was never able to be, which
+  // is why the refusals below name coordinates and leave the reader to open
+  // the file. `columnAt` derives those coordinates so they cannot drift, since
+  // there is no value printed beside them to fall back on. The two columns
+  // carried verbatim from the bulletin board — `legacy_text` and, on an
+  // unlinked row, `value` — are where a contaminated cell would actually land,
+  // and they are the two the pairing refusals used to print.
   const offending = row.findIndex((field) => EMAIL_SHAPED.test(field));
 
   if (offending !== -1) {
@@ -899,13 +934,13 @@ function assertDispositionRow(
 
   if (blank !== -1) {
     throw new CatalogueRefreshError(
-      `${where} names no ${DISPOSITION_COLUMNS[blank]}, for legacy value ` +
-        `${JSON.stringify(legacyValue)}. Only \`url\` may be empty, and every ` +
-        `other column has to hold something that is not just whitespace. A ` +
-        `row with no URL carries the legacy display text as its value, so a ` +
-        `blank one means its option-table row has an empty \`Text\` and ` +
-        `nothing names the equipment at all — a member's equipment quietly ` +
-        `deleted.`
+      `${where}, column ${blank + 1} (\`${DISPOSITION_COLUMNS[blank]}\`) ` +
+        `holds only whitespace, so it names nothing. Only \`url\` may be ` +
+        `empty, and every other column has to hold something that is not just ` +
+        `whitespace. A row with no URL carries the legacy display text as its ` +
+        `value, so a blank one means its option-table row has an empty ` +
+        `\`Text\` and nothing names the equipment at all — a member's ` +
+        `equipment quietly deleted.`
     );
   }
 
@@ -920,11 +955,11 @@ function assertDispositionRow(
   // it around a value — the bytes are the interface.
   if (url !== url.trim()) {
     throw new CatalogueRefreshError(
-      `${where} has a url of ${JSON.stringify(url)}, which carries ` +
-        `whitespace. This column is either empty or a URL and there is no ` +
-        `third state: every consumer reads an empty \`url\` as "no Profile ` +
-        `Link resolves", so a cell of spaces is a linked row pointing nowhere ` +
-        `that no check downstream would question.`
+      `${where}, ${columnAt("url")} carries whitespace. This ` +
+        `column is either empty or a URL and there is no third state: every ` +
+        `consumer reads an empty \`url\` as "no Profile Link resolves", so a ` +
+        `cell of spaces is a linked row pointing nowhere that no check ` +
+        `downstream would question.`
     );
   }
 
@@ -939,19 +974,23 @@ function assertDispositionRow(
   // lets the duplicate check below compare the raw bytes and mean it.
   if (legacyValue !== legacyValue.trim()) {
     throw new CatalogueRefreshError(
-      `${where} has a legacy value of ${JSON.stringify(legacyValue)}, which ` +
-        `carries whitespace. This column is the join key the non-public side ` +
-        `matches against its member export, and that match is exact, so a ` +
-        `padded key finds no member rather than failing.`
+      `${where}, ${columnAt("legacy_value")} carries whitespace. ` +
+        `This column is the join key the non-public side matches against its ` +
+        `member export, and that match is exact, so a padded key finds no ` +
+        `member rather than failing.`
     );
   }
 
   if (!isDispositionOutcome(disposition)) {
     throw new CatalogueRefreshError(
-      `${where} has the disposition ${JSON.stringify(disposition)}, which is ` +
-        `not one of ${DISPOSITION_OUTCOMES.join(", ")}. The non-public side ` +
-        `reads this column to decide what to do with the row, so a word it ` +
-        `has never heard of is a row it cannot act on.`
+      `${where}, ${columnAt("disposition")} is not one of ` +
+        `${DISPOSITION_OUTCOMES.join(", ")}. The non-public side reads this ` +
+        `column to decide what to do with the row, so a word it has never ` +
+        `heard of is a row it cannot act on. What the cell holds instead is ` +
+        `not quoted, and this is the refusal least able to afford quoting it: ` +
+        `it fires exactly when the column does not hold one of the words ` +
+        `above, which is the case when the columns have shifted and it holds ` +
+        `another column's content.`
     );
   }
 
@@ -970,20 +1009,21 @@ function assertDispositionRow(
     }
   } else if (url !== "") {
     throw new CatalogueRefreshError(
-      `${where} is \`${disposition}\` and carries the URL ` +
-        `${JSON.stringify(url)}. That disposition means no Profile Link ships ` +
-        `for the value, so a URL beside it is a link nobody assigned — and on ` +
-        `a \`plain-text\` row it is a curator's decision overruled.`
+      `${where} is \`${disposition}\` and its ${columnAt("url")} is not ` +
+        `empty. That disposition means no Profile Link ships for the value, ` +
+        `so a URL beside it is a link nobody assigned — and on a ` +
+        `\`plain-text\` row it is a curator's decision overruled.`
     );
   } else if (value !== legacyText) {
     throw new CatalogueRefreshError(
-      `${where} carries no URL, so its value has to be the legacy display ` +
-        `text and it is ${JSON.stringify(value)} against a legacy text of ` +
-        `${JSON.stringify(legacyText)}. A value with no Mapping behind it is ` +
-        `a string invented for a member to hold that resolves for nobody, and ` +
-        `the member's own text is the one string that is theirs to keep ` +
-        `(ADR-0020 puts the suffix on anchor text, and an unlinked value has ` +
-        `none).`
+      `${where} carries no URL, so its ${columnAt("value")} has to hold what ` +
+        `its ${columnAt("legacy_text")} holds, and the two differ. A value ` +
+        `with no Mapping behind it is a string invented for a member to hold ` +
+        `that resolves for nobody, and the member's own text is the one ` +
+        `string that is theirs to keep (ADR-0020 puts the suffix on anchor ` +
+        `text, and an unlinked value has none). These are the two columns ` +
+        `carried verbatim from the bulletin board, which is what makes them ` +
+        `the two this refusal most has to leave unquoted.`
     );
   }
 
@@ -1023,11 +1063,14 @@ function assertNoResolvingCollisions(
   rows: readonly DispositionRow[],
   file: string
 ): void {
-  const resolvable = new Map<string, DispositionRow>();
+  // Keyed to the *row number* rather than the row, because that number is
+  // what a refusal here is allowed to say. Pointing a reader at the other row
+  // locates everything quoting the two values used to, and carries none of it.
+  const resolvable = new Map<string, number>();
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     if (row.url !== "") {
-      resolvable.set(`${row.userFieldName}\u0000${row.value.trim()}`, row);
+      resolvable.set(`${row.userFieldName}\u0000${row.value.trim()}`, index);
     }
   }
 
@@ -1040,16 +1083,15 @@ function assertNoResolvingCollisions(
       `${row.userFieldName}\u0000${row.value.trim()}`
     );
 
-    if (collides) {
+    if (collides !== undefined) {
       throw new CatalogueRefreshError(
-        `${file} row ${index + 2} is \`${row.disposition}\`, so it says legacy ` +
-          `value ${JSON.stringify(row.legacyValue)} resolves no Profile Link ` +
-          `— but its value ${JSON.stringify(row.value)} trims to the same ` +
-          `string as legacy value ${JSON.stringify(collides.legacyValue)}, ` +
-          `which ships a Mapping to ${JSON.stringify(collides.url)}. ` +
-          `Resolution is a trimmed match on both sides, so the member would ` +
-          `get that link and this row says they get none. Which of the two is ` +
-          `meant is a curator's answer and not one this can take.`
+        `${file} row ${index + 2} is \`${row.disposition}\`, so it says its ` +
+          `legacy value resolves no Profile Link — but its ` +
+          `${columnAt("value")} trims to the same string as that of row ` +
+          `${collides + 2}, which ships a Mapping. Resolution is a trimmed ` +
+          `match on both sides, so the member would get that link and this ` +
+          `row says they get none. Which of the two is meant is a curator's ` +
+          `answer and not one this can take.`
       );
     }
   }
@@ -1092,9 +1134,8 @@ function assertNoDuplicateKeys(
 
     if (first !== undefined) {
       throw new CatalogueRefreshError(
-        `${file} row ${index + 2} repeats the legacy value ` +
-          `${JSON.stringify(row.legacyValue)} under ` +
-          `${JSON.stringify(row.userFieldName)}, already claimed by row ` +
+        `${file} row ${index + 2} repeats the ${columnAt("legacy_value")} ` +
+          `and ${columnAt("user_field_name")} already claimed by row ` +
           `${first + 2}. That pair is this table's key: the non-public side ` +
           `looks a member's identifier up in it and expects one row, so two ` +
           `rows mean it picks one of them for that member with nothing to ` +
@@ -1267,15 +1308,26 @@ function dataRowsOf(
   const rows = parseCsv(verifiedBody(text, file));
   const [header, ...dataRows] = rows;
 
-  if (
-    !header ||
-    header.length !== columns.length ||
-    !header.every((column, index) => column === columns[index])
-  ) {
+  // What line 2 holds instead is not quoted, and this diagnostic is the reason
+  // the rule needs saying rather than assuming: a file whose header row has
+  // been dropped presents a *data* row here, so the refusal for "this is not
+  // the header" is reached by exactly the malformation that makes line 2
+  // member-adjacent content. The expected names are a constant of this
+  // repository and safe to print; the coordinate of the first column that
+  // disagrees with them locates the rest.
+  const found = header ?? [];
+  const differs = columns.findIndex((column, at) => found[at] !== column);
+
+  if (found.length !== columns.length || differs !== -1) {
     throw new CatalogueRefreshError(
-      `${file} has an unexpected header row.\n` +
-        `  expected: ${JSON.stringify(columns)}\n` +
-        `  found:    ${JSON.stringify(header ?? [])}`
+      `${file} line 2 should be the header row ` +
+        `${JSON.stringify(columns)} and is not: it has ${found.length} ` +
+        `columns` +
+        (differs === -1
+          ? `.`
+          : `, and its column ${differs + 1} is not \`${columns[differs]}\`.`) +
+        ` What it holds instead is not quoted — a file that has lost its ` +
+        `header row reaches this refusal with a data row on the line.`
     );
   }
 
