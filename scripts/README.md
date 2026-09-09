@@ -278,8 +278,32 @@ all the same kind of thing:
   refusal with a name and asserts none of them prints it. A name rather than an
   email, because the tripwire would otherwise be what passed the test.
 
+  Removing the value puts the whole weight of the diagnostic on the
+  coordinate, which is why the guard derives its own rather than re-parsing. A
+  cell may hold a newline — `csvLine` quotes any field containing one — so a
+  physical line is not a record, and re-reading the matched line alone either
+  called a continuation line "column 1" or failed on its unbalanced quote and
+  lost the refusal's message entirely. `csvPositionOf` walks the raw text
+  instead, tracking quote state by `parseCsv`'s rules; counting cannot fail on
+  malformed input, which matters for the one check that runs before anything
+  has established the file is CSV at all. The line it reports is physical and
+  the column is the field's place in its record, and the message says so,
+  because a quoted value spanning lines makes the two disagree.
+
   Every rule below is checked on read as well as on write, by one shared
   validator rather than two that agree until they drift.
+
+  **Every Managed Field earns rows**, not just one of them. An empty table is
+  refused as a claim that no member holds any equipment; a table missing one
+  field is the same claim about that field, and it is the version that
+  actually happens — `readSheetTab` accepts a tab holding a header row and no
+  data, so an export truncated to its header contributes nothing while the
+  other field keeps the file populated. It is also the harder of the two to
+  notice: a header-only artifact is conspicuous, where a file with hundreds of
+  rows and no Machine among them looks entirely normal. It is checked last of
+  the whole-table rules, because it is the only one with no coordinate to
+  give — a row that contradicts itself is worth hearing about before a summary
+  judgement on the file.
 
   `user_field_name` and `legacy_value` together are the file's **key**. One
   member holds one identifier per field, so the far side expects a lookup to

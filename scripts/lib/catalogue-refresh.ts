@@ -822,6 +822,14 @@ export function dispositionTableCsv(
 
   assertNoResolvingCollisions(dispositions, DISPOSITION_FILE);
   assertNoDuplicateKeys(dispositions, DISPOSITION_FILE);
+  // Last of the whole-table rules, because it is the only one with no
+  // coordinate to give. A row that contradicts itself and a table that has
+  // lost a field can both be true at once, and the row is the more actionable
+  // of the two: it names a line to go and look at, where this names an
+  // absence. Reporting the specific fault before the summary judgement is
+  // also what keeps a fixture exercising one field from meeting this rule
+  // instead of the one it is about.
+  assertEveryFieldRepresented(dispositions, "the exports arrived with none");
 
   const body = `${[
     csvLine([...DISPOSITION_COLUMNS]),
@@ -867,6 +875,7 @@ export function readDispositionTable(text: string): DispositionRow[] {
 
   assertNoResolvingCollisions(rows, DISPOSITION_FILE);
   assertNoDuplicateKeys(rows, DISPOSITION_FILE);
+  assertEveryFieldRepresented(rows, "it holds none");
 
   return rows;
 }
@@ -1149,6 +1158,57 @@ function assertNoDuplicateKeys(
 }
 
 /**
+ * Refuses a table that has lost a whole Managed Field.
+ *
+ * The empty-table refusal beside this one is the same argument at the only
+ * scale it could see: a table with no rows is a claim that no member holds any
+ * equipment. But the table covers two fields, and nothing made the row count
+ * per-field, so one field could vanish while the other kept the file
+ * populated. `readSheetTab` accepts a tab holding a header row and no data —
+ * an export truncated to its header, or a range that slid — and such a tab
+ * contributes no rows here, so the version of this failure that actually
+ * arrives is one field wide.
+ *
+ * It is the worse half of the two, not the smaller one. An empty file is
+ * conspicuous: nobody reviews a header-only artifact and calls it fine. A file
+ * missing every Machine row looks entirely normal — right shape, valid digest,
+ * hundreds of rows — and says, in the only vocabulary the far side reads, that
+ * no member has a machine. Every Machine value then joins to nothing and is
+ * dropped, silently, on the one artifact whose failures this repository cannot
+ * observe.
+ *
+ * Held to `SHEET_TABS` because that is the list that decides what a Managed
+ * Field is. A field there with no rows is either a truncated export or a field
+ * newly added and not yet exported, and both want a human rather than a
+ * default. Naming the missing ones quotes `SHEET_TABS` and never the file, so
+ * the no-echo rule is untouched: what is printed is this repository's own
+ * vocabulary, and the fact being reported is an absence, which has no cell.
+ */
+function assertEveryFieldRepresented(
+  rows: readonly DispositionRow[],
+  holds: string
+): void {
+  const present = new Set(rows.map((row) => row.userFieldName));
+  const missing = SHEET_TABS.filter(
+    (tab) => !present.has(tab.userFieldName)
+  ).map((tab) => tab.userFieldName);
+
+  if (missing.length > 0) {
+    throw new CatalogueRefreshError(
+      `${DISPOSITION_FILE}: every legacy option value of every Managed Field ` +
+        `earns a row, and ${holds} for ${missing.join(" or ")}. A table ` +
+        `missing a whole field is not a smaller version of this file. It is a ` +
+        `claim that no member holds equipment of that kind — and unlike an ` +
+        `empty table it is a claim that looks well-formed, because every ` +
+        `other field's rows are still there to make it look so. The far side ` +
+        `joins on this column, so those members' values find no row and are ` +
+        `dropped. Check the committed \`data/user_*.csv\` for a tab exported ` +
+        `down to its header row.`
+    );
+  }
+}
+
+/**
  * Why an empty disposition table is refused, said the same way on both sides.
  * `holds` differs because the remedy does — a writer sends someone to the Sheet
  * Exports, a reader to the file in front of them — but the reason does not.
@@ -1264,6 +1324,70 @@ function verifiedBody(text: string, file: string): string {
  * the failure is a reader silently refusing a file its own writer produces.
  * Two of the three callers pass nothing, and say so.
  */
+/**
+ * Where an offset sits in CSV text: its physical line, and its field within
+ * the record that line belongs to.
+ *
+ * A walk rather than a parse, and that is the point of it. It is used by the
+ * one refusal that runs before anything has established the text is even
+ * well-formed CSV — before the digest, before the header — so it cannot
+ * delegate to `parseCsv`, which throws on an unbalanced quote and would
+ * replace a refusal that names a location with one that names none. Counting
+ * cannot fail: whatever the text is, every byte before the offset either
+ * toggles the quote state, ends a line, ends a field, or does not.
+ *
+ * It tracks quotes by the same rules `parseCsv` does, so the two agree about
+ * which commas and newlines are structural. `""` inside a quoted field toggles
+ * twice and nets out, which is the correct answer for a position.
+ *
+ * The two coordinates are deliberately different in kind. The line is physical
+ * because it is the one thing a reader can act on without trusting the file —
+ * whether line 1 is a digest or a data row is exactly what is unknown at the
+ * caller — while the column is the field's place in its record, which is what
+ * names the cell. A newline inside a quoted value advances the line without
+ * ending the record, so the two can disagree, and when they do the message
+ * says so.
+ */
+function csvPositionOf(
+  text: string,
+  offset: number
+): { line: number; column: number } {
+  let line = 1;
+  let column = 1;
+  let quoted = false;
+
+  for (let index = 0; index < offset; index += 1) {
+    const char = text[index];
+
+    if (char === "\n" || char === "\r") {
+      if (char === "\r" && text[index + 1] === "\n") {
+        index += 1;
+      }
+
+      line += 1;
+
+      // Only a newline outside a quoted field starts a new record, and only a
+      // new record restarts the column count.
+      if (!quoted) {
+        column = 1;
+      }
+
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+
+    if (!quoted && char === ",") {
+      column += 1;
+    }
+  }
+
+  return { line, column };
+}
+
 function dataRowsOf(
   text: string,
   file: string,
@@ -1286,21 +1410,34 @@ function dataRowsOf(
   // whether line 1 is a digest line or a data row is exactly what is still
   // unknown here, and that ambiguity is the leak it exists to close.
   //
-  // A line-level regex test is equivalent to a cell-level one for this pattern
-  // — `EMAIL_SHAPED` excludes commas and quotes, so a match cannot span a cell
-  // boundary — so scanning lines loses no coverage. The column is recovered
-  // afterwards, from that one line alone, purely to point at the cell.
-  const lines = text.split("\n");
-  const line = lines.findIndex((candidate) => EMAIL_SHAPED.test(candidate));
+  // Matched against the whole text rather than line by line, and the position
+  // is walked out of it rather than re-parsed. A quoted field may contain
+  // newlines — `csvLine` writes that shape itself, for any cell holding one —
+  // so a physical line is not a record, and the line an address sits on can be
+  // the middle of a value that began earlier. Handing that line to `parseCsv`
+  // on its own asks it to read a fragment: it either reports column 1 for a
+  // continuation line that has no commas of its own, or throws "the response
+  // ended inside a quoted field" over the unbalanced quote and loses this
+  // refusal altogether, message and coordinates with it.
+  //
+  // That mattered more than a wrong number usually would, because there is no
+  // value printed beside it. The coordinate *is* the diagnostic here, so it
+  // has to be right for the trade that removed the value to hold.
+  //
+  // A single regex over the whole text is no less thorough than one per line:
+  // `EMAIL_SHAPED` excludes commas, quotes and whitespace, so a match lies
+  // inside exactly one field on exactly one line whichever way it is run.
+  const contaminated = EMAIL_SHAPED.exec(text);
 
-  if (line !== -1) {
-    const cells = parseCsv(lines[line] ?? "")[0] ?? [];
-    const column = cells.findIndex((field) => EMAIL_SHAPED.test(field));
+  if (contaminated) {
+    const { line, column } = csvPositionOf(text, contaminated.index);
 
     throw new CatalogueRefreshError(
-      `${file} line ${line + 1}${column === -1 ? "" : `, column ${column + 1}`} ` +
-        `holds something shaped like an email address. Refusing to read ` +
-        `further, and reporting neither the cell nor the line it sits in.`
+      `${file} line ${line}, column ${column} holds something shaped like an ` +
+        `email address — the line it sits on, and its column in the record ` +
+        `that line belongs to, which a quoted value spanning lines can start ` +
+        `above it. Refusing to read further, and reporting neither the cell ` +
+        `nor the line it sits in.`
     );
   }
 

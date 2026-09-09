@@ -647,13 +647,28 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
     }
   }
 
-  if (!header || !sameHeaders(header, tab.headers)) {
+  const found = header ?? [];
+
+  if (!sameHeaders(found, tab.headers)) {
+    // What row 1 holds instead is not quoted, and this is the diagnostic the
+    // comment above is about. It used to print the row, which the scan above
+    // now beats to the terminal — but only for an address. A tab with a row
+    // inserted above its header, or a range that slid onto a neighbour,
+    // reaches this refusal holding a data row, and the neighbouring tabs in
+    // this workbook hold member data that is not shaped like an email: names,
+    // above all. The expected columns are this repository's own and safe to
+    // print; the coordinate of the first one that disagrees locates the rest.
+    const differs = tab.headers.findIndex((name, at) => found[at] !== name);
+
     throw new SheetExportError(
-      `${tab.tab}: unexpected header row.\n` +
-        `  expected: ${JSON.stringify(tab.headers)}\n` +
-        `  found:    ${JSON.stringify(header ?? [])}\n` +
-        `A renamed, missing, added or reordered column means the tab is not ` +
-        `the one this command was written against.`
+      `${tab.tab}: unexpected header row. Row 1 should be ` +
+        `${JSON.stringify(tab.headers)} and has ${found.length} columns` +
+        (differs === -1
+          ? `.`
+          : `, with column ${differs + 1} not \`${tab.headers[differs]}\`.`) +
+        ` A renamed, missing, added or reordered column means the tab is not ` +
+        `the one this command was written against. What row 1 holds instead ` +
+        `is not reported.`
     );
   }
 

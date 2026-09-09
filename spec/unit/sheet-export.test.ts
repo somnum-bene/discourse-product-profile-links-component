@@ -508,6 +508,27 @@ describe("readSheetTab", () => {
     );
   });
 
+  it("reports an unexpected header without printing the row it found", () => {
+    // The other half of the test above, and the half reordering the guards
+    // could not reach. Running the scan first stops the header refusal
+    // printing an *email*; it does nothing about a name, which is the shape
+    // most of this workbook's member data actually takes. So the diagnostic
+    // gives the expected columns — ours — and the coordinate of the first one
+    // that disagrees, and quotes nothing.
+    const shifted = [
+      `"Marjorie Fenwick-Abara","4872","https://example.com","T","https://example.com"`,
+      MACHINE_HEADER,
+    ].join("\n");
+
+    expect(() => readSheetTab(machine, shifted)).toThrow(
+      /unexpected header row/
+    );
+    expect(() => readSheetTab(machine, shifted)).toThrow(
+      /column 1 not `Value`/
+    );
+    expect(() => readSheetTab(machine, shifted)).toThrow(/^(?!.*Marjorie)/s);
+  });
+
   it("names the header row as row 1 when the personal data is in it", () => {
     // Not row 2. The scan now covers the header, so its row numbering has to
     // start where the file does or it points a reader at the wrong line.

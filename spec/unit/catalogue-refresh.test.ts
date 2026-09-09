@@ -1243,6 +1243,32 @@ describe("the disposition table file", () => {
   const HEADER =
     "user_field_name,legacy_value,legacy_text,value,url,disposition";
 
+  /**
+   * The rows, plus a minimal row for any Managed Field they do not cover.
+   *
+   * The table is refused if it has lost a whole field, which is right about
+   * the artifact and awkward for a fixture: a test about one rule wants the
+   * one row that rule is about, and the file wants every field. Padding here
+   * rather than in each test keeps them showing only what they are for.
+   */
+  function withEveryField(rows: DispositionRow[]): DispositionRow[] {
+    const present = new Set(rows.map((row) => row.userFieldName));
+
+    return [
+      ...rows,
+      ...SHEET_TABS.filter((tab) => !present.has(tab.userFieldName)).map(
+        (tab) => ({
+          userFieldName: tab.userFieldName,
+          legacyValue: "1",
+          legacyText: `A ${tab.userFieldName} row this test is not about`,
+          value: `A ${tab.userFieldName} row this test is not about`,
+          url: "",
+          disposition: "plain-text" as const,
+        })
+      ),
+    ];
+  }
+
   it("is a digest line, a header, and one row per legacy value", () => {
     const lines = dispositionTableCsv(ROWS).split("\n");
 
@@ -1407,7 +1433,9 @@ describe("the disposition table file", () => {
       },
     ];
 
-    expect(readDispositionTable(dispositionTableCsv(padded))).toEqual(padded);
+    const table = withEveryField(padded);
+
+    expect(readDispositionTable(dispositionTableCsv(table))).toEqual(table);
   });
 
   it("refuses to read a row whose value is only whitespace", () => {
@@ -1553,7 +1581,9 @@ describe("the disposition table file", () => {
         },
       ];
 
-      expect(readDispositionTable(dispositionTableCsv(near))).toHaveLength(2);
+      expect(
+        readDispositionTable(dispositionTableCsv(withEveryField(near)))
+      ).toHaveLength(3);
     });
 
     it("lets the same value collide across two different fields", () => {
@@ -1921,8 +1951,158 @@ describe("the disposition table file", () => {
     }
   });
 
+  /**
+   * A field can go missing without the table looking wrong, which is what
+   * makes it worse than the empty table the row-count rule already refused.
+   */
+  describe("every Managed Field earns rows, not just one of them", () => {
+    const maskOnly: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "6377",
+        legacyText: "AirFit F20",
+        value: "AirFit F20",
+        url: "",
+        disposition: "plain-text",
+      },
+    ];
+
+    it("refuses to write a table that has lost a whole field", () => {
+      // `readSheetTab` accepts a tab holding a header row and nothing else, so
+      // an export truncated to its header contributes no rows for that field
+      // while the other field keeps the table populated. The row count cannot
+      // see it: the table is not empty, it is half empty.
+      expect(() => dispositionTableCsv(maskOnly)).toThrow(/none for Machine/);
+    });
+
+    it("refuses to read one, on the same reasoning", () => {
+      const body = `${HEADER}\nMask,6377,AirFit F20,AirFit F20,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /none for Machine/
+      );
+    });
+
+    it("names the field from SHEET_TABS and nothing from the file", () => {
+      // The absence has no cell, so there is nothing here a coordinate could
+      // point at — and nothing that needs quoting either. What it prints is
+      // this repository's own vocabulary.
+      let message = "";
+
+      try {
+        dispositionTableCsv([
+          {
+            ...maskOnly[0],
+            legacyText: "Marjorie Fenwick-Abara",
+            value: "Marjorie Fenwick-Abara",
+          },
+        ]);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+
+      expect(message).toMatch(/none for Machine/);
+      expect(message).not.toContain("Marjorie");
+    });
+
+    it("reports a row's own fault before it reports a missing field", () => {
+      // Both are true of this table. The duplicate key names a row to go and
+      // look at where this rule names an absence, so the order is not
+      // arbitrary: the specific fault is the one worth hearing first.
+      const duplicated: DispositionRow[] = [maskOnly[0], maskOnly[0]];
+
+      expect(() => dispositionTableCsv(duplicated)).toThrow(/row 3 repeats/);
+    });
+
+    it("accepts a table that covers both", () => {
+      expect(() => dispositionTableCsv(withEveryField(maskOnly))).not.toThrow();
+    });
+  });
+
+  /**
+   * A cell may hold a newline: `csvLine` quotes any field containing one, and
+   * `parseCsv` reads the quoted field back across the line break. So a
+   * physical line is not a record, and the guard that runs before the digest
+   * — before anything has established this is even well-formed CSV — has to
+   * locate a cell without assuming the two are the same.
+   */
+  describe("a value that spans lines, and the coordinates it does not break", () => {
+    const CANARY = "member@example.com";
+
+    it("round-trips a legacy text holding a newline", () => {
+      // The shape is the writer's own, not a hand-edit-only concern, which is
+      // what makes the coordinates below worth getting right.
+      const multiline = withEveryField([
+        {
+          userFieldName: "Mask",
+          legacyValue: "6377",
+          legacyText: "AirFit F20\nFull Face",
+          value: "AirFit F20\nFull Face",
+          url: "",
+          disposition: "plain-text",
+        },
+      ]);
+
+      expect(readDispositionTable(dispositionTableCsv(multiline))).toEqual(
+        multiline
+      );
+    });
+
+    it("names the field's column when the address is on a continuation line", () => {
+      // Column 3, not column 1. Handing that one physical line to `parseCsv`
+      // sees a fragment with no commas and calls it the first field of a row.
+      const body =
+        `${HEADER}\n` +
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 4, column 3/
+      );
+    });
+
+    it("still refuses, and with coordinates, when the fragment cannot parse", () => {
+      // This is the regression that cost the most: the continuation line ends
+      // inside a quoted field, so re-parsing it alone threw
+      // `SheetExportError: the response ended inside a quoted field` — a
+      // refusal, so nothing leaked, but one that named no file, no location
+      // and spoke of a "response" for a file on disk. The guard's own message
+      // never ran.
+      const body =
+        `${HEADER}\n` + `Mask,6377,"AirFit\n${CANARY}",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        CatalogueRefreshError
+      );
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 4, column 3/
+      );
+      expect(() => readDispositionTable(digested(body))).not.toThrow(
+        /ended inside a quoted field/
+      );
+    });
+
+    it("counts the line the address is on, not the one its record starts on", () => {
+      const body =
+        `${HEADER}\n` + `Mask,6377,"${CANARY}\nAirFit",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 3, column 3/
+      );
+    });
+
+    it("quotes nothing when it refuses, as before", () => {
+      const body =
+        `${HEADER}\n` +
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /^(?!.*member@example\.com)/s
+      );
+    });
+  });
+
   it("writes an empty URL without complaint, which is the only blank it allows", () => {
-    expect(dispositionTableCsv([ROWS[2]])).toContain(
+    expect(dispositionTableCsv(withEveryField([ROWS[2]]))).toContain(
       "Mask,3005,Unlisted mask,Unlisted mask,,blank-title"
     );
   });
