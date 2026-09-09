@@ -629,6 +629,32 @@ describe("the refresh command's exit code", () => {
     }
   });
 
+  it("locates the undecided rows instead of only counting them", () => {
+    // #38 asks the failure to make the fix obvious without hunting, and a
+    // bare count sends a reader off to a file to find out which rows it meant.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    expect(guard).toContain("fault.legacyValues");
+    expect(guard).toContain("fault.userFieldName");
+  });
+
+  it("names the rows by identifier and quotes no cell a curator typed", () => {
+    // The same boundary the standalone gate holds. `Field` is a Managed Field
+    // name this repository owns and the legacy `Value` is a PNum already
+    // committed in `data/collection-assignment.csv`; the free-text columns are
+    // workbook content and stay out of the output.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    for (const cell of [
+      "fault.detail",
+      "legacyText",
+      "profileLinkValue",
+      "rationale",
+    ]) {
+      expect(guard, `the refusal echoes ${cell}`).not.toContain(cell);
+    }
+  });
+
   it("writes the artifacts before it decides the exit code", () => {
     // The report is where a fault gets explained one at a time, so exiting
     // must not take it away. Both writes precede the guard.

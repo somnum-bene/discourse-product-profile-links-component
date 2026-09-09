@@ -226,7 +226,27 @@ async function main(): Promise<void> {
         `${undeliveredValues(undecided) === 1 ? "value is" : "values are"} ` +
         `dispositioned \`undecided\`. That is an absence of evidence rather ` +
         `than a preference, so it blocks the ship (ADR-0021) and this ` +
-        `refresh exits non-zero. The files above were still written.\n`
+        `refresh exits non-zero. The files above were still written. ` +
+        // Named here, not only in the review document. #38 asks the failure to
+        // make the fix obvious without hunting, and a count sends a reader to
+        // a file to find out which rows it meant.
+        //
+        // Identifiers only, the way the standalone gate names a
+        // `collection-link-fault`: `Field` is a Managed Field name this
+        // repository owns and the legacy `Value` is a PNum already committed
+        // in `data/collection-assignment.csv`. `Legacy Text`, `Profile Link
+        // Value` and `Rationale` are cells a curator typed and are not
+        // reported.
+        `The ${undecided.length === 1 ? "row" : "rows"}, by identifier:\n` +
+        undecided
+          .flatMap((fault) =>
+            fault.legacyValues.map(
+              (legacyValue) =>
+                `  - ${fault.userFieldName} \`Value\` ${legacyValue}`
+            )
+          )
+          .join("\n") +
+        `\n`
     );
   }
 
