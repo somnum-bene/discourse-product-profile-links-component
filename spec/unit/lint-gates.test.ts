@@ -236,13 +236,13 @@ describe("every request this pipeline makes is bounded", () => {
    * The leading character class is what keeps `client.fetch(` and
    * `prefetch(` out: a member call on some other object is a different
    * function, and the global `fetch` is the only one this pipeline has to
-   * bound. `globalThis.fetch(` is the one member call that *is* that global,
-   * so it is spelled out — excluding it by the same rule that excludes
-   * `client.fetch(` left a standard spelling of the API this sweep exists to
-   * bound invisible, and an unbounded one could be added with the floor
-   * assertion still green.
+   * bound. `globalThis.fetch(` and Node's `global.fetch(` are the two member
+   * calls that *are* that global, so both are spelled out — excluding them by
+   * the same rule that excludes `client.fetch(` left standard spellings of
+   * the API this sweep exists to bound invisible, and an unbounded one could
+   * be added with the floor assertion still green.
    */
-  const FETCH_CALL = /(^|[^\w.$])(?:globalThis\.)?fetch\s*\(/gu;
+  const FETCH_CALL = /(^|[^\w.$])(?:global(?:This)?\.)?fetch\s*\(/gu;
 
   function fetchCallsIn(
     path: string,
@@ -263,17 +263,21 @@ describe("every request this pipeline makes is bounded", () => {
   it("finds a fetch that is not spelled `await fetch(`", () => {
     // Non-vacuity for discovery itself, rather than for the assertion it
     // feeds. Three calls here, none of them the spelling the old scan looked
-    // for, and two near-misses that are not calls to the global at all.
+    // for, and three near-misses that are not calls to the global at all —
+    // including `myglobal.fetch(`, which the `global` alternative must not
+    // start matching in the middle of a longer identifier.
     const spellings = [
       "const pending = fetch(url, { signal });",
       "  return fetch(url, { signal });",
       "await fetch (url, { signal });",
       "await globalThis.fetch(url, { signal });",
+      "await global.fetch(url, { signal });",
       "const body = await client.fetch(url);",
       "const cached = prefetch(url);",
+      "const stale = myglobal.fetch(url);",
     ].join("\n");
 
-    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(4);
+    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(5);
   });
 
   it("parses every call it found, so no scan runs off the end", () => {
