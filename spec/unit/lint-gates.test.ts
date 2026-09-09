@@ -181,9 +181,157 @@ describe("every request this pipeline makes is bounded", () => {
       .map((name) => `scripts/lib/${name}`),
   ].sort();
 
+  /**
+   * The source with every comment and string literal blanked out, character
+   * for character, so offsets and line structure are unchanged.
+   *
+   * The sweep below reads source text, and text is satisfied by anything that
+   * looks right. An unbounded `fetch(url, {})` whose options hold nothing but
+   * a commented-out `signal:` is discovered, its argument slice contains the
+   * substring the gate demands, and the request passes the check that exists
+   * to catch it — the same trick works with a `signal:` mentioned inside a
+   * string. Blanking
+   * rather than deleting, because the bracket balancer walks indices: a
+   * comment or string holding an unmatched `)` would otherwise end the
+   * argument slice early, or run it to the end of the file.
+   *
+   * Not a parser. A parser is what this wants to be, and `typescript` is only
+   * present here as a transitive dependency of `@glint/ember-tsc` — importing
+   * it would be reaching through a package this repository does not declare.
+   * What the scan below has to survive is the code in `scripts/`, and the
+   * assertions that follow check it did: every call still found, every one
+   * parsed, and none of them reading past its own call.
+   */
+  function blanked(source: string): string {
+    const out = [...source];
+    // Whether a `/` here can open a regular expression rather than divide.
+    // Division only ever follows a value, and none of these end one.
+    const opensRegex = (before: string): boolean =>
+      before === "" || "([{,;:=!&|?+-*%~^<>".includes(before);
+
+    let at = 0;
+
+    const blank = (from: number, to: number): void => {
+      for (let index = from; index < to; index += 1) {
+        // Newlines are kept so a line number is still a line number, and so a
+        // `//` comment cannot swallow the code beneath it.
+        if (out[index] !== "\n") {
+          out[index] = " ";
+        }
+      }
+    };
+
+    while (at < source.length) {
+      const two = source.slice(at, at + 2);
+      const char = source[at] as string;
+
+      if (two === "//") {
+        const end = source.indexOf("\n", at);
+        const to = end === -1 ? source.length : end;
+
+        blank(at, to);
+        at = to;
+        continue;
+      }
+
+      if (two === "/*") {
+        const end = source.indexOf("*/", at + 2);
+        const to = end === -1 ? source.length : end + 2;
+
+        blank(at, to);
+        at = to;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === "`" || char === "/") {
+        if (char === "/") {
+          const before = source.slice(0, at).trimEnd().slice(-1);
+
+          if (!opensRegex(before)) {
+            at += 1;
+            continue;
+          }
+        }
+
+        let index = at + 1;
+
+        while (index < source.length) {
+          const inner = source[index] as string;
+
+          if (inner === "\\") {
+            index += 2;
+            continue;
+          }
+
+          if (inner === char) {
+            break;
+          }
+
+          // An unterminated literal would otherwise blank the rest of the
+          // file; a newline ends every one of these except a template.
+          if (inner === "\n" && char !== "`") {
+            break;
+          }
+
+          index += 1;
+        }
+
+        blank(at + 1, Math.min(index, source.length));
+        at = index + 1;
+        continue;
+      }
+
+      at += 1;
+    }
+
+    return out.join("");
+  }
+
+  /** Every source file this sweep reads, with its text already blanked. */
+  const blankedSources = new Map(
+    commandFiles.map((path) => [path, blanked(readFileSync(path, "utf8"))])
+  );
+
+  function sourceOf(path: string): string {
+    const source = blankedSources.get(path);
+
+    if (source === undefined) {
+      throw new Error(`${path} is not one of the files this sweep reads`);
+    }
+
+    return source;
+  }
+
+  it("blanks a comment without moving anything after it", () => {
+    // The property the bracket balancer depends on: same length, same lines,
+    // so an index into the blanked text is an index into the real file.
+    for (const path of commandFiles) {
+      const source = readFileSync(path, "utf8");
+
+      expect(sourceOf(path)).toHaveLength(source.length);
+      expect(sourceOf(path).split("\n")).toHaveLength(
+        source.split("\n").length
+      );
+    }
+  });
+
+  it("hides a signal that is only mentioned, not passed", () => {
+    // The hole this closes, stated as the two ways of faking a bound request.
+    const faked = [
+      "await fetch(url, { /* signal: AbortSignal.timeout(1) */ });",
+      "await fetch(other, { headers: { note: 'signal: AbortSignal.timeout(' } });",
+      "// await fetch(third, { signal: AbortSignal.timeout(1) });",
+    ].join("\n");
+    const scrubbed = blanked(faked);
+
+    expect(scrubbed).not.toContain("signal: AbortSignal.timeout(");
+    // The first two calls are still calls; only the third was a comment.
+    expect(fetchCallsIn("synthetic", scrubbed)).toHaveLength(2);
+  });
+
   it("finds the call sites at all, so the sweep is not vacuous", () => {
     const withFetch = commandFiles.filter(
-      (path) => fetchCallsIn(path, readFileSync(path, "utf8")).length > 0
+      (path) => fetchCallsIn(path, sourceOf(path)).length > 0
     );
 
     expect(withFetch.length).toBeGreaterThanOrEqual(5);
@@ -257,7 +405,7 @@ describe("every request this pipeline makes is bounded", () => {
 
   /** Every `fetch` call in the pipeline, with its arguments. */
   const fetchCalls = commandFiles.flatMap((path) =>
-    fetchCallsIn(path, readFileSync(path, "utf8"))
+    fetchCallsIn(path, sourceOf(path))
   );
 
   it("finds a fetch that is not spelled `await fetch(`", () => {
@@ -298,7 +446,7 @@ describe("every request this pipeline makes is bounded", () => {
     // the file it lives in. `export-sheet.ts` scanned 4315 of 4316 remaining
     // characters before this.
     for (const call of fetchCalls) {
-      const source = readFileSync(call.path, "utf8");
+      const source = sourceOf(call.path);
 
       expect(
         (call.args ?? "").length,
