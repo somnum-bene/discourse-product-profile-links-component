@@ -2,8 +2,8 @@
 // Assignment, asks the cpap.com Shopify Admin API about every product the
 // exports name, everything those divisions currently sell, and every collection
 // the assignment table points at, and writes the Resolved Product Catalogue,
-// the Collection Links and the review document. Run it with
-// `pnpm refresh:catalogue`.
+// the Collection Links, the disposition table and the review document. Run it
+// with `pnpm refresh:catalogue`.
 //
 // This is the only command that needs a Shopify token, and the only one that
 // needs the network at all after the exports are committed. Everything it
@@ -13,7 +13,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { buildCatalogue, undeliveredValues } from "./lib/build-catalogue.ts";
+import {
+  buildCatalogue,
+  resolvingValues,
+  undeliveredValues,
+} from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
@@ -24,6 +28,8 @@ import {
   collectionsFromByHandleResponse,
   curatesTitles,
   declaredDigest,
+  DISPOSITION_FILE,
+  dispositionTableCsv,
   type Division,
   DIVISIONS,
   divisionSurveyQuery,
@@ -112,21 +118,33 @@ async function main(): Promise<void> {
   }
 
   const products = mergeProducts(...fetched);
-  const { catalogue, exclusions, collectionLinks, collectionFaults } =
-    buildCatalogue({
-      sheetRows,
-      products,
-      assignments,
-      admittedCollections,
-    });
+  const {
+    catalogue,
+    exclusions,
+    collectionLinks,
+    collectionFaults,
+    dispositions,
+  } = buildCatalogue({
+    sheetRows,
+    products,
+    assignments,
+    admittedCollections,
+  });
   const csv = resolvedProductsCsv(catalogue);
   const linksCsv = collectionLinksCsv(collectionLinks);
+  // Built before anything is written, because this is the one that can refuse:
+  // an empty table, a row that names no value, or a cell shaped like an email
+  // address. A refusal that fired after three successful writes would leave the
+  // catalogue regenerated and the disposition table missing, which is the one
+  // combination that ships Mappings with nothing to resolve against them.
+  const dispositionCsv = dispositionTableCsv(dispositions);
   const digest = declaredDigest(csv, CATALOGUE_FILE);
   const review = renderReviewDocument({
     catalogue,
     exclusions,
     collectionLinks,
     collectionFaults,
+    dispositions,
     sheetRows,
     products,
     digest,
@@ -135,12 +153,17 @@ async function main(): Promise<void> {
   await mkdir(dirname(CATALOGUE_FILE), { recursive: true });
   await writeFile(CATALOGUE_FILE, csv);
   await writeFile(COLLECTION_LINKS_FILE, linksCsv);
+  await writeFile(DISPOSITION_FILE, dispositionCsv);
   await writeFile(REVIEW_FILE, review);
 
   process.stdout.write(
     `\n${CATALOGUE_FILE}: ${catalogue.length} Mappings, ${exclusions.length} excluded\n` +
       `${COLLECTION_LINKS_FILE}: ${collectionLinks.length} Collection Links — ` +
       `Mappings too, and never Dropdown Options\n` +
+      `${DISPOSITION_FILE}: ${dispositions.length} legacy values, ` +
+      `${resolvingValues(dispositions)} resolving a Profile Link — the one ` +
+      `output that crosses to the non-public repository, and the only one ` +
+      `carrying no member data by design\n` +
       `${REVIEW_FILE}: the review document — read this before applying anything\n` +
       `digest: ${digest}\n`
   );

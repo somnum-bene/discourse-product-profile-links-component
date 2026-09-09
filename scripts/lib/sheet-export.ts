@@ -234,7 +234,15 @@ export class SheetExportError extends Error {
 // Deliberately strict about what sits either side of the `@`: the point is to
 // recognise an email address, and a loose pattern that also matched product
 // titles would turn a safety net into a nuisance that gets switched off.
-const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
+//
+// Exported because the same tripwire guards the other boundary: this one
+// refuses to let member data *in* from the spreadsheet, and
+// `dispositionTableCsv` refuses to let it *out* in the disposition table. One
+// pattern rather than two copies, on the same grounds as
+// `COLLECTION_LINK_SUFFIX` — a guard that had drifted between the two
+// directions would be strict at one boundary and lax at the other, and nobody
+// would find out which.
+export const EMAIL_SHAPED = /[^\s,"]+@[^\s,"]+\.[A-Za-z]{2,}/;
 
 /**
  * Resolve a tab name against the option-table allowlist. This is the only way
@@ -593,6 +601,22 @@ export function parseCsv(text: string): string[][] {
  * now holding a different volume of data), and the cell contents (a tab now
  * holding email addresses under a header row that still looks right).
  *
+ * The content guard runs **first**, and over every row including the one that
+ * should be the header. That order is the whole of its value. It used to run
+ * third, which meant the two guards above it could fire on a tab holding member
+ * data and report it: the header diagnostic prints the row it found, and a tab
+ * with a row inserted above its header — or a range that slid onto a different
+ * tab — hands that diagnostic a data row to print. The two conditions are not
+ * independent, which is what makes the order matter rather than merely tidy. A
+ * workbook restructured until this tab holds member data is the same workbook
+ * whose header row has moved, so precisely when the tripwire is needed, the
+ * echo beats it to the terminal.
+ *
+ * Scanning the header row too is the other half. If row 1 is really row 1 it
+ * holds column names and the scan costs nothing; if it is a data row that is
+ * exactly the case worth catching, and skipping it would leave the one row the
+ * header diagnostic is about to print as the one row nothing checked.
+ *
  * It takes an `ExportTab`, so the Collection Assignment is held to exactly the
  * same three as the two option tables it sits beside in the same workbook.
  */
@@ -610,13 +634,41 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
   const rows = parseCsv(csvText);
   const [header, ...dataRows] = rows;
 
-  if (!header || !sameHeaders(header, tab.headers)) {
+  for (const [rowIndex, row] of rows.entries()) {
+    const offending = row.findIndex((cell) => EMAIL_SHAPED.test(cell));
+    if (offending !== -1) {
+      // The value itself is not reported. It is the thing we are refusing to
+      // let into the repository, so it does not go into a log either.
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 1}, column ${offending + 1} holds ` +
+          `something shaped like an email address. This command exports ` +
+          `product mappings and nothing else; refusing to write.`
+      );
+    }
+  }
+
+  const found = header ?? [];
+
+  if (!sameHeaders(found, tab.headers)) {
+    // What row 1 holds instead is not quoted, and this is the diagnostic the
+    // comment above is about. It used to print the row, which the scan above
+    // now beats to the terminal — but only for an address. A tab with a row
+    // inserted above its header, or a range that slid onto a neighbour,
+    // reaches this refusal holding a data row, and the neighbouring tabs in
+    // this workbook hold member data that is not shaped like an email: names,
+    // above all. The expected columns are this repository's own and safe to
+    // print; the coordinate of the first one that disagrees locates the rest.
+    const differs = tab.headers.findIndex((name, at) => found[at] !== name);
+
     throw new SheetExportError(
-      `${tab.tab}: unexpected header row.\n` +
-        `  expected: ${JSON.stringify(tab.headers)}\n` +
-        `  found:    ${JSON.stringify(header ?? [])}\n` +
-        `A renamed, missing, added or reordered column means the tab is not ` +
-        `the one this command was written against.`
+      `${tab.tab}: unexpected header row. Row 1 should be ` +
+        `${JSON.stringify(tab.headers)} and has ${found.length} columns` +
+        (differs === -1
+          ? `.`
+          : `, with column ${differs + 1} not \`${tab.headers[differs]}\`.`) +
+        ` A renamed, missing, added or reordered column means the tab is not ` +
+        `the one this command was written against. What row 1 holds instead ` +
+        `is not reported.`
     );
   }
 
@@ -628,19 +680,6 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
         `workbook. "At least" because the fetch is bounded at the ceiling — ` +
         `the tab may be far larger than this number, which is the point.`
     );
-  }
-
-  for (const [rowIndex, dataRow] of dataRows.entries()) {
-    const offending = dataRow.findIndex((cell) => EMAIL_SHAPED.test(cell));
-    if (offending !== -1) {
-      // The value itself is not reported. It is the thing we are refusing to
-      // let into the repository, so it does not go into a log either.
-      throw new SheetExportError(
-        `${tab.tab}: row ${rowIndex + 2}, column ${offending + 1} holds ` +
-          `something shaped like an email address. This command exports ` +
-          `product mappings and nothing else; refusing to write.`
-      );
-    }
   }
 
   return dataRows;
@@ -704,14 +743,27 @@ export function assignmentRowsFrom(
   for (const [rowIndex, dataRow] of dataRows.entries()) {
     const found = dataRow[dispositionIndex] ?? "";
     if (!isDisposition(found)) {
+      // The cell is not quoted. It used to be, and the argument for quoting it
+      // was that a `Disposition` is a closed set of this repository's own
+      // words, so whatever sits there is a typo of one of them. That argument
+      // describes the tab working. The case this refusal exists for is the tab
+      // not working — a range that slid onto a neighbour, or a column inserted
+      // upstream — and then this column holds whatever the workbook holds
+      // there, in a workbook whose other tabs hold member data. The scan in
+      // `readSheetTab` has already passed by here and only ever ruled out one
+      // shape: a name is not shaped like an email address.
+      //
+      // Empty versus unrecognised stays, because that distinction is the
+      // point of the message rather than a description of the cell.
       throw new SheetExportError(
-        `${tab.tab}: row ${rowIndex + 2} holds ` +
-          `${found === "" ? "an empty" : `an unrecognised`} ` +
-          `${tab.columns.disposition}${found === "" ? "" : ` "${found}"`}. ` +
+        `${tab.tab}: row ${rowIndex + 2}, column ` +
+          `${columnLetter(dispositionIndex + 1)} (\`${tab.columns.disposition}\`) ` +
+          `holds ${found === "" ? "nothing" : "a word this table cannot express"}. ` +
           `One of ${DISPOSITIONS.map((value) => `"${value}"`).join(", ")} is ` +
-          `expected. An empty cell is not the same as "undecided": ` +
-          `"undecided" is a curator saying nobody has looked yet, and a blank ` +
-          `is a row that cannot say even that.`
+          `expected, and what the cell holds instead is not reported. An ` +
+          `empty cell is not the same as "undecided": "undecided" is a ` +
+          `curator saying nobody has looked yet, and a blank is a row that ` +
+          `cannot say even that.`
       );
     }
   }

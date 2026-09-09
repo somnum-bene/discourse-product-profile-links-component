@@ -4,6 +4,8 @@ import {
   buildCatalogue,
   COLLECTION_LINK_SUFFIX,
   type CollectionLink,
+  DISPOSITION_OUTCOMES,
+  type DispositionRow,
   dropdownOptionsFor,
   earnsCollectionLink,
   type ExcludedProduct,
@@ -347,6 +349,33 @@ function valuesFor(
   return entries
     .filter((entry) => entry.userFieldName === userFieldName)
     .map((entry) => entry.value);
+}
+
+/**
+ * One disposition row, found by the pair it is keyed on. A miss throws rather
+ * than returning undefined, because every assertion below is about what a row
+ * says and an absent row would make `toMatchObject` pass on nothing.
+ */
+function dispositionFor(
+  dispositions: DispositionRow[],
+  userFieldName: string,
+  legacyValue: string
+): DispositionRow {
+  const found = dispositions.find(
+    (row) =>
+      row.userFieldName === userFieldName && row.legacyValue === legacyValue
+  );
+
+  if (!found) {
+    throw new Error(
+      `expected a disposition row for ${userFieldName} ${legacyValue}, got ` +
+        dispositions
+          .map((row) => `${row.userFieldName} ${row.legacyValue}`)
+          .join(", ")
+    );
+  }
+
+  return found;
 }
 
 function exclusionFor(
@@ -1723,6 +1752,428 @@ describe("the cross-sink assertion", () => {
     );
 
     expect(mappingCount).toBe(optionCount + COLLECTION_LINKS.length);
+  });
+});
+
+/**
+ * The disposition table: one row per legacy option value, and the only artifact
+ * that crosses into the non-public repository that does the member-level join
+ * (#28). Everything asserted here is asserted about a legacy identifier,
+ * because that is the column the join is keyed on and the string a migrated
+ * member is actually holding.
+ *
+ * The single rule the whole table turns on: a row with a URL carries the value
+ * that ships as a Mapping, and a row without one carries the member's own
+ * legacy display text verbatim. There is no third case, and no row is omitted.
+ */
+describe("the disposition table as the fifth output", () => {
+  /**
+   * What the standard fixtures come to, spelled out rather than computed, for
+   * the same reason `COLLECTION_LINKS` is: a change in the transform should
+   * arrive here as a diff a reader can judge rather than as a formula that
+   * moved with it.
+   */
+  const DISPOSITIONS: DispositionRow[] = [
+    {
+      userFieldName: "Machine",
+      legacyValue: "4801",
+      legacyText: "AirSense 11 AutoSet CPAP Machine",
+      value: "AirSense 11 AutoSet",
+      url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+      disposition: "resolves-to-product",
+    },
+    {
+      userFieldName: "Machine",
+      legacyValue: "4872",
+      legacyText:
+        "AirCurve 10 VAuto BiLevel Machine with HumidAir Heated Humidifier",
+      value: "AirCurve 10 VAuto BiLevel Machine",
+      url: "https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine",
+      disposition: "resolves-to-product",
+    },
+    {
+      // The second legacy value for the same Suggested Title. The catalogue
+      // collapses the two to one Mapping; this table must not collapse them,
+      // because two members holding two different identifiers both need a row.
+      userFieldName: "Machine",
+      legacyValue: "5213",
+      legacyText: "ResMed AirCurve 10 ASV",
+      value: "ResMed AirCurve 10 ASV BiLevel Machine",
+      url: "https://www.cpap.com/products/resmed-aircurve-10-asv-bilevel-machine",
+      disposition: "resolves-to-product",
+    },
+    {
+      // The catch-all row: its value is built from `Text`, not from the
+      // Suggested Title, which names no equipment (ADR-0020).
+      userFieldName: "Machine",
+      legacyValue: "5851",
+      legacyText: "DreamStation Auto CPAP Machine",
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: CPAP_MACHINES,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Machine",
+      legacyValue: "6092",
+      legacyText: "AirCurve 10 Vauto USA C2C CO",
+      value: "AirCurve 10 VAuto BiLevel Machine",
+      url: "https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine",
+      disposition: "resolves-to-product",
+    },
+    {
+      userFieldName: "Machine",
+      legacyValue: "6240",
+      legacyText: "Aircurve 11 asv",
+      value: "AirCurve 11 ASV (Discontinued)",
+      url: BIPAP,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3001",
+      legacyText: "Mirage FX Nasal Mask with Headgear",
+      value: "Mirage FX Nasal CPAP Mask",
+      url: "https://www.cpap.com/products/resmed-mirage-fx-nasal-cpap-mask",
+      disposition: "resolves-to-product",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3002",
+      legacyText: "Morf Nasal Mask",
+      value: "Morf Nasal Mask (Discontinued)",
+      url: NASAL_MASKS,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3003",
+      legacyText: "Viva Nasal Mask",
+      value: "Viva Nasal CPAP Mask (Discontinued)",
+      url: NASAL_MASKS,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3004",
+      legacyText: "SleepWeaver Elan",
+      value: "SleepWeaver Elan Nasal CPAP Mask (Discontinued)",
+      url: NASAL_MASKS,
+      disposition: "collection",
+    },
+    {
+      // No Suggested Title to resolve and none to build a name from, so the
+      // member keeps what the bulletin board showed them and gets no link.
+      userFieldName: "Mask",
+      legacyValue: "3005",
+      legacyText: "Unlisted mask",
+      value: "Unlisted mask",
+      url: "",
+      disposition: "blank-title",
+    },
+  ];
+
+  it("is every legacy option value, once each, and nothing else", () => {
+    expect(build().dispositions).toEqual(DISPOSITIONS);
+  });
+
+  it("covers both Managed Fields and invents no third one", () => {
+    // Humidifier is out of scope entirely (#42/ADR-0022), and the way it stays
+    // out is that the table walks the Sheet Exports — whose allowlist has two
+    // entries — rather than a field list of its own.
+    expect([
+      ...new Set(build().dispositions.map((row) => row.userFieldName)),
+    ]).toEqual(["Machine", "Mask"]);
+  });
+
+  it("carries a value and a URL exactly together", () => {
+    // The one invariant the downstream join relies on. A URL with no value
+    // would be a link with no anchor text to match a member against; a value
+    // with no URL would be this table claiming a Mapping that does not ship.
+    const { dispositions, catalogue, collectionLinks } = build();
+    const shipped = new Set(
+      [...catalogue, ...collectionLinks].map(
+        (entry) => `${entry.userFieldName}\u0000${entry.value}`
+      )
+    );
+
+    for (const row of dispositions) {
+      const key = `${row.userFieldName}\u0000${row.value}`;
+
+      expect(row.value).not.toBe("");
+
+      if (row.url === "") {
+        expect(row.value).toBe(row.legacyText);
+        expect(shipped.has(key)).toBe(false);
+      } else {
+        expect(shipped.has(key)).toBe(true);
+      }
+    }
+  });
+
+  it("appends no suffix to a value that earns no link", () => {
+    // The suffix exists because a Collection Link's value is its anchor text
+    // (ADR-0020). An unlinked value has no anchor text, so a suffix there
+    // labels nothing and manufactures a string that looks like a Collection
+    // Link and resolves for nobody — the exact failure this epic removes.
+    const unlinked = build().dispositions.filter((row) => row.url === "");
+
+    expect(unlinked.length).toBeGreaterThan(0);
+
+    for (const row of unlinked) {
+      expect(row.value.endsWith(COLLECTION_LINK_SUFFIX)).toBe(false);
+    }
+  });
+
+  it("resolves a resolves-to-product row to the product, never to `n/a`", () => {
+    // The one-cell mistake that produces a plausible-looking artifact. PNums
+    // 6377 and 6378 carry `n/a` in `Profile Link Value` — the row saying it
+    // proposes no *new* value, not that the identifier has no value — and
+    // passing that through would emit a Profile Link literally called `n/a`,
+    // which stores fine, renders nothing, and is indistinguishable to a member
+    // from the bug this epic removes.
+    //
+    // Nothing parses the `5232` out of the row's prose, either. The legacy row
+    // carries its own `Suggested Title`, and that title is the join to the
+    // catalogue, so the resolution is structural.
+    const nonMagnetic: SheetRow = {
+      userFieldName: "Mask",
+      legacyValue: "6377",
+      legacyText: "AirFit™ F20 Non Magnetic Complete Mask System - LGE",
+      suggestedTitle: "Mirage FX Nasal CPAP Mask",
+      suggestedUrl:
+        "https://www.sleeping.com/products/resmed-mirage-fx-nasal-cpap-mask",
+    };
+    const { dispositions } = build([...SHEET_ROWS, nonMagnetic], PRODUCTS, [
+      ...ASSIGNMENTS,
+      assignment({
+        field: "Mask",
+        legacyPnums: "6377",
+        legacyText: "AirFit™ F20 Non Magnetic Complete Mask System - LGE",
+        baseNameSource: "n/a",
+        profileLinkValue: "n/a",
+        recommendedCollectionTitle: "n/a — resolves to existing mapped product",
+        recommendedCollectionUrl: "n/a — same as existing value 3001",
+        disposition: "resolves-to-product",
+      }),
+    ]);
+
+    expect(dispositionFor(dispositions, "Mask", "6377")).toEqual({
+      userFieldName: "Mask",
+      legacyValue: "6377",
+      legacyText: "AirFit™ F20 Non Magnetic Complete Mask System - LGE",
+      value: "Mirage FX Nasal CPAP Mask",
+      url: "https://www.cpap.com/products/resmed-mirage-fx-nasal-cpap-mask",
+      disposition: "resolves-to-product",
+    });
+  });
+
+  it("keeps the legacy text and no URL for a plain-text row", () => {
+    const { dispositions } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: BIPAP,
+        disposition: "plain-text",
+      }),
+    ]);
+
+    expect(dispositionFor(dispositions, "Machine", "6240")).toEqual({
+      userFieldName: "Machine",
+      legacyValue: "6240",
+      legacyText: "Aircurve 11 asv",
+      value: "Aircurve 11 asv",
+      url: "",
+      disposition: "plain-text",
+    });
+  });
+
+  it("keeps the legacy text and no URL for an undecided row", () => {
+    // `undecided` blocks the ship (#38/ADR-0021), which is a gate's job. What
+    // this table does with it is refuse to lose the member's value over it.
+    const { dispositions } = build(ASV_ROW, PRODUCTS, [
+      assignment({
+        legacyPnums: "6240",
+        profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+        recommendedCollectionUrl: BIPAP,
+        disposition: "undecided",
+      }),
+    ]);
+
+    expect(dispositionFor(dispositions, "Machine", "6240")).toMatchObject({
+      value: "Aircurve 11 asv",
+      url: "",
+      disposition: "undecided",
+    });
+  });
+
+  it("says `collection-link-fault` where a link was owed and withheld", () => {
+    // Every reason a link goes undelivered reads the same way to a member —
+    // no link — and differently to a curator, which is what the review
+    // document is for. Here it needs one word, and it must not be a word that
+    // reads as a decision somebody made.
+    const { dispositions, collectionFaults } = build(ASV_ROW, PRODUCTS, []);
+
+    expect(collectionFaults.map((fault) => fault.problem)).toEqual([
+      "unassigned-legacy-value",
+    ]);
+    expect(dispositionFor(dispositions, "Machine", "6240")).toMatchObject({
+      value: "Aircurve 11 asv",
+      url: "",
+      disposition: "collection-link-fault",
+    });
+  });
+
+  it("reports an ambiguous title match as itself, not as plain text", () => {
+    // ADR-0020 treats an ambiguous match as evidence the equipment is still
+    // sold and the Sheet Export is wrong. Folding it into `plain-text` would
+    // file a fixable data fault as a curator's settled decision.
+    const twin: ProductRecord = {
+      handle: "morf-nasal-mask-second",
+      title: "Morf Nasal Mask",
+      status: "ACTIVE",
+      tags: [],
+      onlineStoreUrl: "https://www.cpap.com/products/morf-nasal-mask-second",
+    };
+    const morf = MASK_ROWS.filter((row) => row.legacyValue === "3002").map(
+      (row) => ({ ...row, suggestedUrl: "" })
+    );
+    const { dispositions } = build(morf, [...PRODUCTS, twin], ASSIGNMENTS);
+
+    expect(dispositionFor(dispositions, "Mask", "3002")).toMatchObject({
+      value: "Morf Nasal Mask",
+      url: "",
+      disposition: "ambiguous-title-match",
+    });
+  });
+
+  it("keeps a curator's plain-text apart from its sibling's withheld link", () => {
+    // A `divided-value` group: two legacy values derive one value, one earned a
+    // link and one was told not to, so neither ships. The two rows must not
+    // read the same — one is a decision that was honoured, the other is a link
+    // a member is now missing.
+    const { dispositions, collectionFaults } = build(
+      [...ASV_ROW, ASV_SIBLING],
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "6240",
+          profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+          recommendedCollectionUrl: BIPAP,
+        }),
+        assignment({
+          legacyPnums: "6241",
+          profileLinkValue: "AirCurve 11 ASV (Discontinued)",
+          recommendedCollectionUrl: BIPAP,
+          disposition: "plain-text",
+        }),
+      ]
+    );
+
+    expect(collectionFaults.map((fault) => fault.problem)).toEqual([
+      "divided-value",
+    ]);
+    expect(dispositionFor(dispositions, "Machine", "6241")).toMatchObject({
+      disposition: "plain-text",
+      url: "",
+    });
+    expect(dispositionFor(dispositions, "Machine", "6240")).toMatchObject({
+      disposition: "collection-link-fault",
+      url: "",
+    });
+  });
+
+  it("reports what ships when a curated row says plain-text of a live product", () => {
+    // The awkward case, decided rather than left to fall out. A curator writes
+    // `plain-text` against a legacy value whose Suggested Title still resolves
+    // to a live product — so the catalogue carries that title as a Mapping
+    // whatever the curated row says, because the catalogue is built from the
+    // sheet and Shopify and never consults the Collection Assignment.
+    //
+    // The table reports `resolves-to-product` with the URL, which is what a
+    // member will actually get. Reporting `plain-text` with no URL would make
+    // this artifact disagree with the `settings.yml` it is joined against, and
+    // a table that is wrong about whether a link renders is worse than one
+    // that is silent about a curator being overruled.
+    //
+    // It *is* silent about it, and that is the known cost: the mirror case —
+    // `resolves-to-product` against a title that stopped resolving — is
+    // reported loudly as `stale-product-resolution`, and this direction has no
+    // fault of its own. Giving it one means a new `CollectionLinkProblem`,
+    // which is its own ticket; this test is here so the behaviour is a decision
+    // on the record rather than an accident nobody wrote down.
+    const { dispositions, collectionFaults } = build(
+      MACHINE_ROWS.filter((row) => row.legacyValue === "4801"),
+      PRODUCTS,
+      [
+        assignment({
+          legacyPnums: "4801",
+          profileLinkValue: "AirSense 11 AutoSet (Discontinued)",
+          recommendedCollectionUrl: CPAP_MACHINES,
+          disposition: "plain-text",
+        }),
+      ]
+    );
+
+    expect(collectionFaults).toEqual([]);
+    expect(dispositionFor(dispositions, "Machine", "4801")).toMatchObject({
+      value: "AirSense 11 AutoSet",
+      url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+      disposition: "resolves-to-product",
+    });
+  });
+
+  it("hands over the legacy display text byte for byte, padding included", () => {
+    // `sheetRowsFrom` preserves this cell deliberately, and the table is where
+    // that care would otherwise be thrown away. Trimming it would be this
+    // pipeline tidying member-authored content — the same thing appending
+    // ` (Discontinued)` to an unlinked value would be, refused on the same
+    // grounds. And a trimmed value cannot be un-trimmed downstream, so the raw
+    // bytes leave the choice with the repository doing the writing.
+    //
+    // The identifier is the exception, because it is a join key: it is trimmed
+    // here and by `deriveCollectionLinks` and `legacyValuesOf`, so a padded
+    // cell cannot key one map and miss another.
+    const padded: SheetRow = {
+      userFieldName: "Mask",
+      legacyValue: "  3006  ",
+      legacyText: "  Unlisted mask with trailing space  ",
+      suggestedTitle: "",
+      suggestedUrl: "",
+    };
+    const { dispositions } = build([padded], PRODUCTS, []);
+
+    expect(dispositions).toEqual([
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "  Unlisted mask with trailing space  ",
+        value: "  Unlisted mask with trailing space  ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ]);
+  });
+
+  it("emits a disposition this repository has a word for", () => {
+    for (const row of build().dispositions) {
+      expect(DISPOSITION_OUTCOMES).toContain(row.disposition);
+    }
+  });
+
+  it("carries no column a member could be identified by", () => {
+    // The whole point of the artifact. Every column is either a legacy option
+    // identifier, a product name, or a URL — nothing is keyed to a person, and
+    // the shape is what enforces it rather than a scan of the contents.
+    for (const row of build().dispositions) {
+      expect(Object.keys(row).sort()).toEqual([
+        "disposition",
+        "legacyText",
+        "legacyValue",
+        "url",
+        "userFieldName",
+        "value",
+      ]);
+    }
   });
 });
 

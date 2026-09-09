@@ -7,6 +7,7 @@ import {
   COLLECTION_LINK_SUFFIX,
   collectionHandleFromUrl,
   type CollectionLink,
+  type DispositionRow,
   type ProductRecord,
   type ResolvedProduct,
   type SheetRow,
@@ -24,6 +25,9 @@ import {
   curatesTitles,
   declaredDigest,
   digestOf,
+  DISPOSITION_COLUMNS,
+  DISPOSITION_FILE,
+  dispositionTableCsv,
   divisionFieldsOf,
   DIVISIONS,
   divisionSurveyQuery,
@@ -34,6 +38,7 @@ import {
   productsByHandleQuery,
   productsFromByHandleResponse,
   readCollectionLinks,
+  readDispositionTable,
   readResolvedProducts,
   renderReviewDocument,
   resolvedProductsCsv,
@@ -49,6 +54,7 @@ import {
   ASSIGNMENT_TABS,
   type AssignmentRow,
   assignmentRowsFrom,
+  EMAIL_SHAPED,
   exportFileName,
   SHEET_TABS,
   sheetRowsFrom,
@@ -282,6 +288,34 @@ describe("handlesFromSheetRows", () => {
         },
       ])
     ).toThrow(CatalogueRefreshError);
+  });
+
+  it("refuses that Suggested URL without printing the cell it read", () => {
+    // A Suggested URL is a workbook cell, and the tab it comes from sits in a
+    // workbook whose other tabs hold member data. This refusal used to quote
+    // both the URL and the handle it yielded. It is a narrow way in — the cell
+    // has to hold `/products/` and then something that is not a handle — but
+    // that bounds how often it fires, not what it prints when it does.
+    const canary = "Marjorie Fenwick-Abara";
+    const contaminated = [
+      {
+        userFieldName: "Machine",
+        legacyValue: "9999",
+        legacyText: "Something legacy",
+        suggestedTitle: "Something",
+        suggestedUrl: `${canary} /products/Not A Handle`,
+      },
+    ];
+
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /row 1 of the exports, under Machine/
+    );
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /^(?!.*Marjorie)/s
+    );
+    expect(() => handlesFromSheetRows(contaminated)).toThrow(
+      /^(?!.*Not A Handle)/s
+    );
   });
 
   it("has nothing to look for when there are no rows", () => {
@@ -881,7 +915,7 @@ describe("the catalogue file", () => {
 
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/unexpected header row/);
+    ).toThrow(/line 2 should be the header row/);
   });
 
   it("refuses a row that is not as wide as the header says", () => {
@@ -913,7 +947,7 @@ describe("the catalogue file", () => {
 
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/empty field/);
+    ).toThrow(/row 2, column 5 is empty — it names no url/);
   });
 });
 
@@ -1066,7 +1100,7 @@ describe("the collection-links file", () => {
 
     expect(() =>
       readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/unexpected header row/);
+    ).toThrow(/line 2 should be the header row/);
   });
 
   it("refuses a row with an empty field", () => {
@@ -1074,7 +1108,7 @@ describe("the collection-links file", () => {
 
     expect(() =>
       readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/empty field/);
+    ).toThrow(/row 2, column 3 is empty — it names no url/);
   });
 
   it("refuses a row that is not as wide as the header says", () => {
@@ -1200,6 +1234,1046 @@ describe("the collection-links file", () => {
   });
 });
 
+describe("the disposition table file", () => {
+  const CPAP_MACHINES = "https://www.cpap.com/collections/cpap-machines";
+  const ROWS: DispositionRow[] = [
+    {
+      userFieldName: "Machine",
+      legacyValue: "4872",
+      legacyText: "AirCurve 10 VAuto BiLevel Machine with HumidAir",
+      value: "AirCurve 10 VAuto BiLevel Machine",
+      url: "https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine",
+      disposition: "resolves-to-product",
+    },
+    {
+      userFieldName: "Machine",
+      legacyValue: "5851",
+      legacyText: "DreamStation Auto CPAP Machine",
+      value: "DreamStation Auto CPAP Machine (Discontinued)",
+      url: CPAP_MACHINES,
+      disposition: "collection",
+    },
+    {
+      userFieldName: "Mask",
+      legacyValue: "3005",
+      legacyText: "Unlisted mask",
+      value: "Unlisted mask",
+      url: "",
+      disposition: "blank-title",
+    },
+  ];
+
+  /** A file body as the reader wants it, digest and all. */
+  function digested(body: string): string {
+    return `# sha256 ${digestOf(body)}\n${body}`;
+  }
+
+  const HEADER =
+    "user_field_name,legacy_value,legacy_text,value,url,disposition";
+
+  /**
+   * The rows, plus a minimal row for any Managed Field they do not cover.
+   *
+   * The table is refused if it has lost a whole field, which is right about
+   * the artifact and awkward for a fixture: a test about one rule wants the
+   * one row that rule is about, and the file wants every field. Padding here
+   * rather than in each test keeps them showing only what they are for.
+   */
+  function withEveryField(rows: DispositionRow[]): DispositionRow[] {
+    const present = new Set(rows.map((row) => row.userFieldName));
+
+    return [
+      ...rows,
+      ...SHEET_TABS.filter((tab) => !present.has(tab.userFieldName)).map(
+        (tab) => ({
+          userFieldName: tab.userFieldName,
+          legacyValue: "1",
+          legacyText: `A ${tab.userFieldName} row this test is not about`,
+          value: `A ${tab.userFieldName} row this test is not about`,
+          url: "",
+          disposition: "plain-text" as const,
+        })
+      ),
+    ];
+  }
+
+  it("is a digest line, a header, and one row per legacy value", () => {
+    const lines = dispositionTableCsv(ROWS).split("\n");
+
+    expect(lines[0]).toMatch(/^# sha256 [0-9a-f]{64}$/);
+    expect(lines[1]).toBe(HEADER);
+    expect(lines).toHaveLength(6);
+    expect(lines[5]).toBe("");
+  });
+
+  it("carries the user field name as well as the five columns asked for", () => {
+    // The legacy identifier is only unique within a field, and the non-public
+    // side has to emit the custom field name as one of its three columns. A
+    // table without it would make the join guess at both.
+    expect(DISPOSITION_COLUMNS).toEqual([
+      "user_field_name",
+      "legacy_value",
+      "legacy_text",
+      "value",
+      "url",
+      "disposition",
+    ]);
+  });
+
+  it("round-trips every row unchanged, empty URL included", () => {
+    expect(readDispositionTable(dispositionTableCsv(ROWS))).toEqual(ROWS);
+  });
+
+  it("refuses a row that names no value", () => {
+    // An empty value is the one field this file cannot carry. The whole point
+    // of a row with no URL is that it still tells the non-public side what to
+    // write, so a blank there is a member's equipment quietly deleted.
+    const body = `${HEADER}\nMask,3005,Unlisted mask,,,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /names no value/
+    );
+  });
+
+  it("refuses a disposition this repository has no word for", () => {
+    const body = `${HEADER}\nMask,3005,Unlisted mask,Unlisted mask,,retired\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /column 6 \(`disposition`\) is not one of/
+    );
+  });
+
+  it("refuses a linked disposition with no URL", () => {
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /`collection` and carries no URL/
+    );
+  });
+
+  it("refuses an unlinked disposition carrying a URL", () => {
+    // The pairing runs both ways. A `plain-text` row with a URL is a curator's
+    // decision being overruled by a link nobody assigned.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv,${CPAP_MACHINES},plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /`plain-text` and its column 5 \(`url`\) is not empty/
+    );
+  });
+
+  it("refuses an unlinked row whose value is not the legacy text", () => {
+    // Where the suffix would land if anyone appended it. A value that is not
+    // the member's own text, with no Mapping behind it, is a string invented
+    // for a member to hold that resolves for nobody.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv (Discontinued),,plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /carries no URL, so its column 4 \(`value`\) has to hold what/
+    );
+  });
+
+  it("refuses a file edited by hand after it was generated", () => {
+    const tampered = dispositionTableCsv(ROWS).replace("5851", "5852");
+
+    expect(() => readDispositionTable(tampered)).toThrow(
+      /does not match its own digest/
+    );
+  });
+
+  it("refuses to write a table with no rows at all", () => {
+    // The vacuous pass, refused at the boundary rather than only floored in a
+    // test. Every legacy option value earns a row, so none means the Sheet
+    // Exports arrived empty — and `MAX_DATA_ROWS` cannot notice that, because
+    // it only has a ceiling. An empty table is not a small version of this
+    // file: it is a claim that no member holds any equipment, and it would be
+    // valid, digested and correctly shaped.
+    expect(() => dispositionTableCsv([])).toThrow(CatalogueRefreshError);
+    expect(() => dispositionTableCsv([])).toThrow(
+      /no member holds any equipment/
+    );
+  });
+
+  it("refuses to read a table with no rows either", () => {
+    // Same rule on the way back in. A header-only file is a valid, digested,
+    // correctly-shaped artifact, so nothing else about it would complain.
+    const body = `${HEADER}\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /no member holds any equipment/
+    );
+  });
+
+  it("refuses to write a row that names no value", () => {
+    // The writer and the reader have to agree, and this is where they used to
+    // not: a legacy row with an empty `Text` and no Suggested Title derives a
+    // blank value, which this would happily write and `readDispositionTable`
+    // would then refuse. A file that passes every gate that produced it and
+    // fails the one that consumes it is the worse of the two failures.
+    const nameless: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "5854",
+        legacyText: "",
+        value: "",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    expect(() => dispositionTableCsv(nameless)).toThrow(
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
+    );
+  });
+
+  it("refuses to write a row whose value is only whitespace", () => {
+    // What the removed `.trim()` used to give for free. Nothing upstream trims
+    // the display text any more — it is carried verbatim on purpose — so
+    // `"   "` arrives as three real characters instead of collapsing to `""`,
+    // and it is worse than an empty value: it looks populated in every diff
+    // and every reader while naming nothing.
+    const whitespace: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "   ",
+        value: "   ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    expect(() => dispositionTableCsv(whitespace)).toThrow(
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
+    );
+  });
+
+  it("round-trips a value whose padding is real, rather than tidying it", () => {
+    // The other side of the same rule: whitespace *around* a name is preserved
+    // end to end, because the far side cannot un-trim what we trimmed.
+    const padded: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "3006",
+        legacyText: "  Unlisted mask  ",
+        value: "  Unlisted mask  ",
+        url: "",
+        disposition: "blank-title",
+      },
+    ];
+
+    const table = withEveryField(padded);
+
+    expect(readDispositionTable(dispositionTableCsv(table))).toEqual(table);
+  });
+
+  it("refuses to read a row whose value is only whitespace", () => {
+    // `dataRowsOf` cannot see this one — it refuses an absent field, and this
+    // field is present. Writer and reader share the check, so they share the
+    // wording too.
+    const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /row 2, column 3 \(`legacy_text`\) holds only whitespace/
+    );
+  });
+
+  /**
+   * The writer is held to every rule the reader is, because the command calls
+   * it before any write precisely so a refusal costs nothing — and that only
+   * holds if the refusal is complete. `DispositionRow` cannot encode the
+   * value/URL correlation in its type, so nothing but a check enforces it, and
+   * a check on one side only is a gate reporting success on the way out and
+   * failure on the way in, with a committed file in between.
+   */
+  describe("the pairing rules, enforced on the way out as well as in", () => {
+    /** One row, overridden into whichever violation is under test. */
+    function rowWith(overrides: Partial<DispositionRow>): DispositionRow[] {
+      return [
+        {
+          userFieldName: "Machine",
+          legacyValue: "6240",
+          legacyText: "Aircurve 11 asv",
+          value: "AirCurve 11 ASV (Discontinued)",
+          url: CPAP_MACHINES,
+          disposition: "collection",
+          ...overrides,
+        },
+      ];
+    }
+
+    it("refuses to write a linked disposition with no URL", () => {
+      expect(() => dispositionTableCsv(rowWith({ url: "" }))).toThrow(
+        /`collection` and carries no URL/
+      );
+    });
+
+    it("refuses to write an unlinked disposition carrying a URL", () => {
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({ disposition: "plain-text", value: "Aircurve 11 asv" })
+        )
+      ).toThrow(/`plain-text` and its column 5 \(`url`\) is not empty/);
+    });
+
+    it("refuses to write an unlinked value that is not the legacy text", () => {
+      // Where an appended suffix would land. The reader caught this and the
+      // writer did not, so a regression could have committed it.
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({
+            disposition: "plain-text",
+            value: "Aircurve 11 asv (Discontinued)",
+            url: "",
+          })
+        )
+      ).toThrow(/its column 4 \(`value`\) has to hold what/);
+    });
+
+    it("refuses to write a disposition this repository has no word for", () => {
+      expect(() =>
+        dispositionTableCsv(
+          rowWith({ disposition: "retired" as DispositionRow["disposition"] })
+        )
+      ).toThrow(/column 6 \(`disposition`\) is not one of/);
+    });
+
+    it("refuses a URL that is only whitespace", () => {
+      // The gap between the two checks either side of it: `dataRowsOf` lets
+      // `url` be blank, the whitespace check skips `url` for that reason, and
+      // `"   " !== ""` — so a resolving disposition pointing nowhere sailed
+      // through both. `""` is the sentinel every consumer reads as "no link",
+      // so the column gets no third state.
+      expect(() => dispositionTableCsv(rowWith({ url: "   " }))).toThrow(
+        /carries whitespace/
+      );
+    });
+
+    it("refuses a URL padded around a real one", () => {
+      expect(() =>
+        dispositionTableCsv(rowWith({ url: ` ${CPAP_MACHINES} ` }))
+      ).toThrow(/carries whitespace/);
+    });
+
+    it("refuses an unlinked value the runtime would resolve anyway", () => {
+      // The consequence of carrying the legacy text verbatim, which is right
+      // for its own reasons (ADR-0023). Resolution is a trimmed match on both
+      // sides, so a padded legacy text resolves the Mapping its trimmed form
+      // names — the member gets a link while the row says they get none.
+      //
+      // Refused rather than reconciled: whether the row wanted
+      // `resolves-to-product` or the padding was an accident is a curator's
+      // answer, and this is the artifact where a silent guess reaches a member.
+      const collision: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "AirSense 11 AutoSet",
+          value: "AirSense 11 AutoSet",
+          url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Machine",
+          legacyValue: "9001",
+          legacyText: "  AirSense 11 AutoSet  ",
+          value: "  AirSense 11 AutoSet  ",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(() => dispositionTableCsv(collision)).toThrow(
+        /trims to the same string as that of row 2/
+      );
+    });
+
+    it("allows an unlinked value that only looks similar", () => {
+      // The check is a trimmed equality, not a fuzzy one. A different name is
+      // a different value, and refusing those would make the guard unusable.
+      const near: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "AirSense 11 AutoSet",
+          value: "AirSense 11 AutoSet",
+          url: "https://www.cpap.com/products/resmed-airsense-11-autoset",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Machine",
+          legacyValue: "9001",
+          legacyText: "AirSense 11 AutoSet Card-to-Cloud",
+          value: "AirSense 11 AutoSet Card-to-Cloud",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(
+        readDispositionTable(dispositionTableCsv(withEveryField(near)))
+      ).toHaveLength(3);
+    });
+
+    it("lets the same value collide across two different fields", () => {
+      // Mappings are keyed per Custom User Field, so a Machine value and a
+      // Mask value that read the same resolve independently and neither
+      // shadows the other.
+      const acrossFields: DispositionRow[] = [
+        {
+          userFieldName: "Machine",
+          legacyValue: "4801",
+          legacyText: "Bedside Unit",
+          value: "Bedside Unit",
+          url: "https://www.cpap.com/products/bedside-unit",
+          disposition: "resolves-to-product",
+        },
+        {
+          userFieldName: "Mask",
+          legacyValue: "9001",
+          legacyText: "Bedside Unit",
+          value: "Bedside Unit",
+          url: "",
+          disposition: "plain-text",
+        },
+      ];
+
+      expect(
+        readDispositionTable(dispositionTableCsv(acrossFields))
+      ).toHaveLength(2);
+    });
+
+    it("reports a structural fault without echoing the row", () => {
+      // Deliberately *not* an email address. An email would be stopped by the
+      // scan above, so a test using one would pass with the echo restored and
+      // prove nothing about this rule. The scan is a tripwire for one shape of
+      // member data, not a filter for member data; a name sails straight
+      // through it. So the diagnostics carry coordinates and nothing else, and
+      // this is the case that holds them to it.
+      const name = "Marjorie Fenwick-Abara";
+      const short =
+        `${HEADER}\n` + `Machine,6240,${name},v,,plain-text,extra\n`;
+      const blank = `${HEADER}\n` + `Machine,6240,${name},,,plain-text\n`;
+
+      for (const body of [short, blank]) {
+        expect(() =>
+          readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+        ).toThrow(/^(?!.*Marjorie)/s);
+      }
+
+      // And still says enough to find the cell.
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(blank)}\n${blank}`)
+      ).toThrow(/row 2, column 4 is empty — it names no value/);
+    });
+
+    it("reports a missing header row without echoing what it found", () => {
+      // The header diagnostic prints `found:` to explain which columns it got,
+      // which is worth keeping — but a file whose header row is absent hands
+      // it a data row to print. The scan runs first so this refuses as
+      // contamination rather than as a header, and prints neither.
+      //
+      // A *line*, not a row: the scan reads the raw text before the digest is
+      // verified, so line 1 is the digest line and the contaminated row is
+      // line 2. It cannot number in rows without assuming the file structure
+      // that is precisely what is still in doubt.
+      const body =
+        `Machine,6240,someone@example.com,v,,plain-text\n` +
+        `Machine,6241,Other,Other,,plain-text\n`;
+
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/line 2, column 3 holds something shaped like an email/);
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/^(?!.*someone@example\.com)/s);
+    });
+
+    it("refuses a contaminated file that has no digest line at all", () => {
+      // The earliest reachable diagnostic in the whole read path, and it used
+      // to quote line 1. "No digest line" *means* a data row is line 1, so the
+      // one case that reaches this refusal is the one case where quoting it
+      // prints file content — the two are the same condition, which is what
+      // makes it worth a test rather than a tidy-up.
+      const body =
+        `Machine,6240,someone@example.com,v,,plain-text\n` +
+        `Machine,6241,Other,Other,,plain-text\n`;
+
+      expect(() => readDispositionTable(body)).toThrow(
+        /line 1, column 3 holds something shaped like an email/
+      );
+      expect(() => readDispositionTable(body)).toThrow(
+        /^(?!.*someone@example\.com)/s
+      );
+    });
+
+    it("names no line content when a digest line is merely absent", () => {
+      // The ordinary case, with nothing contaminated in it: the refusal still
+      // has to be useful. It says which file, which line, and exactly what was
+      // expected there — everything except the bytes it found.
+      const body = "user_field_name,legacy_value\nMachine,6240\n";
+
+      expect(() => readDispositionTable(body)).toThrow(
+        /should start with a "# sha256 <64 hex digits>" line on line 1/
+      );
+      expect(() => readDispositionTable(body)).toThrow(
+        /^(?!.*user_field_name,legacy_value)/s
+      );
+    });
+
+    it("redacts for the four commands that ask for a digest directly", () => {
+      // `refresh`, `apply`, `verify` and `build:settings` each call
+      // `declaredDigest` on a file they have just read, without going through
+      // any reader. A guard placed at the top of `dataRowsOf` would cover one
+      // path of the five, so the redaction lives in the function itself.
+      const contaminated = `Machine,6240,someone@example.com,v\n`;
+
+      expect(() => declaredDigest(contaminated, CATALOGUE_FILE)).toThrow(
+        /^(?!.*someone@example\.com)/s
+      );
+      expect(() => declaredDigest(contaminated, CATALOGUE_FILE)).toThrow(
+        /data\/resolved-products\.csv should start with/
+      );
+    });
+
+    it("refuses two rows claiming the same legacy value", () => {
+      // The pair is this table's key. Two rows under it hand the non-public
+      // side two different pieces of equipment for one member and nothing to
+      // choose between them, so it picks — silently, and not necessarily the
+      // same way twice.
+      const duplicated: DispositionRow[] = [
+        ...rowWith({}),
+        ...rowWith({
+          disposition: "plain-text",
+          value: "Aircurve 11 asv",
+          url: "",
+        }),
+      ];
+
+      expect(() => dispositionTableCsv(duplicated)).toThrow(
+        /row 3 repeats the column 2 \(`legacy_value`\) and column 1 \(`user_field_name`\) already claimed by row 2/
+      );
+    });
+
+    it("refuses a repeated legacy value on the way in as well", () => {
+      // Hand-assembled rather than round-tripped, because the writer now
+      // refuses this and a round-trip could never produce it. The reader is
+      // the gate that runs against a file someone edited.
+      const body =
+        `${HEADER}\n` +
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n` +
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/row 3 repeats the column 2 \(`legacy_value`\)/);
+    });
+
+    it("lets one legacy value appear under two different fields", () => {
+      // The near-miss that has to stay legal. The key is the pair, not the
+      // identifier: the two option tables number their rows independently, so
+      // a Machine 6240 and a Mask 6240 are unrelated and both are real.
+      const sameIdentifier: DispositionRow[] = [
+        ...rowWith({}),
+        ...rowWith({
+          userFieldName: "Mask",
+          legacyText: "Some mask",
+          value: "Some mask",
+          url: "",
+          disposition: "plain-text",
+        }),
+      ];
+
+      expect(
+        readDispositionTable(dispositionTableCsv(sameIdentifier))
+      ).toHaveLength(2);
+    });
+
+    it("refuses a legacy value carrying whitespace", () => {
+      // The join key the far side matches exactly. Padding here finds no
+      // member at all, which is a miss rather than an error — the failure this
+      // table cannot afford, because nothing in this repository can observe it.
+      expect(() =>
+        dispositionTableCsv(rowWith({ legacyValue: " 6240 " }))
+      ).toThrow(/column 2 \(`legacy_value`\) carries whitespace/);
+    });
+
+    it("says the same thing whichever side of the boundary refuses", () => {
+      // The point of one shared validator: identical rules, identical wording,
+      // no drift. Only the row number differs, and only because the writer
+      // counts rows it has not written yet.
+      const bad = rowWith({ url: "" });
+      let onWrite = "";
+      let onRead = "";
+
+      try {
+        dispositionTableCsv(bad);
+      } catch (error) {
+        onWrite = (error as Error).message;
+      }
+
+      const body =
+        `${HEADER}\nMachine,6240,Aircurve 11 asv,` +
+        `AirCurve 11 ASV (Discontinued),,collection\n`;
+
+      try {
+        readDispositionTable(digested(body));
+      } catch (error) {
+        onRead = (error as Error).message;
+      }
+
+      expect(onWrite).not.toBe("");
+      expect(onRead).toBe(onWrite);
+    });
+  });
+
+  /**
+   * The no-echo rule, checked across every refusal rather than argued once.
+   *
+   * `scripts/README.md` records it as a property of this whole boundary, and it
+   * was true of the two earliest diagnostics while nine refusals below them
+   * still printed the cell — the coordinate-only rewrite reached the function
+   * being edited at the time and stopped there. A table is what stops that
+   * being a per-round discovery.
+   *
+   * The canary is a **name**, and that is the load-bearing choice. An email
+   * address is caught by `EMAIL_SHAPED` before any of these refusals runs, so
+   * every case below would pass with the echo fully restored — which is how an
+   * earlier version of this test passed for the wrong reason. A name is what
+   * the tripwire cannot see, and a legacy display text is where one would
+   * land.
+   */
+  describe("what a refusal is allowed to say", () => {
+    const CANARY = "Marjorie Fenwick-Abara";
+
+    function rowWith(overrides: Partial<DispositionRow>): DispositionRow {
+      return {
+        userFieldName: "Machine",
+        legacyValue: "6240",
+        legacyText: "Aircurve 11 asv",
+        value: "AirCurve 11 ASV (Discontinued)",
+        url: CPAP_MACHINES,
+        disposition: "collection",
+        ...overrides,
+      };
+    }
+
+    /** Every way this boundary can refuse a row, each carrying the canary. */
+    const refusals: readonly (readonly [string, () => unknown])[] = [
+      [
+        "a column holding only whitespace",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: CANARY, legacyText: "  " }),
+          ]),
+      ],
+      [
+        "a url carrying whitespace",
+        () => dispositionTableCsv([rowWith({ url: ` ${CANARY} ` })]),
+      ],
+      [
+        "a join key carrying whitespace",
+        () => dispositionTableCsv([rowWith({ legacyValue: ` ${CANARY} ` })]),
+      ],
+      [
+        "a disposition it has no word for",
+        () =>
+          dispositionTableCsv([
+            rowWith({ disposition: CANARY as DispositionRow["disposition"] }),
+          ]),
+      ],
+      [
+        "an unlinked row carrying a url",
+        () =>
+          dispositionTableCsv([
+            rowWith({
+              disposition: "plain-text",
+              url: CANARY,
+              value: "Aircurve 11 asv",
+            }),
+          ]),
+      ],
+      [
+        "an unlinked value that is not the legacy text",
+        () =>
+          dispositionTableCsv([
+            rowWith({ disposition: "plain-text", url: "", value: CANARY }),
+          ]),
+      ],
+      [
+        "an unlinked row the runtime would resolve anyway",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: "1", value: CANARY }),
+            rowWith({
+              legacyValue: "2",
+              disposition: "plain-text",
+              url: "",
+              legacyText: ` ${CANARY} `,
+              value: ` ${CANARY} `,
+            }),
+          ]),
+      ],
+      [
+        "two rows claiming the same key",
+        () =>
+          dispositionTableCsv([
+            rowWith({ legacyValue: CANARY }),
+            rowWith({
+              legacyValue: CANARY,
+              disposition: "plain-text",
+              url: "",
+              value: "Aircurve 11 asv",
+            }),
+          ]),
+      ],
+      [
+        "a file that has lost its header row",
+        () =>
+          readDispositionTable(
+            digested(`"Machine","6240","${CANARY}","AirFit","","plain-text"\n`)
+          ),
+      ],
+      [
+        "a committed row with a blank column",
+        () =>
+          readDispositionTable(
+            digested(
+              `${HEADER}\n"Machine","${CANARY}","","x","","plain-text"\n`
+            )
+          ),
+      ],
+      [
+        "a committed row with a padded join key",
+        () =>
+          readDispositionTable(
+            digested(
+              `${HEADER}\n"Machine"," ${CANARY} ","x","x","","plain-text"\n`
+            )
+          ),
+      ],
+    ];
+
+    it("uses a canary the email guard cannot see", () => {
+      // If this ever fails, every case below is being caught by the tripwire
+      // and none of them is proving anything about the refusal it names.
+      expect(EMAIL_SHAPED.test(CANARY)).toBe(false);
+    });
+
+    for (const [what, refuse] of refusals) {
+      it(`quotes no cell when it refuses ${what}`, () => {
+        let message = "";
+
+        try {
+          refuse();
+        } catch (error) {
+          message = (error as Error).message;
+        }
+
+        expect(message).not.toBe("");
+        expect(message).not.toContain(CANARY);
+        // The coordinate is the entire diagnostic once the value is gone, so a
+        // refusal naming neither would satisfy the line above by saying
+        // nothing a reader could act on.
+        expect(message).toMatch(/(row|line) \d+/);
+      });
+    }
+
+    // The table above enumerates the refusals that exist, which is a bet that
+    // I have listed them all — and the record of this review says otherwise
+    // three times over. So this does not enumerate. It puts the canary in each
+    // column in turn, drives it through both directions of the boundary, and
+    // asserts of whatever comes back only that the canary is not in it. A rule
+    // added later is covered without anybody remembering to come back here.
+    // Each case pairs the canary with a fault, and asserts a refusal actually
+    // fired. Without the fault most of these rows are valid — a name is a
+    // legal `legacy_text` — so the sweep would run, refuse nothing, assert
+    // nothing, and pass. It read that way first; the probe that showed ten of
+    // twelve cases reaching no refusal at all is why it does not now.
+    const faults: {
+      named: string;
+      break: (row: DispositionRow) => DispositionRow[];
+    }[] = [
+      {
+        named: "a duplicated key",
+        break: (row) => [row, row],
+      },
+      {
+        named: "a blank column beside it",
+        break: (row) => [
+          { ...row, url: "", value: row.legacyText, disposition: " " as never },
+        ],
+      },
+    ];
+
+    for (const [at, column] of DISPOSITION_COLUMNS.entries()) {
+      const contaminatedRow = (): DispositionRow =>
+        rowWith({
+          userFieldName: at === 0 ? CANARY : "Machine",
+          legacyValue: at === 1 ? CANARY : "6240",
+          legacyText: at === 2 ? CANARY : "Aircurve 11 asv",
+          value: at === 3 ? CANARY : "AirCurve 11 ASV (Discontinued)",
+          url: at === 4 ? CANARY : CPAP_MACHINES,
+          disposition: at === 5 ? (CANARY as never) : "collection",
+        });
+
+      for (const fault of faults) {
+        const contaminated = () =>
+          withEveryField(fault.break(contaminatedRow()));
+
+        it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on write`, () => {
+          let message = "";
+
+          try {
+            dispositionTableCsv(contaminated());
+          } catch (error) {
+            message = (error as Error).message;
+          }
+
+          expect(message).not.toBe("");
+          expect(message).not.toContain(CANARY);
+        });
+
+        it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on read`, () => {
+          // Built by hand rather than by the writer, because the writer
+          // refuses these rows and the reader has to be held to the same rule
+          // on a file that reached the repository some other way — a hand
+          // edit, a merge, an older version of this command.
+          const body = [
+            DISPOSITION_COLUMNS.join(","),
+            ...contaminated().map((row) =>
+              [
+                row.userFieldName,
+                row.legacyValue,
+                row.legacyText,
+                row.value,
+                row.url,
+                row.disposition,
+              ]
+                .map((value) => `"${value.replace(/"/g, '""')}"`)
+                .join(",")
+            ),
+          ].join("\n");
+
+          let message = "";
+
+          try {
+            readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`);
+          } catch (error) {
+            message = (error as Error).message;
+          }
+
+          expect(message).not.toBe("");
+          expect(message).not.toContain(CANARY);
+        });
+      }
+    }
+  });
+
+  /**
+   * A field can go missing without the table looking wrong, which is what
+   * makes it worse than the empty table the row-count rule already refused.
+   */
+  describe("every Managed Field earns rows, not just one of them", () => {
+    const maskOnly: DispositionRow[] = [
+      {
+        userFieldName: "Mask",
+        legacyValue: "6377",
+        legacyText: "AirFit F20",
+        value: "AirFit F20",
+        url: "",
+        disposition: "plain-text",
+      },
+    ];
+
+    it("refuses to write a table that has lost a whole field", () => {
+      // `readSheetTab` accepts a tab holding a header row and nothing else, so
+      // an export truncated to its header contributes no rows for that field
+      // while the other field keeps the table populated. The row count cannot
+      // see it: the table is not empty, it is half empty.
+      expect(() => dispositionTableCsv(maskOnly)).toThrow(/none for Machine/);
+    });
+
+    it("refuses to read one, on the same reasoning", () => {
+      const body = `${HEADER}\nMask,6377,AirFit F20,AirFit F20,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /none for Machine/
+      );
+    });
+
+    it("names the field from SHEET_TABS and nothing from the file", () => {
+      // The absence has no cell, so there is nothing here a coordinate could
+      // point at — and nothing that needs quoting either. What it prints is
+      // this repository's own vocabulary.
+      let message = "";
+
+      try {
+        dispositionTableCsv([
+          {
+            ...maskOnly[0],
+            legacyText: "Marjorie Fenwick-Abara",
+            value: "Marjorie Fenwick-Abara",
+          },
+        ]);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+
+      expect(message).toMatch(/none for Machine/);
+      expect(message).not.toContain("Marjorie");
+    });
+
+    it("reports a row's own fault before it reports a missing field", () => {
+      // Both are true of this table. The duplicate key names a row to go and
+      // look at where this rule names an absence, so the order is not
+      // arbitrary: the specific fault is the one worth hearing first.
+      const duplicated: DispositionRow[] = [maskOnly[0], maskOnly[0]];
+
+      expect(() => dispositionTableCsv(duplicated)).toThrow(/row 3 repeats/);
+    });
+
+    it("accepts a table that covers both", () => {
+      expect(() => dispositionTableCsv(withEveryField(maskOnly))).not.toThrow();
+    });
+  });
+
+  /**
+   * A cell may hold a newline: `csvLine` quotes any field containing one, and
+   * `parseCsv` reads the quoted field back across the line break. So a
+   * physical line is not a record, and the guard that runs before the digest
+   * — before anything has established this is even well-formed CSV — has to
+   * locate a cell without assuming the two are the same.
+   */
+  describe("a value that spans lines, and the coordinates it does not break", () => {
+    const CANARY = "member@example.com";
+
+    it("round-trips a legacy text holding a newline", () => {
+      // The shape is the writer's own, not a hand-edit-only concern, which is
+      // what makes the coordinates below worth getting right.
+      const multiline = withEveryField([
+        {
+          userFieldName: "Mask",
+          legacyValue: "6377",
+          legacyText: "AirFit F20\nFull Face",
+          value: "AirFit F20\nFull Face",
+          url: "",
+          disposition: "plain-text",
+        },
+      ]);
+
+      expect(readDispositionTable(dispositionTableCsv(multiline))).toEqual(
+        multiline
+      );
+    });
+
+    it("names the field's column when the address is on a continuation line", () => {
+      // Column 3, not column 1. Handing that one physical line to `parseCsv`
+      // sees a fragment with no commas and calls it the first field of a row.
+      const body =
+        `${HEADER}\n` +
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 4, column 3/
+      );
+    });
+
+    it("still refuses, and with coordinates, when the fragment cannot parse", () => {
+      // This is the regression that cost the most: the continuation line ends
+      // inside a quoted field, so re-parsing it alone threw
+      // `SheetExportError: the response ended inside a quoted field` — a
+      // refusal, so nothing leaked, but one that named no file, no location
+      // and spoke of a "response" for a file on disk. The guard's own message
+      // never ran.
+      const body =
+        `${HEADER}\n` + `Mask,6377,"AirFit\n${CANARY}",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        CatalogueRefreshError
+      );
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 4, column 3/
+      );
+      expect(() => readDispositionTable(digested(body))).not.toThrow(
+        /ended inside a quoted field/
+      );
+    });
+
+    it("counts the line the address is on, not the one its record starts on", () => {
+      const body =
+        `${HEADER}\n` + `Mask,6377,"${CANARY}\nAirFit",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /line 3, column 3/
+      );
+    });
+
+    it("quotes nothing when it refuses, as before", () => {
+      const body =
+        `${HEADER}\n` +
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+
+      expect(() => readDispositionTable(digested(body))).toThrow(
+        /^(?!.*member@example\.com)/s
+      );
+    });
+  });
+
+  it("writes an empty URL without complaint, which is the only blank it allows", () => {
+    expect(dispositionTableCsv(withEveryField([ROWS[2]]))).toContain(
+      "Mask,3005,Unlisted mask,Unlisted mask,,blank-title"
+    );
+  });
+
+  it("refuses to write a cell shaped like an email address", () => {
+    // The precedent is `readSheetTab`'s own refusal, and this artifact is the
+    // one that crosses to the side that holds member data, so the tripwire
+    // points outward as well as in.
+    expect(() => dispositionTableCsv(withLeak())).toThrow(
+      CatalogueRefreshError
+    );
+    expect(() => dispositionTableCsv(withLeak())).toThrow(
+      /shaped like an email address/
+    );
+  });
+
+  it("does not echo the cell it is refusing to write", () => {
+    // A guard that logged the thing it is refusing to admit would have written
+    // it into the repository by way of the error message. The row and column
+    // are enough to find it in the source it came from.
+    let message = "";
+
+    try {
+      dispositionTableCsv(withLeak());
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    // Row 5 rather than row 4: the header is row 1, so the fourth data row is
+    // the fifth line a person opening the file would count to.
+    expect(message).not.toContain(LEAKED);
+    expect(message).toContain("row 5");
+    expect(message).toContain("column 3");
+  });
+
+  const LEAKED = "someone@example.com";
+
+  /** The three good rows with a fourth that must never reach the file. */
+  function withLeak(): DispositionRow[] {
+    return [
+      ...ROWS,
+      {
+        userFieldName: "Mask",
+        legacyValue: "9001",
+        legacyText: LEAKED,
+        value: LEAKED,
+        url: "",
+        disposition: "plain-text",
+      },
+    ];
+  }
+});
+
 describe("curatesTitles", () => {
   it("is true for both current tabs, which both have Suggested columns", () => {
     // No current SHEET_TABS entry has `titleColumn: null` — `user_humidifier`
@@ -1235,6 +2309,7 @@ describe("the review document", () => {
     exclusions: built.exclusions,
     collectionLinks: built.collectionLinks,
     collectionFaults: built.collectionFaults,
+    dispositions: built.dispositions,
     sheetRows: SHEET_ROWS,
     products: PRODUCTS,
     digest: "0".repeat(64),
@@ -1353,6 +2428,7 @@ describe("the review document", () => {
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: collapsed,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1380,6 +2456,7 @@ describe("the review document", () => {
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: single,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1406,6 +2483,7 @@ describe("the review document", () => {
         },
       ],
       collectionFaults: [],
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1432,12 +2510,89 @@ describe("the review document", () => {
     expect(review).toContain("None.");
   });
 
+  /**
+   * The disposition section's own assertions.
+   *
+   * Everything else in this describe passed `dispositions` through and never
+   * looked at what came out, so a regression in these counts stayed green —
+   * which is not hypothetical: the prose in this section shipped claiming
+   * `undecided` and `collection-link-fault` were "the last two rows" of a table
+   * that puts the curator's four words first, and no test noticed. These are
+   * the numbers a reviewer reads to decide whether an unexpected number of
+   * members lost a link (#28), so they are worth pinning.
+   */
+  describe("the disposition table section", () => {
+    // Two of the fixture's six legacy values resolve; the other four earn a
+    // Collection Link and get none, because this document is rendered with no
+    // assignment rows behind it.
+    const linked = built.dispositions.filter((row) => row.url !== "").length;
+    const unlinked = built.dispositions.length - linked;
+
+    it("heads the section with the legacy values it covers", () => {
+      expect(linked).toBeGreaterThan(0);
+      expect(unlinked).toBeGreaterThan(0);
+      expect(review).toContain(
+        `## Disposition table — ${built.dispositions.length} legacy values`
+      );
+      expect(review).toContain(
+        `- Disposition table: \`data/disposition-table.csv\`, ` +
+          `${built.dispositions.length} legacy values`
+      );
+    });
+
+    it("splits the values by whether a Profile Link resolves", () => {
+      expect(review).toContain(
+        `${linked} of these resolve a Profile Link and ${unlinked} do not`
+      );
+    });
+
+    it("counts every disposition, including the ones nothing fell under", () => {
+      // An absent row and a zero say different things: a zero is the pipeline
+      // reporting that nothing reached that outcome, and an absent row is a
+      // reader wondering whether the outcome still exists.
+      expect(review).toContain("| `resolves-to-product` | 2 | yes |");
+      expect(review).toContain("| `collection-link-fault` | 4 | no |");
+      expect(review).toContain("| `collection` | 0 | yes |");
+      expect(review).toContain("| `plain-text` | 0 | no |");
+      expect(review).toContain("| `undecided` | 0 | no |");
+      expect(review).toContain("| `blank-title` | 0 | no |");
+      expect(review).toContain("| `ambiguous-title-match` | 0 | no |");
+    });
+
+    it("names the two fault-side dispositions rather than pointing at rows", () => {
+      // The regression this section shipped with. Pointing at positions in a
+      // table that is deliberately ordered another way sent a reviewer to
+      // `ambiguous-title-match` — which is evidence the Sheet Export is wrong
+      // (ADR-0020), not an undelivered link, and a different job entirely.
+      expect(review).toContain(
+        "`undecided` and `collection-link-fault` are the section above"
+      );
+      expect(review).not.toContain("The last two rows are the section above");
+    });
+
+    it("says one value in the singular", () => {
+      const one = renderReviewDocument({
+        catalogue: built.catalogue,
+        exclusions: built.exclusions,
+        collectionLinks: built.collectionLinks,
+        collectionFaults: built.collectionFaults,
+        dispositions: built.dispositions.slice(0, 1),
+        sheetRows: SHEET_ROWS,
+        products: PRODUCTS,
+        digest: "0".repeat(64),
+      });
+
+      expect(one).toContain("1 of these resolves a Profile Link and 0 do not");
+    });
+  });
+
   it("is the same document twice, because there is no clock in it", () => {
     const again = renderReviewDocument({
       catalogue: built.catalogue,
       exclusions: built.exclusions,
       collectionLinks: built.collectionLinks,
       collectionFaults: built.collectionFaults,
+      dispositions: built.dispositions,
       sheetRows: SHEET_ROWS,
       products: PRODUCTS,
       digest: "0".repeat(64),
@@ -1475,6 +2630,7 @@ describe("the review document", () => {
         exclusions: after.exclusions,
         collectionLinks: after.collectionLinks,
         collectionFaults: after.collectionFaults,
+        dispositions: after.dispositions,
         sheetRows: SHEET_ROWS,
         products: [archived, ...PRODUCTS.slice(1)],
         digest: "0".repeat(64),
@@ -1506,6 +2662,42 @@ describe("what each file is allowed to do", () => {
     expect(lib).not.toContain("writeFile");
   });
 
+  it("gives the disposition validators no way to quote a cell", () => {
+    /** A top-level function's source, declaration to closing brace. */
+    function bodyOf(name: string): string {
+      const start = lib.indexOf(`function ${name}(`);
+      const end = lib.indexOf("\n}\n", start);
+
+      expect(start).not.toBe(-1);
+      expect(end).not.toBe(-1);
+
+      return lib.slice(start, end);
+    }
+
+    // Blunt on purpose. Inside these three every string in scope came out of
+    // the file, so there is nothing here that `JSON.stringify` could be
+    // quoting except a cell — which makes a ban cheaper to keep than a
+    // judgement about which columns are safe, and it was exactly that
+    // judgement ("a legacy identifier, a product name and a URL is all they
+    // hold") that left nine refusals printing one.
+    //
+    // The canary table above pins the refusals that exist today; this pins the
+    // ones added later, which is the half a table of cases cannot cover
+    // because a new refusal arrives without a case.
+    //
+    // `dataRowsOf` is deliberately not on this list: its header diagnostic
+    // quotes the *expected* column names, which are a constant of this
+    // repository rather than file content. What it must not echo is pinned by
+    // the canary table instead.
+    for (const validator of [
+      "assertDispositionRow",
+      "assertNoResolvingCollisions",
+      "assertNoDuplicateKeys",
+    ]) {
+      expect(bodyOf(validator)).not.toContain("JSON.stringify");
+    }
+  });
+
   it("never lets the command name the credential it uses", () => {
     expect(command).not.toContain(`"${TOKEN_VAR}"`);
     expect(command).toContain("process.env[TOKEN_VAR]");
@@ -1526,10 +2718,35 @@ describe("what each file is allowed to do", () => {
     // writing them: `build` and `apply` read the catalogue by the same constant.
     expect(command).not.toContain(CATALOGUE_FILE);
     expect(command).not.toContain(COLLECTION_LINKS_FILE);
+    expect(command).not.toContain(DISPOSITION_FILE);
     expect(command).not.toContain(REVIEW_FILE);
     expect(command).toContain("writeFile(CATALOGUE_FILE, csv)");
     expect(command).toContain("writeFile(COLLECTION_LINKS_FILE, linksCsv)");
+    expect(command).toContain("writeFile(DISPOSITION_FILE, dispositionCsv)");
     expect(command).toContain("writeFile(REVIEW_FILE, review)");
+  });
+
+  it("still writes the disposition table, which nothing else would notice", () => {
+    // `main` cannot run without a Shopify token, so this source-level contract
+    // is the only thing standing between the command and a silently dropped
+    // write. Every other test around this artifact would stay green: the
+    // formatter tests call `dispositionTableCsv` directly, and
+    // `spec/unit/disposition-table.test.ts` compares the committed file against
+    // a fresh derivation — neither asks whether the command still emits it. The
+    // file would simply stop being regenerated and go stale, which for the one
+    // artifact another repository consumes is the quietest possible failure.
+    expect(command).toContain("dispositionTableCsv(dispositions)");
+    expect(command).toContain("writeFile(DISPOSITION_FILE, dispositionCsv)");
+  });
+
+  it("builds the disposition table before it writes anything", () => {
+    // The refusals in `dispositionTableCsv` are only free if nothing has been
+    // written when one fires. A refusal after the catalogue had been
+    // regenerated would leave the two files disagreeing, with the handoff
+    // missing and no obvious sign of it.
+    expect(command.indexOf("dispositionTableCsv(dispositions)")).toBeLessThan(
+      command.indexOf("await writeFile(CATALOGUE_FILE, csv)")
+    );
   });
 
   it("derives the Collection Links rather than reading them back in", () => {

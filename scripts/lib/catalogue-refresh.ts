@@ -20,6 +20,9 @@ import {
   type CollectionLink,
   type CollectionLinkFault,
   type CollectionLinkProblem,
+  DISPOSITION_OUTCOMES,
+  type DispositionOutcome,
+  type DispositionRow,
   earnsCollectionLink,
   type ExcludedProduct,
   type ExclusionReason,
@@ -28,10 +31,17 @@ import {
   type ProductRecord,
   type ProductStatus,
   type ResolvedProduct,
+  resolvesALink,
+  resolvingValues,
   type SheetRow,
   undeliveredValues,
 } from "./build-catalogue.ts";
-import { type AssignmentRow, parseCsv, SHEET_TABS } from "./sheet-export.ts";
+import {
+  type AssignmentRow,
+  EMAIL_SHAPED,
+  parseCsv,
+  SHEET_TABS,
+} from "./sheet-export.ts";
 
 /** The shop to query. A bare host — `example.myshopify.com`, no scheme, no path. */
 export const SHOP_DOMAIN_VAR = "SHOPIFY_SHOP_DOMAIN";
@@ -65,6 +75,22 @@ export const CATALOGUE_FILE = "data/resolved-products.csv";
  * which is why it carries a digest of its own.
  */
 export const COLLECTION_LINKS_FILE = "data/collection-links.csv";
+
+/**
+ * The disposition table: committed, and read by nothing in this repository.
+ *
+ * It is the one artifact that crosses into the non-public repository that holds
+ * member data (#28). Every other output here feeds a Discourse instance; this
+ * one feeds a join against a member export, performed somewhere this repository
+ * never sees, which is what allows the member-level work to happen without
+ * member data ever landing here.
+ *
+ * Committed for the same reason the catalogue is, and more sharply: the far side
+ * consumes a reviewed artifact rather than the output of a command it cannot
+ * run. It carries a digest of its own, so a file edited by hand between the
+ * review and the join is loud rather than silent.
+ */
+export const DISPOSITION_FILE = "data/disposition-table.csv";
 
 /**
  * The review document. `.ig.` is ignored, because this is a working document
@@ -146,6 +172,13 @@ export interface ReviewInput {
    * only the successes would read best exactly when it matters most.
    */
   collectionFaults: readonly CollectionLinkFault[];
+  /**
+   * The disposition table. Required, because it is the one output of a refresh
+   * that leaves this repository, and the review document is where a refresh is
+   * approved — an approver who was never shown what crosses the boundary is
+   * approving the half that stays.
+   */
+  dispositions: readonly DispositionRow[];
   sheetRows: readonly SheetRow[];
   products: readonly SurveyedProduct[];
   digest: string;
@@ -170,6 +203,47 @@ export const COLLECTION_LINK_COLUMNS = [
   "value",
   "url",
 ] as const;
+
+/**
+ * The disposition table's columns, in order. Six, not the five #28 names: the
+ * legacy identifier is only unique within a Custom User Field, and
+ * the non-public side has to emit that field's name as one of the three columns
+ * Discourse asked for, so a table without it would leave the join deriving it.
+ */
+export const DISPOSITION_COLUMNS = [
+  "user_field_name",
+  "legacy_value",
+  "legacy_text",
+  "value",
+  "url",
+  "disposition",
+] as const;
+
+/**
+ * The one column of the disposition table that may be empty. A row with no URL
+ * is the point of the fourth acceptance criterion — a value dispositioned
+ * `plain-text`, or excluded for a blank or ambiguous title, appears with no URL
+ * rather than being omitted — so the reader admits a blank here and nowhere
+ * else. `value` is deliberately not on this list: a row that names no value is
+ * a member's equipment quietly deleted.
+ */
+const DISPOSITION_BLANKABLE = ["url"];
+
+/**
+ * Where a column sits, for a refusal about it to point at.
+ *
+ * Every refusal in this file locates a cell and declines to quote it, which
+ * makes the coordinate the entire diagnostic rather than a convenience beside
+ * the value. So it is derived from `DISPOSITION_COLUMNS` rather than written
+ * into the prose: a hand-numbered coordinate that drifted when a column moved
+ * would send a reader to the wrong cell with nothing else to go on, and the
+ * usual defence against that — printing the value too — is the one thing these
+ * messages may not do. The parameter takes the tuple's element type, so a
+ * column renamed in one place stops compiling in the other.
+ */
+function columnAt(name: (typeof DISPOSITION_COLUMNS)[number]): string {
+  return `column ${DISPOSITION_COLUMNS.indexOf(name) + 1} (\`${name}\`)`;
+}
 
 const DIGEST_PREFIX = "# sha256 ";
 const DIGEST_LINE = /^# sha256 ([0-9a-f]{64})$/;
@@ -243,7 +317,7 @@ const PRODUCT_FIELDS = `handle
 export function handlesFromSheetRows(rows: readonly SheetRow[]): string[] {
   const handles = new Set<string>();
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const handle = handleFromSuggestedUrl(row.suggestedUrl);
 
     if (!handle) {
@@ -251,9 +325,18 @@ export function handlesFromSheetRows(rows: readonly SheetRow[]): string[] {
     }
 
     if (!HANDLE_SHAPE.test(handle)) {
+      // Neither the URL nor the handle it yields is quoted, on the same terms
+      // as every other refusal that touches a workbook cell. This one is
+      // narrow — the cell has to hold `/products/` and then a segment that is
+      // not a handle, which free text rarely manages — but narrow is a
+      // statement about how often it fires, not about what it prints when it
+      // does. `userFieldName` comes from `SHEET_TABS` and is this
+      // repository's own word for the field, not anything the tab said.
       throw new CatalogueRefreshError(
-        `the Suggested URL "${row.suggestedUrl}" yields "${handle}", which is ` +
-          `not a Shopify product handle. Refusing to guess what it meant.`
+        `row ${index + 1} of the exports, under ${row.userFieldName}, has a ` +
+          `Suggested URL that names a product whose handle does not match ` +
+          `${HANDLE_SHAPE.source}. Refusing to guess what it meant, and not ` +
+          `reporting the cell.`
       );
     }
 
@@ -691,6 +774,477 @@ export function collectionLinksCsv(
 }
 
 /**
+ * The disposition table as a file, in the same digested shape as the other two.
+ *
+ * It validates rather than serialising, and it validates with
+ * `assertDispositionRow` — the same function the reader uses, so this cannot
+ * emit a file `readDispositionTable` would reject. That is not a nicety: the
+ * command calls this *before* any write precisely so a refusal costs nothing,
+ * which only holds if the refusal is complete. A writer enforcing a subset of
+ * its reader's rules is a gate that reports success on the way out and failure
+ * on the way in, and the file in between is already committed.
+ *
+ * Nothing in the pipeline *intends* to put member data in these columns — a
+ * legacy identifier, a product name and a URL is what they are for — so the
+ * email check inside that validator is a tripwire rather than a filter, and a
+ * tripwire belongs at the boundary it guards. `readSheetTab` carries the same
+ * one facing the other way, refusing to let member data *in* from the
+ * spreadsheet.
+ *
+ * Intent is the whole of that claim, though, which is why no refusal in here
+ * leans on it. `legacy_text` is free text a curator typed into a bulletin
+ * board years ago and this pipeline carries verbatim (ADR-0023), and on an
+ * unlinked row `value` is a copy of it. Those two columns hold whatever that
+ * option table holds, so the refusals name coordinates and quote nothing.
+ */
+export function dispositionTableCsv(
+  dispositions: readonly DispositionRow[]
+): string {
+  const rows = dispositions.map((entry) => [
+    entry.userFieldName,
+    entry.legacyValue,
+    entry.legacyText,
+    entry.value,
+    entry.url,
+    entry.disposition,
+  ]);
+
+  // A refusal rather than a floor in a test, because a test only guards the
+  // file on its way into the repository and this guards it on its way out of
+  // the transform. Every legacy option value in the Sheet Exports produces a
+  // row, so no rows means no legacy values — a truncated or emptied export,
+  // which `MAX_DATA_ROWS` cannot notice because it only has a ceiling. Writing
+  // it anyway produces a valid, digested, correctly-shaped file that says every
+  // member's equipment resolves to nothing, and that is the one output of this
+  // pipeline whose emptiness reads as an answer rather than as an error.
+  if (rows.length === 0) {
+    throw new CatalogueRefreshError(
+      emptyTableMessage(
+        "this one would have none, so the exports arrived empty"
+      )
+    );
+  }
+
+  for (const [index, row] of rows.entries()) {
+    assertDispositionRow(row, `${DISPOSITION_FILE} row ${index + 2}`);
+  }
+
+  assertNoResolvingCollisions(dispositions, DISPOSITION_FILE);
+  assertNoDuplicateKeys(dispositions, DISPOSITION_FILE);
+  // Last of the whole-table rules, because it is the only one with no
+  // coordinate to give. A row that contradicts itself and a table that has
+  // lost a field can both be true at once, and the row is the more actionable
+  // of the two: it names a line to go and look at, where this names an
+  // absence. Reporting the specific fault before the summary judgement is
+  // also what keeps a fixture exercising one field from meeting this rule
+  // instead of the one it is about.
+  assertEveryFieldRepresented(dispositions, "the exports arrived with none");
+
+  const body = `${[
+    csvLine([...DISPOSITION_COLUMNS]),
+    ...rows.map((row) => csvLine(row)),
+  ].join("\n")}\n`;
+
+  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+}
+
+/**
+ * The disposition table a file holds, refusing anything that is not exactly
+ * what `dispositionTableCsv` writes.
+ *
+ * Read by no command — the far side of it is a different repository — and that
+ * is precisely why it exists. The file is reviewed once and then consumed by a
+ * join this repository cannot see, so the checks that would normally be a
+ * reader's incidental strictness are the only ones the artifact will ever get:
+ * the digest and the six columns here, and then everything
+ * `assertDispositionRow` insists on, which is the same list the writer is held
+ * to. A gate running here is a gate that runs before the file leaves.
+ */
+export function readDispositionTable(text: string): DispositionRow[] {
+  const dataRows = dataRowsOf(
+    text,
+    DISPOSITION_FILE,
+    DISPOSITION_COLUMNS,
+    DISPOSITION_BLANKABLE
+  );
+
+  if (dataRows.length === 0) {
+    throw new CatalogueRefreshError(emptyTableMessage("It holds none"));
+  }
+
+  const rows = dataRows.map((row, index) => {
+    const [userFieldName, legacyValue, legacyText, value, url] = row;
+    const disposition = assertDispositionRow(
+      row,
+      `${DISPOSITION_FILE} row ${index + 2}`
+    );
+
+    return { userFieldName, legacyValue, legacyText, value, url, disposition };
+  });
+
+  assertNoResolvingCollisions(rows, DISPOSITION_FILE);
+  assertNoDuplicateKeys(rows, DISPOSITION_FILE);
+  assertEveryFieldRepresented(rows, "it holds none");
+
+  return rows;
+}
+
+/**
+ * Every rule one row of the disposition table obeys, in the one place both
+ * sides of the boundary call.
+ *
+ * Shared rather than written twice, because the two callers are a writer and
+ * the reader of what it wrote, and rules kept in two places drift into a
+ * writer that emits what its own reader rejects — a file that passes every
+ * gate that produced it and fails the one that consumes it. That already
+ * happened once here with the blank-value rule, which is why the shape is now
+ * a single validator rather than a habit of keeping them in step.
+ *
+ * It takes the row as raw fields rather than a `DispositionRow` for the same
+ * reason: the reader has six strings out of a CSV and the writer has six
+ * strings on their way in, so one signature serves both, and the narrowed
+ * `DispositionOutcome` comes back out for the reader to build its row from.
+ * `DispositionRow` cannot encode the value/URL correlation in its type, so it
+ * has to be enforced somewhere, and somewhere had better be once.
+ */
+function assertDispositionRow(
+  row: readonly string[],
+  where: string
+): DispositionOutcome {
+  const [, legacyValue, legacyText, value, url, disposition] = row;
+
+  // Reported by row and column and never by content: this is the tripwire that
+  // keeps member data out of the one file that leaves, and a refusal that
+  // logged the cell would have published it in the error message.
+  // `readSheetTab` carries the same guard facing the other way.
+  //
+  // The same rule binds every refusal below it, and not as a matter of style.
+  // This guard catches one *shape* of member data, so passing it says an email
+  // address is not present and nothing more — a name, an address or a member
+  // id goes straight through. Treating a clean pass as licence to quote the
+  // cell would turn the tripwire into a filter it was never able to be, which
+  // is why the refusals below name coordinates and leave the reader to open
+  // the file. `columnAt` derives those coordinates so they cannot drift, since
+  // there is no value printed beside them to fall back on. The two columns
+  // carried verbatim from the bulletin board — `legacy_text` and, on an
+  // unlinked row, `value` — are where a contaminated cell would actually land,
+  // and they are the two the pairing refusals used to print.
+  const offending = row.findIndex((field) => EMAIL_SHAPED.test(field));
+
+  if (offending !== -1) {
+    throw new CatalogueRefreshError(
+      `${where}, column ${offending + 1} holds something shaped like an ` +
+        `email address. This file is the interface to the repository that ` +
+        `joins against member data, and it carries no member data of any kind.`
+    );
+  }
+
+  // Whitespace-only counts as blank, and it has to be said explicitly because
+  // nothing upstream trims any more: the display text is carried verbatim on
+  // purpose, so `"   "` arrives as three real characters rather than
+  // collapsing to `""` on the way. A name of spaces renders as nothing and
+  // matches nothing, and it is worse than an empty one because it looks
+  // populated in every diff and every reader. `dataRowsOf` cannot catch it
+  // either — the field is present.
+  const blank = row.findIndex(
+    (field, at) => field.trim() === "" && DISPOSITION_COLUMNS[at] !== "url"
+  );
+
+  if (blank !== -1) {
+    throw new CatalogueRefreshError(
+      `${where}, column ${blank + 1} (\`${DISPOSITION_COLUMNS[blank]}\`) ` +
+        `holds only whitespace, so it names nothing. Only \`url\` may be ` +
+        `empty, and every other column has to hold something that is not just ` +
+        `whitespace. A row with no URL carries the legacy display text as its ` +
+        `value, so a blank one means its option-table row has an empty ` +
+        `\`Text\` and nothing names the equipment at all — a member's ` +
+        `equipment quietly deleted.`
+    );
+  }
+
+  // `url` is the one column allowed to be empty, which makes `""` the sentinel
+  // every consumer reads as "no link" — `resolvingValues`, the review
+  // document's counts, and the committed-file gate all test it exactly. So the
+  // column has to be *either* empty or a real URL, with no third state: a
+  // whitespace-only cell is not empty and not a URL, and it would slip past
+  // both the blank check (which skips this column) and the pairing check
+  // (because `"   " !== ""`), leaving a resolving disposition pointing nowhere.
+  // Padding around a real URL is refused on the same grounds this file refuses
+  // it around a value — the bytes are the interface.
+  if (url !== url.trim()) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("url")} carries whitespace. This ` +
+        `column is either empty or a URL and there is no third state: every ` +
+        `consumer reads an empty \`url\` as "no Profile Link resolves", so a ` +
+        `cell of spaces is a linked row pointing nowhere that no check ` +
+        `downstream would question.`
+    );
+  }
+
+  // The same rule for the same reason one column over, and this is the column
+  // it matters most in: `legacy_value` is the join key. The non-public side
+  // matches it against the identifier in its member export (CONTEXT.md), which
+  // is an exact match on a bare identifier, so a padded key joins to nothing
+  // and the member's row is simply not found — a silent miss rather than an
+  // error, on the one artifact whose failures this repository cannot observe.
+  // `dispositionTable` trims it on the way in for exactly this reason; saying
+  // so here is what stops a hand-edit from undoing that quietly, and it is what
+  // lets the duplicate check below compare the raw bytes and mean it.
+  if (legacyValue !== legacyValue.trim()) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("legacy_value")} carries whitespace. ` +
+        `This column is the join key the non-public side matches against its ` +
+        `member export, and that match is exact, so a padded key finds no ` +
+        `member rather than failing.`
+    );
+  }
+
+  if (!isDispositionOutcome(disposition)) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("disposition")} is not one of ` +
+        `${DISPOSITION_OUTCOMES.join(", ")}. The non-public side reads this ` +
+        `column to decide what to do with the row, so a word it has never ` +
+        `heard of is a row it cannot act on. What the cell holds instead is ` +
+        `not quoted, and this is the refusal least able to afford quoting it: ` +
+        `it fires exactly when the column does not hold one of the words ` +
+        `above, which is the case when the columns have shifted and it holds ` +
+        `another column's content.`
+    );
+  }
+
+  // The pairing, asked of the transform rather than restated here. A copy of
+  // the rule kept beside the check could refuse a row the transform had just
+  // produced, or admit one whose value nothing ships — and it is the second
+  // that reaches a member.
+  if (resolvesALink(disposition)) {
+    if (url === "") {
+      throw new CatalogueRefreshError(
+        `${where} is \`${disposition}\` and carries no URL. That disposition ` +
+          `means a Mapping ships for this value, so a row saying so with ` +
+          `nowhere to point is a Profile Link that renders nothing — the ` +
+          `failure this whole effort exists to remove.`
+      );
+    }
+  } else if (url !== "") {
+    throw new CatalogueRefreshError(
+      `${where} is \`${disposition}\` and its ${columnAt("url")} is not ` +
+        `empty. That disposition means no Profile Link ships for the value, ` +
+        `so a URL beside it is a link nobody assigned — and on a ` +
+        `\`plain-text\` row it is a curator's decision overruled.`
+    );
+  } else if (value !== legacyText) {
+    throw new CatalogueRefreshError(
+      `${where} carries no URL, so its ${columnAt("value")} has to hold what ` +
+        `its ${columnAt("legacy_text")} holds, and the two differ. A value ` +
+        `with no Mapping behind it is a string invented for a member to hold ` +
+        `that resolves for nobody, and the member's own text is the one ` +
+        `string that is theirs to keep (ADR-0020 puts the suffix on anchor ` +
+        `text, and an unlinked value has none). These are the two columns ` +
+        `carried verbatim from the bulletin board, which is what makes them ` +
+        `the two this refusal most has to leave unquoted.`
+    );
+  }
+
+  return disposition;
+}
+
+/**
+ * Refuses an unlinked row whose value the runtime would resolve anyway.
+ *
+ * The per-row rules cannot see this one, because it is not a fact about a row:
+ * it is a fact about a row *against every other row*. An unlinked row says the
+ * member keeps their text and gets no Profile Link. Resolution is a **trimmed**
+ * match on both sides, though (`javascripts/discourse/lib/profile-links.ts`
+ * trims each Mapping value into `urlsByValue` and trims the stored value before
+ * the lookup), so a legacy text of `"  AirSense 11 AutoSet  "` resolves the
+ * `AirSense 11 AutoSet` Mapping perfectly well. The member gets a link and this
+ * table says they get none — the row contradicts what it describes.
+ *
+ * It compares against the table's own linked rows rather than against
+ * `settings.yml`, and the two are the same set: every Mapping this repository
+ * ships is some linked row's value, because both sinks are built from the same
+ * catalogue and Collection Links. So the check needs no second input, which is
+ * what lets the writer run it as well as the reader — and the writer is the one
+ * that matters, since it runs before anything is committed.
+ *
+ * Refused rather than reconciled. Which of the two the row should have been is
+ * a curator's answer: the collision may be a legacy name that happens to match
+ * a product exactly, in which case the row wants `resolves-to-product`, or it
+ * may be padding nobody noticed. Deciding here would pick one silently, and
+ * this is the artifact where a silent guess reaches a member.
+ *
+ * The exposure exists *because* the legacy text is now carried verbatim. While
+ * it was trimmed the two could not disagree, and trimming was the wrong fix for
+ * a different reason (see ADR-0023 and `DispositionRow`).
+ */
+function assertNoResolvingCollisions(
+  rows: readonly DispositionRow[],
+  file: string
+): void {
+  // Keyed to the *row number* rather than the row, because that number is
+  // what a refusal here is allowed to say. Pointing a reader at the other row
+  // locates everything quoting the two values used to, and carries none of it.
+  const resolvable = new Map<string, number>();
+
+  for (const [index, row] of rows.entries()) {
+    if (row.url !== "") {
+      resolvable.set(`${row.userFieldName}\u0000${row.value.trim()}`, index);
+    }
+  }
+
+  for (const [index, row] of rows.entries()) {
+    if (row.url !== "") {
+      continue;
+    }
+
+    const collides = resolvable.get(
+      `${row.userFieldName}\u0000${row.value.trim()}`
+    );
+
+    if (collides !== undefined) {
+      throw new CatalogueRefreshError(
+        `${file} row ${index + 2} is \`${row.disposition}\`, so it says its ` +
+          `legacy value resolves no Profile Link — but its ` +
+          `${columnAt("value")} trims to the same string as that of row ` +
+          `${collides + 2}, which ships a Mapping. Resolution is a trimmed ` +
+          `match on both sides, so the member would get that link and this ` +
+          `row says they get none. Which of the two is meant is a curator's ` +
+          `answer and not one this can take.`
+      );
+    }
+  }
+}
+
+/**
+ * Refuses two rows that claim the same legacy option value.
+ *
+ * `user_field_name` and `legacy_value` are the primary key of this table. The
+ * non-public side joins on them — one member holds one identifier per field, so
+ * one identifier has to name one answer — and the whole artifact is a promise
+ * that looking a key up yields a single row. Two rows under one key breaks the
+ * promise in the worst available way: not an error on the far side but a pick,
+ * arbitrary and invisible, between two different pieces of equipment to write
+ * into a member's profile.
+ *
+ * It is checkable here and nowhere else. `buildCatalogue` builds a `Map` keyed
+ * this way to look outcomes up, so a duplicate silently keeps the last row and
+ * both emitted rows inherit one row's outcome; but that file is a pure
+ * transform that reports faults and never throws (see `byField`, which ranks an
+ * unknown field first rather than throwing, and gives the reason), so a refusal
+ * does not belong in it. The transform's job is to describe what the inputs
+ * say. Refusing to ship it is this boundary's, alongside every other rule the
+ * writer and the reader are both held to.
+ *
+ * Compares raw rather than trimmed, and that is load-bearing rather than lazy:
+ * `assertDispositionRow` has already refused any `legacy_value` carrying
+ * whitespace by the time this runs, so trimmed and raw are the same string and
+ * a check that trimmed here would be describing a state that cannot reach it.
+ */
+function assertNoDuplicateKeys(
+  rows: readonly DispositionRow[],
+  file: string
+): void {
+  const seen = new Map<string, number>();
+
+  for (const [index, row] of rows.entries()) {
+    const key = `${row.userFieldName}\u0000${row.legacyValue}`;
+    const first = seen.get(key);
+
+    if (first !== undefined) {
+      throw new CatalogueRefreshError(
+        `${file} row ${index + 2} repeats the ${columnAt("legacy_value")} ` +
+          `and ${columnAt("user_field_name")} already claimed by row ` +
+          `${first + 2}. That pair is this table's key: the non-public side ` +
+          `looks a member's identifier up in it and expects one row, so two ` +
+          `rows mean it picks one of them for that member with nothing to ` +
+          `choose on. A repeated identifier is a defect in the Sheet Export ` +
+          `rather than something to reconcile here.`
+      );
+    }
+
+    seen.set(key, index);
+  }
+}
+
+/**
+ * Refuses a table that has lost a whole Managed Field.
+ *
+ * The empty-table refusal beside this one is the same argument at the only
+ * scale it could see: a table with no rows is a claim that no member holds any
+ * equipment. But the table covers two fields, and nothing made the row count
+ * per-field, so one field could vanish while the other kept the file
+ * populated. `readSheetTab` accepts a tab holding a header row and no data —
+ * an export truncated to its header, or a range that slid — and such a tab
+ * contributes no rows here, so the version of this failure that actually
+ * arrives is one field wide.
+ *
+ * It is the worse half of the two, not the smaller one. An empty file is
+ * conspicuous: nobody reviews a header-only artifact and calls it fine. A file
+ * missing every Machine row looks entirely normal — right shape, valid digest,
+ * hundreds of rows — and says, in the only vocabulary the far side reads, that
+ * no member has a machine. Every Machine value then joins to nothing and is
+ * dropped, silently, on the one artifact whose failures this repository cannot
+ * observe.
+ *
+ * Held to `SHEET_TABS` because that is the list that decides what a Managed
+ * Field is. A field there with no rows is either a truncated export or a field
+ * newly added and not yet exported, and both want a human rather than a
+ * default. Naming the missing ones quotes `SHEET_TABS` and never the file, so
+ * the no-echo rule is untouched: what is printed is this repository's own
+ * vocabulary, and the fact being reported is an absence, which has no cell.
+ */
+function assertEveryFieldRepresented(
+  rows: readonly DispositionRow[],
+  holds: string
+): void {
+  const present = new Set(rows.map((row) => row.userFieldName));
+  const missing = SHEET_TABS.filter(
+    (tab) => !present.has(tab.userFieldName)
+  ).map((tab) => tab.userFieldName);
+
+  if (missing.length > 0) {
+    throw new CatalogueRefreshError(
+      `${DISPOSITION_FILE}: every legacy option value of every Managed Field ` +
+        `earns a row, and ${holds} for ${missing.join(" or ")}. A table ` +
+        `missing a whole field is not a smaller version of this file. It is a ` +
+        `claim that no member holds equipment of that kind — and unlike an ` +
+        `empty table it is a claim that looks well-formed, because every ` +
+        `other field's rows are still there to make it look so. The far side ` +
+        `joins on this column, so those members' values find no row and are ` +
+        `dropped. Check the committed \`data/user_*.csv\` for a tab exported ` +
+        `down to its header row.`
+    );
+  }
+}
+
+/**
+ * Why an empty disposition table is refused, said the same way on both sides.
+ * `holds` differs because the remedy does — a writer sends someone to the Sheet
+ * Exports, a reader to the file in front of them — but the reason does not.
+ */
+function emptyTableMessage(holds: string): string {
+  return (
+    `${DISPOSITION_FILE}: every legacy option value in the Sheet Exports ` +
+    `earns a row, and ${holds}. An empty table is not a small version of this ` +
+    `file, it is a claim that no member holds any equipment — valid, ` +
+    `digested, correctly shaped and entirely wrong. Check the committed ` +
+    `\`data/user_*.csv\` first.`
+  );
+}
+
+/**
+ * Whether a string is one of the dispositions the table may emit.
+ *
+ * Named for the wider vocabulary rather than sharing `sheet-export.ts`'s
+ * `isDisposition`, which admits the curator's four and refuses the three the
+ * table adds. Two predicates called the same thing with different answers would
+ * make "widens and never narrows" impossible to read off the code.
+ */
+function isDispositionOutcome(value: string): value is DispositionOutcome {
+  return (DISPOSITION_OUTCOMES as readonly string[]).includes(value);
+}
+
+/**
  * The digest a digested file declares, without reading the rest of it.
  *
  * `file` says which file a failure is about, and it is required. It used to
@@ -700,6 +1254,25 @@ export function collectionLinksCsv(
  * fault in `data/collection-links.csv`. That is the same defaulted-parameter
  * footgun `renderFieldMappings` and `CatalogueInput` both refuse, in the same
  * module, so it does not get an exception here.
+ *
+ * The refusal does **not** quote the line it found, and this is the earliest
+ * point in every read path, so that matters more here than anywhere else. A
+ * file missing its digest line presents its *first data row* as line 1 — that
+ * is what "missing" looks like — and quoting it published a row of whatever the
+ * file holds before a single other check had run. On the disposition table that
+ * is the one artifact that leaves this repository, and this function is the
+ * first thing its reader calls.
+ *
+ * Four commands call it directly, without going through `dataRowsOf`, so the
+ * redaction belongs in here rather than in a guard placed in front of it:
+ * `refresh`, `apply`, `verify` and `build:settings` each ask a file for its
+ * digest before doing anything else. A scan sitting at the top of the reader
+ * would have covered one path of the five.
+ *
+ * Nothing is lost. The line number is always 1, the expectation is spelled out
+ * in full, and the reader is one keystroke from the line the message is about.
+ * What the echo added was the ability to read file content out of a terminal,
+ * which is not a diagnostic feature.
  */
 export function declaredDigest(text: string, file: string): string {
   const firstLine = text.split("\n", 1)[0] ?? "";
@@ -708,7 +1281,9 @@ export function declaredDigest(text: string, file: string): string {
   if (!match) {
     throw new CatalogueRefreshError(
       `${file} should start with a "${DIGEST_PREFIX}<64 hex digits>" ` +
-        `line. It starts with ${JSON.stringify(firstLine)}.`
+        `line on line 1, and does not. Its first line is not quoted here: a ` +
+        `file with no digest line presents a data row as its first, and this ` +
+        `runs before anything has checked what that row holds.`
     );
   }
 
@@ -751,40 +1326,182 @@ function verifiedBody(text: string, file: string): string {
  *
  * What stays with the callers is what only they know: the status enum for the
  * catalogue, the suffix and the collection URL for the Collection Links.
+ *
+ * `blankable` names the columns a blank is meaningful in, and it is required
+ * rather than defaulted for the reason `declaredDigest` takes its `file` that
+ * way: a defaulted `[]` type-checks at a call site that meant to allow one, and
+ * the failure is a reader silently refusing a file its own writer produces.
+ * Two of the three callers pass nothing, and say so.
  */
+/**
+ * Where an offset sits in CSV text: its physical line, and its field within
+ * the record that line belongs to.
+ *
+ * A walk rather than a parse, and that is the point of it. It is used by the
+ * one refusal that runs before anything has established the text is even
+ * well-formed CSV — before the digest, before the header — so it cannot
+ * delegate to `parseCsv`, which throws on an unbalanced quote and would
+ * replace a refusal that names a location with one that names none. Counting
+ * cannot fail: whatever the text is, every byte before the offset either
+ * toggles the quote state, ends a line, ends a field, or does not.
+ *
+ * It tracks quotes by the same rules `parseCsv` does, so the two agree about
+ * which commas and newlines are structural. `""` inside a quoted field toggles
+ * twice and nets out, which is the correct answer for a position.
+ *
+ * The two coordinates are deliberately different in kind. The line is physical
+ * because it is the one thing a reader can act on without trusting the file —
+ * whether line 1 is a digest or a data row is exactly what is unknown at the
+ * caller — while the column is the field's place in its record, which is what
+ * names the cell. A newline inside a quoted value advances the line without
+ * ending the record, so the two can disagree, and when they do the message
+ * says so.
+ */
+function csvPositionOf(
+  text: string,
+  offset: number
+): { line: number; column: number } {
+  let line = 1;
+  let column = 1;
+  let quoted = false;
+
+  for (let index = 0; index < offset; index += 1) {
+    const char = text[index];
+
+    if (char === "\n" || char === "\r") {
+      if (char === "\r" && text[index + 1] === "\n") {
+        index += 1;
+      }
+
+      line += 1;
+
+      // Only a newline outside a quoted field starts a new record, and only a
+      // new record restarts the column count.
+      if (!quoted) {
+        column = 1;
+      }
+
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+
+    if (!quoted && char === ",") {
+      column += 1;
+    }
+  }
+
+  return { line, column };
+}
+
 function dataRowsOf(
   text: string,
   file: string,
-  columns: readonly string[]
+  columns: readonly string[],
+  blankable: readonly string[]
 ): string[][] {
+  // The very first thing, ahead of the digest and everything after it.
+  //
+  // This guard has now been moved twice, each time one step earlier, because
+  // each time a diagnostic *above* it turned out to quote the file to explain
+  // itself: the header refusal prints the row it found, and `declaredDigest`
+  // printed line 1. Placing it third and then second was fixing instances of a
+  // class. Placing it first is the fix for the class — every check below it
+  // now runs on text that has already been refused if it is contaminated, so a
+  // diagnostic added later inherits the guarantee instead of quietly reopening
+  // the hole.
+  //
+  // It reads the raw text, before the digest is verified, which is why it
+  // reports a physical **line** rather than a row. It cannot speak in rows:
+  // whether line 1 is a digest line or a data row is exactly what is still
+  // unknown here, and that ambiguity is the leak it exists to close.
+  //
+  // Matched against the whole text rather than line by line, and the position
+  // is walked out of it rather than re-parsed. A quoted field may contain
+  // newlines — `csvLine` writes that shape itself, for any cell holding one —
+  // so a physical line is not a record, and the line an address sits on can be
+  // the middle of a value that began earlier. Handing that line to `parseCsv`
+  // on its own asks it to read a fragment: it either reports column 1 for a
+  // continuation line that has no commas of its own, or throws "the response
+  // ended inside a quoted field" over the unbalanced quote and loses this
+  // refusal altogether, message and coordinates with it.
+  //
+  // That mattered more than a wrong number usually would, because there is no
+  // value printed beside it. The coordinate *is* the diagnostic here, so it
+  // has to be right for the trade that removed the value to hold.
+  //
+  // A single regex over the whole text is no less thorough than one per line:
+  // `EMAIL_SHAPED` excludes commas, quotes and whitespace, so a match lies
+  // inside exactly one field on exactly one line whichever way it is run.
+  const contaminated = EMAIL_SHAPED.exec(text);
+
+  if (contaminated) {
+    const { line, column } = csvPositionOf(text, contaminated.index);
+
+    throw new CatalogueRefreshError(
+      `${file} line ${line}, column ${column} holds something shaped like an ` +
+        `email address — the line it sits on, and its column in the record ` +
+        `that line belongs to, which a quoted value spanning lines can start ` +
+        `above it. Refusing to read further, and reporting neither the cell ` +
+        `nor the line it sits in.`
+    );
+  }
+
+  const optional = new Set(blankable);
   const rows = parseCsv(verifiedBody(text, file));
   const [header, ...dataRows] = rows;
 
-  if (
-    !header ||
-    header.length !== columns.length ||
-    !header.every((column, index) => column === columns[index])
-  ) {
+  // What line 2 holds instead is not quoted, and this diagnostic is the reason
+  // the rule needs saying rather than assuming: a file whose header row has
+  // been dropped presents a *data* row here, so the refusal for "this is not
+  // the header" is reached by exactly the malformation that makes line 2
+  // member-adjacent content. The expected names are a constant of this
+  // repository and safe to print; the coordinate of the first column that
+  // disagrees with them locates the rest.
+  const found = header ?? [];
+  const differs = columns.findIndex((column, at) => found[at] !== column);
+
+  if (found.length !== columns.length || differs !== -1) {
     throw new CatalogueRefreshError(
-      `${file} has an unexpected header row.\n` +
-        `  expected: ${JSON.stringify(columns)}\n` +
-        `  found:    ${JSON.stringify(header ?? [])}`
+      `${file} line 2 should be the header row ` +
+        `${JSON.stringify(columns)} and is not: it has ${found.length} ` +
+        `columns` +
+        (differs === -1
+          ? `.`
+          : `, and its column ${differs + 1} is not \`${columns[differs]}\`.`) +
+        ` What it holds instead is not quoted — a file that has lost its ` +
+        `header row reaches this refusal with a data row on the line.`
     );
   }
 
   return dataRows.map((row, index) => {
     const where = `${file} row ${index + 2}`;
 
+    // Neither of these echoes the row, and the scan above is not the reason.
+    // That scan catches one shape of member data, which is what a tripwire is
+    // for; it is not a filter, and treating a clean pass through it as licence
+    // to print a whole row would make it one. A name, an address or a member
+    // id would sail through it. What the coordinates already give is the file,
+    // the row and — for the blank — the column, which locates the cell exactly,
+    // so the echo was never buying the diagnostic anything the reader could not
+    // get by opening the file at the line it was just handed.
     if (row.length !== columns.length) {
       throw new CatalogueRefreshError(
         `${where} has ${row.length} fields where the header declares ` +
-          `${columns.length}: ${JSON.stringify(row)}`
+          `${columns.length}.`
       );
     }
 
-    if (row.some((field) => !field)) {
+    const blank = row.findIndex(
+      (field, at) => !field && !optional.has(columns[at] ?? "")
+    );
+
+    if (blank !== -1) {
       throw new CatalogueRefreshError(
-        `${where} has an empty field: ${JSON.stringify(row)}`
+        `${where}, column ${blank + 1} is empty — it names no ${columns[blank]}.`
       );
     }
 
@@ -866,7 +1583,8 @@ export function readCollectionLinks(text: string): CollectionLink[] {
   const dataRows = dataRowsOf(
     text,
     COLLECTION_LINKS_FILE,
-    COLLECTION_LINK_COLUMNS
+    COLLECTION_LINK_COLUMNS,
+    []
   );
   const seen = new Map<string, number>();
 
@@ -925,7 +1643,7 @@ export function readCollectionLinks(text: string): CollectionLink[] {
  * an edit made to the file afterwards has to be loud.
  */
 export function readResolvedProducts(text: string): ResolvedProduct[] {
-  const dataRows = dataRowsOf(text, CATALOGUE_FILE, CATALOGUE_COLUMNS);
+  const dataRows = dataRowsOf(text, CATALOGUE_FILE, CATALOGUE_COLUMNS, []);
 
   return dataRows.map((row, index) => {
     const [userFieldName, value, handle, status, url] = row;
@@ -961,6 +1679,7 @@ export function renderReviewDocument({
   exclusions,
   collectionLinks,
   collectionFaults,
+  dispositions,
   sheetRows,
   products,
   digest,
@@ -1001,6 +1720,8 @@ export function renderReviewDocument({
       `- Collection Links that could not be derived: ` +
         `${undeliveredValues(collectionFaults)} ` +
         `(${collectionFaults.length} reported problems)`,
+      `- Disposition table: \`${DISPOSITION_FILE}\`, ` +
+        `${dispositions.length} legacy values`,
       `- Shopify Admin API ${SHOPIFY_API_VERSION}, read-only, ${products.length} products seen`,
     ].join("\n"),
     `Regenerating this document from unchanged inputs produces an identical ` +
@@ -1013,6 +1734,7 @@ export function renderReviewDocument({
     ...fields.map(renderFieldSection),
     renderCollectionLinks(collectionLinks),
     renderCollectionFaults(collectionFaults),
+    renderDispositions(dispositions),
     renderExclusions(exclusions),
     renderDisagreement(exclusions, unnamed),
     renderInStockUnpublished(inStockUnpublished),
@@ -1312,6 +2034,66 @@ function renderCollectionFaults(
       `\`ambiguous-title-match\` — are not faults and are not here. They are ` +
       `reported as exclusions below, which is where they end (ADR-0020).`,
     ...sections,
+  ].join("\n\n");
+}
+
+/**
+ * The disposition table, as counts rather than rows.
+ *
+ * Counts and not the table itself, and this is the one section where that is
+ * the right call. Every other section reports facts a reviewer has to read one
+ * at a time; this one reports the same values a second time, already approved
+ * above as Mappings, re-keyed onto the legacy identifiers behind them. Two
+ * hundred-odd rows of that would bury the sections that carry new information,
+ * and the file is committed, so the rows are reviewable as a diff — which is
+ * the better review for them anyway.
+ *
+ * What the counts are for is the shape of the handoff (#28): an unexpected
+ * number of values earning no link is visible immediately, and the split
+ * between the seven dispositions is the thing that moves when the store does.
+ */
+function renderDispositions(dispositions: readonly DispositionRow[]): string {
+  const linked = resolvingValues(dispositions);
+
+  return [
+    `## Disposition table — ${dispositions.length} legacy values`,
+    `The one output of a refresh that leaves this repository. It carries no ` +
+      `member data: a legacy identifier, the name the bulletin board showed ` +
+      `for it, the chosen value, the target URL and the disposition. The ` +
+      `non-public side joins it against a fresh member export to produce the ` +
+      `three columns Discourse asked for — member identifier, custom field ` +
+      `name, value — and that join is the only thing on either side that ` +
+      `touches a member (#28).`,
+    `${linked} of these ${linked === 1 ? "resolves" : "resolve"} a Profile ` +
+      `Link and ${dispositions.length - linked} ` +
+      `${dispositions.length - linked === 1 ? "does" : "do"} not. A value ` +
+      `that resolves one ` +
+      `carries the Mapping's own bytes; a value that does not carries the ` +
+      `legacy display text unchanged, so the member keeps what they entered ` +
+      `and simply gets no link. No suffix is added to an unlinked value: ` +
+      `${JSON.stringify(COLLECTION_LINK_SUFFIX)} is a Collection Link's own ` +
+      `anchor text (ADR-0020), and a value that is not a link has none.`,
+    [
+      tableRow([`Disposition`, `Legacy values`, `Resolves a Profile Link`]),
+      tableRow(["---", "---", "---"]),
+      ...DISPOSITION_OUTCOMES.map((disposition) =>
+        tableRow([
+          `\`${disposition}\``,
+          `${
+            dispositions.filter((row) => row.disposition === disposition).length
+          }`,
+          resolvesALink(disposition) ? `yes` : `no`,
+        ])
+      ),
+    ].join("\n"),
+    `\`undecided\` and \`collection-link-fault\` are the section above seen ` +
+      `from the member's side rather than the curator's — not the last two ` +
+      `rows of this table, which are ordered to put the curator's four words ` +
+      `first. They do not sum to that section either: an \`undecided\` row is ` +
+      `reported there as a Collection Link Fault and counted here under ` +
+      `\`undecided\`, because a curator did decide to say so and a gate blocks ` +
+      `the release on it (#38). \`collection-link-fault\` is every other way a ` +
+      `link went undelivered, and a non-zero number there is work outstanding.`,
   ].join("\n\n");
 }
 

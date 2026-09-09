@@ -9,7 +9,7 @@ The commands and what each one is allowed to touch:
 | Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
-| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-links.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-assignment.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `data/disposition-table.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
 | `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
 | `pnpm check:collection-assignment` | `data/collection-assignment.csv`  | nothing — it prints, or refuses     | none, so it runs in CI                                              |
 | `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
@@ -217,7 +217,7 @@ handful of tabs, and exits well inside the hour.
 ## The Catalogue Refresh writes files to ship and one file to read
 
 `refresh:catalogue` is the only command that touches Shopify, and the only one
-that turns a curated title into a link. It writes three things, and they are not
+that turns a curated title into a link. It writes four things, and they are not
 all the same kind of thing:
 
 - **`data/resolved-products.csv` is the record.** It is committed, it is an
@@ -231,14 +231,128 @@ all the same kind of thing:
   what the link is. Three columns rather than five, because a collection has no
   product handle and no product status — which is exactly why widening the
   catalogue file was rejected (ADR-0021). It carries its own digest, and its
-  reader refuses a value whose suffix is not those exact bytes. Its rows are
-  hand-seeded today; deriving them from the Excluded Products and the Collection
-  Assignment is a later step, so this refresh reads the file and writes it back.
+  reader refuses a value whose suffix is not those exact bytes. Every row of it
+  is derived from the Excluded Products and the Collection Assignment rather
+  than typed by a person.
 
   Both files feed the Mappings. Only `data/resolved-products.csv` feeds the
   Dropdown Options, and that asymmetry is the feature: `dropdownOptionsFor` is
   handed the products alone, so it cannot offer a discontinued machine to a User
   choosing theirs.
+- **`data/disposition-table.csv` is the only output that leaves.** One row per
+  legacy option value across both Managed Fields: the legacy identifier, the
+  name the bulletin board showed for it, the chosen Profile Link value, the
+  target URL, and the disposition. It is committed, it carries its own digest,
+  and **nothing in this repository reads it** — it is the entire interface to a
+  separate, non-public repository that joins it against a fresh member export to
+  produce the three columns Discourse's migrations engineer asked for: member
+  identifier, custom field name, value (#28).
+
+  Which string a legacy value becomes is decided here; which member holds it is
+  decided there. Keeping that the only interface is what allows the member-level
+  work to happen somewhere this repository never sees, and it is why the file
+  carries no member data of any kind — `dispositionTableCsv` refuses to write a
+  cell shaped like an email address, and reports the row and column without
+  echoing the cell, on the same reasoning as `readSheetTab`'s guard pointing the
+  other way.
+
+  That guard is the **first** check in each direction, ahead of the digest and
+  the header, and no diagnostic in either path quotes the file to explain
+  itself. Both properties are load-bearing rather than fastidious. A file
+  missing its digest line presents a data row as line 1, and a tab with a row
+  inserted above its header presents one as row 1 — so the two earliest
+  diagnostics are reached by exactly the malformations that hand them file
+  content to print. And the guard is a tripwire for one *shape* of member data
+  rather than a filter for member data, so a clean pass through it is not
+  licence to echo a row: a name goes straight through. Coordinates locate a
+  cell exactly and carry nothing, which is why that is all any refusal gives.
+
+  *Any* refusal, and the rule needs stating that widely because the columns it
+  protects are not the ones intent would suggest. `legacy_text` is free text a
+  curator typed into a bulletin board, carried verbatim (ADR-0023), and on an
+  unlinked row `value` is a copy of it — so a contaminated cell lands in the
+  two columns the pairing rules are about. Which of the six a refusal may quote
+  is not a judgement worth making per rule, so none of them quotes any: the
+  coordinates come from `columnAt`, and a test reads the validators' own source
+  to keep `JSON.stringify` out of them, alongside a table that drives every
+  refusal with a name and asserts none of them prints it. A name rather than an
+  email, because the tripwire would otherwise be what passed the test.
+
+  Removing the value puts the whole weight of the diagnostic on the
+  coordinate, which is why the guard derives its own rather than re-parsing. A
+  cell may hold a newline — `csvLine` quotes any field containing one — so a
+  physical line is not a record, and re-reading the matched line alone either
+  called a continuation line "column 1" or failed on its unbalanced quote and
+  lost the refusal's message entirely. `csvPositionOf` walks the raw text
+  instead, tracking quote state by `parseCsv`'s rules; counting cannot fail on
+  malformed input, which matters for the one check that runs before anything
+  has established the file is CSV at all. The line it reports is physical and
+  the column is the field's place in its record, and the message says so,
+  because a quoted value spanning lines makes the two disagree.
+
+  The rule is now **swept rather than listed**, in both directions and on
+  both boundaries. Listing the refusals that quote a cell has been tried
+  three times and found one more each time, which is a fair verdict on the
+  method: the list is written from the refusals that exist, so it cannot
+  cover the one added next, and each round fixed where the leak was rather
+  than what let it be there. So a canary is driven through every column of
+  every allowlisted tab and every column of this file, in each direction, and
+  the assertion made of whatever comes back is only that the canary is not in
+  it. A refusal added later, in a function nobody has written yet, is covered
+  as soon as it is reachable. Two details are what make it worth anything:
+  the fixtures put the canary in a *valid* row and in one whose range has
+  slid, because a correct header row is what makes the per-row refusals
+  reachable and what makes the header refusal unreachable; and every case
+  pairs the canary with a fault and asserts a refusal fired, because a name
+  is a legal `legacy_text` and a sweep that refuses nothing asserts nothing
+  and passes.
+
+  Every rule below is checked on read as well as on write, by one shared
+  validator rather than two that agree until they drift.
+
+  **Every Managed Field earns rows**, not just one of them. An empty table is
+  refused as a claim that no member holds any equipment; a table missing one
+  field is the same claim about that field, and it is the version that
+  actually happens — `readSheetTab` accepts a tab holding a header row and no
+  data, so an export truncated to its header contributes nothing while the
+  other field keeps the file populated. It is also the harder of the two to
+  notice: a header-only artifact is conspicuous, where a file with hundreds of
+  rows and no Machine among them looks entirely normal. It is checked last of
+  the whole-table rules, because it is the only one with no coordinate to
+  give — a row that contradicts itself is worth hearing about before a summary
+  judgement on the file.
+
+  `user_field_name` and `legacy_value` together are the file's **key**. One
+  member holds one identifier per field, so the far side expects a lookup to
+  yield exactly one row; two rows under one key would have it pick between two
+  pieces of equipment with nothing to choose on. A repeat is refused rather than
+  reconciled, and so is a `legacy_value` carrying whitespace — that match is
+  exact, so a padded key finds no member at all, which is a silent miss rather
+  than an error.
+
+  A row **with** a URL carries a value byte-identical to a Mapping shipped in
+  `settings.yml` — byte-identical, which is deliberately stricter than the
+  runtime's own trimmed match, because a value that differs by one byte in
+  somebody else's join is a member whose Profile Link silently renders nothing
+  (ADR-0023 — relaxing this to agree with `linkCovering` is the obvious tidy-up
+  and it would remove the only guarantee the join has).
+  A row **without** one carries the legacy display text verbatim, with no suffix
+  added, so the member keeps what they entered and simply gets no link. That is
+  the case for a `plain-text` or `undecided` row and for a title excluded as
+  `blank-title` or `ambiguous-title-match`: they appear with no URL rather than
+  being omitted, because the join needs every value. An unlinked row whose value
+  *trims* onto a linked row's is refused too: resolution is a trimmed match on
+  both sides, so such a row would hand the member a link while saying they get
+  none. The `url` column is likewise either empty or a real URL with nothing
+  around it — `""` is the sentinel every consumer reads as "no link", so a cell
+  of spaces would be a linked row pointing nowhere.
+
+  The `Disposition` column widens the curated vocabulary and never narrows it.
+  A curator's four words mean what they mean in the Collection Assignment;
+  `blank-title`, `ambiguous-title-match` and `collection-link-fault` describe
+  outcomes nobody decided. They are apart from `plain-text` on purpose — the
+  result for the member is the same and the causes are not, and one count
+  merging a settled decision with a fixable data fault would read as settled.
 - **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
   ignored, because it is regenerated on every refresh: every Mapping per field,
   every excluded Suggested Title under the reason it was excluded, and both
