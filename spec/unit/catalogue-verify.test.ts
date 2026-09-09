@@ -1,15 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type {
-  ProductStatus,
-  ResolvedProduct,
-} from "../../scripts/lib/build-catalogue";
+import type { ProductStatus } from "../../scripts/lib/build-catalogue";
 import {
   type Attempt,
   BACKOFF_MS,
   CatalogueVerifyError,
   classifyAttempt,
+  collectionHandleOf,
   delayBeforeAttempt,
+  handleOf,
   isEligible,
   MAX_ATTEMPTS,
   MAX_RETRY_AFTER_MS,
@@ -24,18 +23,31 @@ import {
   shippability,
   shouldRetry,
   summarize,
+  type VerifyEntry,
   type VerifyResult,
 } from "../../scripts/lib/catalogue-verify";
 
-function entry(overrides: Partial<ResolvedProduct> = {}): ResolvedProduct {
+function entry(overrides: Partial<VerifyEntry> = {}): VerifyEntry {
   return {
     userFieldName: "Machine",
     value: "AirSense 11 AutoSet",
     handle: "airsense-11-autoset",
     status: "ACTIVE",
     url: "https://www.cpap.com/products/airsense-11-autoset",
+    kind: "product",
     ...overrides,
   };
+}
+
+/** The other sink, which borrows the product shape and is not a product. */
+function link(overrides: Partial<VerifyEntry> = {}): VerifyEntry {
+  return entry({
+    value: "DreamStation CPAP Machine (Discontinued)",
+    handle: "apap-machines",
+    url: "https://www.cpap.com/collections/apap-machines",
+    kind: "collection",
+    ...overrides,
+  });
 }
 
 function answered(status: number, overrides: Partial<Attempt> = {}): Attempt {
@@ -52,6 +64,7 @@ function result(overrides: Partial<VerifyResult> = {}): VerifyResult {
     userFieldName: "Machine",
     value: "AirSense 11 AutoSet",
     url: "https://www.cpap.com/products/airsense-11-autoset",
+    kind: "product",
     outcome: "verified",
     detail: "HTTP 200",
     attempts: 1,
@@ -216,6 +229,7 @@ describe("the outcome of one entry", () => {
     expect(resultFrom(entry(), [answered(200)])).toEqual({
       userFieldName: "Machine",
       value: "AirSense 11 AutoSet",
+      kind: "product",
       url: "https://www.cpap.com/products/airsense-11-autoset",
       outcome: "verified",
       detail: "HTTP 200",
@@ -295,6 +309,73 @@ describe("the outcome of one entry", () => {
         }),
       ]).outcome
     ).toBe("verified");
+  });
+
+  it("fails a Collection Link that redirected onto a product page", () => {
+    // Not a moved collection. A whole range of discontinued equipment answered
+    // by one product page is the outcome a Collection Link exists to avoid
+    // (ADR-0021), so a 200 from `/products/` is a failure for this sink even
+    // though it is a pass for the other.
+    const verdict = resultFrom(link(), [
+      answered(200, {
+        finalUrl: "https://www.cpap.com/products/airsense-11-autoset",
+      }),
+    ]);
+
+    expect(verdict.outcome).toBe("failed");
+    expect(verdict.detail).toContain("redirected off /collections/");
+    expect(verdict.detail).toContain("not this collection");
+  });
+
+  it("still verifies a Collection Link that redirected to another collection", () => {
+    // The mirror image, and the half that was actively broken: checked against
+    // `/products/`, a collection that cpap.com had merely renamed read as a
+    // soft 404 and blocked the ship for no reason.
+    const verdict = resultFrom(link(), [
+      answered(200, {
+        finalUrl: "https://www.cpap.com/collections/auto-cpap-machines",
+      }),
+    ]);
+
+    expect(verdict.outcome).toBe("verified");
+    expect(verdict.redirectedTo).toBe(
+      "https://www.cpap.com/collections/auto-cpap-machines"
+    );
+  });
+
+  it("carries the sink each result came from", () => {
+    expect(resultFrom(entry(), [answered(200)]).kind).toBe("product");
+    expect(
+      resultFrom(link(), [
+        answered(200, {
+          finalUrl: "https://www.cpap.com/collections/apap-machines",
+        }),
+      ]).kind
+    ).toBe("collection");
+  });
+
+  it("reads the collection handle out of a URL, and only a collection URL", () => {
+    expect(
+      collectionHandleOf("https://www.cpap.com/collections/apap-machines")
+    ).toBe("apap-machines");
+    expect(
+      collectionHandleOf("https://www.cpap.com/collections/apap-machines/")
+    ).toBe("apap-machines");
+    expect(
+      collectionHandleOf("https://www.cpap.com/products/airsense-11")
+    ).toBeNull();
+    expect(collectionHandleOf("https://www.cpap.com/")).toBeNull();
+    expect(collectionHandleOf("not a url")).toBeNull();
+  });
+
+  it("asks the question that matches the sink", () => {
+    const product = "https://www.cpap.com/products/airsense-11";
+    const collection = "https://www.cpap.com/collections/apap-machines";
+
+    expect(handleOf("product", product)).toBe("airsense-11");
+    expect(handleOf("product", collection)).toBeNull();
+    expect(handleOf("collection", collection)).toBe("apap-machines");
+    expect(handleOf("collection", product)).toBeNull();
   });
 
   it("reads the product handle out of a URL, and only a product URL", () => {
@@ -441,6 +522,35 @@ describe("the corrections proposed for a human to approve", () => {
   });
 
   it("proposes regenerating for an entry that should not be in the catalogue", () => {
+    expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 200 })
+      )
+    ).toContain("ADR-0021");
+    expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 200 })
+      )
+    ).not.toContain("onlineStoreUrl");
+
+    // ADR-0009 makes Shopify the authority for a *product* URL, so a refresh
+    // is the repair there. A Collection Link's URL is curated (ADR-0021) and a
+    // refresh will never touch it — sending an operator to `refresh:catalogue`
+    // would send them to a command that cannot help.
+    expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 404 })
+      )
+    ).toContain("ADR-0017");
+    expect(
+      proposedCorrection(
+        result({
+          kind: "collection",
+          redirectedTo: "https://www.cpap.com/collections/auto-cpap-machines",
+        })
+      )
+    ).toContain("curated rather than derived");
+
     expect(
       proposedCorrection(result({ outcome: "excluded", status: null }))
     ).toContain("refresh:catalogue");
@@ -729,9 +839,13 @@ describe("what the verify pass is allowed to be part of", () => {
     );
 
     expect(loop).toContain("entries.entries()");
-    expect(command).toMatch(
-      /const entries: ResolvedProduct\[\] = \[\s*\.\.\.catalogue,/
-    );
+    expect(command).toMatch(/const entries: VerifyEntry\[\] = \[/);
     expect(command).toContain("...collectionLinks.map(");
+
+    // And each side has to say which it is. Without the tag the lib checks
+    // every redirect against `/products/`, which is the defect one line of
+    // this file would otherwise reintroduce silently.
+    expect(command).toContain('kind: "product" as const');
+    expect(command).toContain('kind: "collection" as const');
   });
 });

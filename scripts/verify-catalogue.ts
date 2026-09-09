@@ -20,10 +20,7 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  collectionHandleFromUrl,
-  ResolvedProduct,
-} from "./lib/build-catalogue.ts";
+import { collectionHandleFromUrl } from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
@@ -47,6 +44,7 @@ import {
   retryAfterMs,
   shippability,
   shouldRetry,
+  type VerifyEntry,
   type VerifyResult,
 } from "./lib/catalogue-verify.ts";
 
@@ -75,14 +73,20 @@ async function main(): Promise<void> {
   // eligibility here means "there is a public page to ask about", which is true
   // of every committed Collection Link by construction, and `handle` is the one
   // Shopify was asked to admit.
-  const entries: ResolvedProduct[] = [
-    ...catalogue,
+  //
+  // `kind` travels with each entry so the judgement in the lib can tell them
+  // apart. Borrowing the product shape is not the same as being a product, and
+  // the redirect check and the proposed corrections both turn on which one this
+  // is.
+  const entries: VerifyEntry[] = [
+    ...catalogue.map((product) => ({ ...product, kind: "product" as const })),
     ...collectionLinks.map((link) => ({
       userFieldName: link.userFieldName,
       value: link.value,
       handle: collectionHandleFromUrl(link.url),
       status: "ACTIVE" as const,
       url: link.url,
+      kind: "collection" as const,
     })),
   ];
 
@@ -118,7 +122,7 @@ async function main(): Promise<void> {
 }
 
 /** One entry, asked for as many times as the retry policy allows. */
-async function verify(entry: ResolvedProduct): Promise<VerifyResult> {
+async function verify(entry: VerifyEntry): Promise<VerifyResult> {
   if (!isEligible(entry)) {
     return resultFrom(entry, []);
   }

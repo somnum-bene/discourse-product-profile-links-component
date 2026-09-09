@@ -18,6 +18,32 @@
 
 import type { ResolvedProduct } from "./build-catalogue.ts";
 
+/**
+ * Which sink an entry came from, and therefore which storefront path a
+ * redirect has to land back on to count as a pass.
+ *
+ * This exists because the two sinks are checked in one loop and only one of
+ * them is a product. A Collection Link is deliberately not a `ResolvedProduct`
+ * (ADR-0021); it borrows the shape for the length of one request, and without
+ * this field the redirect check below would ask `/products/` about it — which
+ * fails every collection that has legitimately moved and passes every one that
+ * has been redirected onto a single product page.
+ */
+export type EntryKind = "product" | "collection";
+
+/** A `ResolvedProduct` plus the sink it came from. */
+export type VerifyEntry = ResolvedProduct & { kind: EntryKind };
+
+/** The storefront path an entry of this kind has to stay on. */
+export function pathPrefixOf(kind: EntryKind): string {
+  return kind === "product" ? "/products/" : "/collections/";
+}
+
+/** What one entry of this kind is called, for a sentence a human reads. */
+export function nounOf(kind: EntryKind): string {
+  return kind;
+}
+
 export class CatalogueVerifyError extends Error {
   constructor(message: string) {
     super(message);
@@ -97,6 +123,8 @@ export interface VerifyResult {
   userFieldName: string;
   value: string;
   url: string;
+  /** Which sink this came from, so a correction can speak about the right one. */
+  kind: EntryKind;
   outcome: VerifyOutcome;
   /** Why, in one line, for every outcome including `verified`. */
   detail: string;
@@ -267,6 +295,35 @@ export function productHandleOf(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * The same question for a Collection Link. cpap.com serves a dead collection
+ * handle the same way it serves a dead product one — a 200 from the homepage —
+ * so a collection needs the identical landing check, against its own prefix.
+ *
+ * A collection redirecting onto `/products/` is not a moved collection. It is a
+ * whole range of equipment answered by one product page, which is precisely the
+ * outcome a Collection Link exists to avoid, so it is a failure here rather
+ * than a pass.
+ */
+export function collectionHandleOf(url: string): string | null {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const match = /^\/collections\/([^/]+)\/?$/.exec(parsed.pathname);
+
+  return match ? match[1] : null;
+}
+
+/** The landing check for whichever sink the entry came from. */
+export function handleOf(kind: EntryKind, url: string): string | null {
+  return kind === "product" ? productHandleOf(url) : collectionHandleOf(url);
+}
+
 function statusPhrase(status: number): string {
   return RETRYABLE_STATUSES.includes(status)
     ? `HTTP ${status}, which is the server declining to answer rather than an ` +
@@ -282,13 +339,14 @@ function statusPhrase(status: number): string {
  * inventing a verdict for a request nobody made.
  */
 export function resultFrom(
-  entry: ResolvedProduct,
+  entry: VerifyEntry,
   attempts: readonly Attempt[]
 ): VerifyResult {
   const base = {
     userFieldName: entry.userFieldName,
     value: entry.value,
     url: entry.url,
+    kind: entry.kind,
     attempts: attempts.length,
   };
 
@@ -326,20 +384,25 @@ export function resultFrom(
       };
     }
 
-    // A 2XX from somewhere else is only a pass if somewhere else is still a
-    // product. cpap.com answers a dead handle by redirecting to the homepage,
-    // so this branch is the difference between a moved product and a Profile
-    // Link that quietly goes to the front page.
-    if (productHandleOf(last.finalUrl) === null) {
+    // A 2XX from somewhere else is only a pass if somewhere else is still the
+    // same kind of page. cpap.com answers a dead handle by redirecting to the
+    // homepage, so this branch is the difference between a moved page and a
+    // Profile Link that quietly goes to the front page.
+    //
+    // Asked against the entry's own prefix, not against `/products/` for
+    // everything: a Collection Link is checked here too, and a collection that
+    // has legitimately moved to another collection would otherwise read as a
+    // soft 404 while one redirected onto a single product page would pass.
+    if (handleOf(entry.kind, last.finalUrl) === null) {
       return {
         ...base,
         outcome: "failed",
         status: last.status,
         detail:
           `HTTP ${last.status}, but from ${last.finalUrl} — the storefront ` +
-          `redirected off /products/, which is how cpap.com serves a handle it ` +
-          `no longer has. The status code says the request succeeded; the ` +
-          `landing page is not this product.`,
+          `redirected off ${pathPrefixOf(entry.kind)}, which is how cpap.com ` +
+          `serves a handle it no longer has. The status code says the request ` +
+          `succeeded; the landing page is not this ${nounOf(entry.kind)}.`,
       };
     }
 
@@ -382,12 +445,26 @@ export function resultFrom(
  */
 export function proposedCorrection(result: VerifyResult): string | null {
   if (result.outcome === "verified") {
-    return result.redirectedTo === undefined
-      ? null
-      : `The storefront redirects this to ${result.redirectedTo}. The link ` +
+    if (result.redirectedTo === undefined) {
+      return null;
+    }
+
+    // Two different repairs, because the two URLs have two different
+    // authorities. A product URL is whatever Shopify's `onlineStoreUrl` hands
+    // back (ADR-0009), so a refresh is the fix. A Collection Link's URL was
+    // typed by a curator into the Collection Assignment tab (ADR-0021), and no
+    // refresh will ever correct it — telling an operator to re-run one would
+    // send them to a command that cannot help.
+    return result.kind === "product"
+      ? `The storefront redirects this to ${result.redirectedTo}. The link ` +
           `works, so this is not a failure, but the catalogue is carrying a ` +
           `handle Shopify has moved on from. Re-run pnpm refresh:catalogue and ` +
-          `see whether onlineStoreUrl has caught up.`;
+          `see whether onlineStoreUrl has caught up.`
+      : `The storefront redirects this to ${result.redirectedTo}. The link ` +
+          `works, so this is not a failure, but the Collection Assignment is ` +
+          `carrying a handle cpap.com has moved on from. This URL is curated ` +
+          `rather than derived (ADR-0021), so a refresh will not correct it — ` +
+          `update the Collection URL in the Sheet.`;
   }
 
   if (result.outcome === "excluded") {
@@ -410,6 +487,17 @@ export function proposedCorrection(result: VerifyResult): string | null {
   // 404, but the diagnosis is not, and someone reading "HTTP 200" next to
   // "failed" deserves to be told why rather than left to assume a bug here.
   if (result.status !== null && result.status >= 200 && result.status <= 299) {
+    if (result.kind === "collection") {
+      return (
+        `The handle in the Collection Link no longer exists at cpap.com, ` +
+        `which the storefront reports by redirecting away from ` +
+        `/collections/ with a 200 rather than by returning 404. This URL is ` +
+        `curated in the Collection Assignment tab rather than handed back by ` +
+        `Shopify (ADR-0021), so pnpm refresh:catalogue will not correct it: ` +
+        `choose a collection cpap.com still serves and re-export the Sheet.`
+      );
+    }
+
     return (
       `The handle in the catalogue no longer exists at cpap.com, which the ` +
       `storefront reports by redirecting to the homepage with a 200 rather ` +
@@ -421,6 +509,17 @@ export function proposedCorrection(result: VerifyResult): string | null {
   }
 
   if (result.status === 404 || result.status === 410) {
+    if (result.kind === "collection") {
+      return (
+        `Shopify's Admin API admits this collection and cpap.com does not ` +
+        `serve it. That is exactly the gap ADR-0017 names: a collection can ` +
+        `exist in the admin, be unpublished to the Online Store, and still ` +
+        `404 for a member. Publish it to the Online Store, or curate a ` +
+        `different collection in the Collection Assignment tab — a refresh ` +
+        `will not notice, because the Admin API already said yes.`
+      );
+    }
+
     return (
       `Shopify says this product is ACTIVE and published, and cpap.com does ` +
       `not serve it. Two things look identical from here: a handle that has ` +
