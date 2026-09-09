@@ -614,6 +614,24 @@ export function undecidedAssignments(
   });
 }
 
+/**
+ * Whether a cell is an `https:` URL, which is the only thing the disposition
+ * table's `url` column may hold besides nothing.
+ *
+ * Shape only, and deliberately looser than `collectionHandleFromUrl`: this
+ * column carries product URLs and collection URLs alike, so it cannot insist on
+ * `/collections/`. `https:` rather than any scheme, because these are links
+ * Discourse renders for a member to click and the scheme is part of where they
+ * land — the same reason `collectionHandleFromUrl` compares `origin`.
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /** The disposition a legacy value carries when it earned a link and has none. */
 export const COLLECTION_LINK_FAULT = "collection-link-fault";
 
@@ -1010,6 +1028,29 @@ function assertDispositionRow(
         `consumer reads an empty \`url\` as "no Profile Link resolves", so a ` +
         `cell of spaces is a linked row pointing nowhere that no check ` +
         `downstream would question.`
+    );
+  }
+
+  // And the other half of "either empty or a real URL", which the whitespace
+  // check alone does not give. Without this the column accepts any text at
+  // all: a row dispositioned `collection` whose `url` reads as a person's name
+  // passes every rule above, the pairing check below (which only asks whether
+  // the cell is empty) and the writer, and reaches the non-public repository
+  // as a Profile Link target.
+  //
+  // That is the shape this table exists to make impossible. It is the one
+  // artifact crossing the boundary, and a cell that drifted onto a neighbouring
+  // column in a workbook whose other tabs hold member data is exactly how
+  // something that is not a URL arrives here.
+  //
+  // The cell is not quoted, for the reason every refusal on this boundary does
+  // not quote one: what it holds is what the check could not vouch for.
+  if (url !== "" && !isHttpsUrl(url)) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("url")} is neither empty nor an \`https:\` URL. ` +
+        `A resolving row's URL is what a member's Profile Link opens, so a ` +
+        `cell that is not one is a link to nothing at best. What the cell ` +
+        `holds is not reported.`
     );
   }
 

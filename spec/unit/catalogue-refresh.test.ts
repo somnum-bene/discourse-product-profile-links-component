@@ -1453,6 +1453,44 @@ describe("the disposition table file", () => {
     );
   });
 
+  it("refuses a url column holding something that is not a URL", () => {
+    // The half of "either empty or a real URL" the whitespace check does not
+    // give. A name in this column passes the blank check, the trim check and
+    // the pairing check — the last only asks whether the cell is empty — and
+    // reaches the non-public repository as a Profile Link target. A cell that
+    // drifted onto a neighbouring column in a workbook whose other tabs hold
+    // member data is exactly how one arrives.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /is neither empty nor an `https:` URL/
+    );
+  });
+
+  it("does not name the cell it refused", () => {
+    // Same rule as every other refusal on this boundary: what the cell holds
+    // is what the check could not vouch for, so it is located and not quoted.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /column 5 \(`url`\)/
+    );
+    expect(() => readDispositionTable(digested(body))).not.toThrow(/Marjorie/);
+  });
+
+  it("accepts a product URL as readily as a collection URL", () => {
+    // Deliberately looser than `collectionHandleFromUrl`: this column carries
+    // both, so insisting on `/collections/` would refuse every resolving row.
+    // Both Managed Fields, because the reader also refuses a table missing one
+    // — a refusal that would otherwise mask what this test is asking about.
+    const body =
+      `${HEADER}\n` +
+      `Machine,6240,Aircurve 11 asv,AirSense 11 AutoSet,https://www.cpap.com/products/airsense-11-autoset,resolves-to-product\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).not.toThrow();
+  });
+
   it("refuses an unlinked disposition carrying a URL", () => {
     // The pairing runs both ways. A `plain-text` row with a URL is a curator's
     // decision being overruled by a link nobody assigned.
