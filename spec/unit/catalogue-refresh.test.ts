@@ -2182,7 +2182,7 @@ describe("the disposition table file", () => {
     // twelve cases reaching no refusal at all is why it does not now.
     const faults: {
       named: string;
-      break: (row: DispositionRow) => DispositionRow[];
+      break: (row: DispositionRow, at: number) => DispositionRow[];
     }[] = [
       {
         named: "a duplicated key",
@@ -2190,9 +2190,17 @@ describe("the disposition table file", () => {
       },
       {
         named: "a blank column beside it",
-        break: (row) => [
-          { ...row, url: "", value: row.legacyText, disposition: " " as never },
-        ],
+        // Beside it, and never on top of it. This blanked `url`, `value` and
+        // `disposition` unconditionally, so for the three columns the canary
+        // occupies at `at === 3`, `4` and `5` it erased the canary it was
+        // planted with — six of the twenty-four cases asserted the absence of
+        // a string that was never in the input.
+        //
+        // Blank `legacy_text` instead, or `url` when `legacy_text` is itself
+        // the contaminated column. Only `url` is blankable, so either one is a
+        // refusal, and neither ever lands on the column under test.
+        break: (row, at) =>
+          at === 2 ? [{ ...row, url: "" }] : [{ ...row, legacyText: "" }],
       },
     ];
 
@@ -2209,7 +2217,7 @@ describe("the disposition table file", () => {
 
       for (const fault of faults) {
         const contaminated = () =>
-          withEveryField(fault.break(contaminatedRow()));
+          withEveryField(fault.break(contaminatedRow(), at));
 
         it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on write`, () => {
           let message = "";
