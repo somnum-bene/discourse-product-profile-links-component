@@ -622,6 +622,23 @@ describe("the refresh command's exit code", () => {
     expect(guard).not.toContain("collectionFaults");
   });
 
+  it("does not promise a zero exit above the block that sets one", () => {
+    // The paragraph explaining why collection faults are survivable said "The
+    // exit stays zero" and that blocking a release on an uncurated value
+    // "is a gate's job, on the committed files" — written when that was the
+    // whole truth, and left standing when this command took the second half
+    // of that job. A maintainer reads the contract nearest the code, and this
+    // one now sat directly above the branch that contradicts it.
+    const preamble = command.slice(0, command.indexOf("process.exitCode = 1"));
+
+    expect(preamble).not.toContain("The exit stays zero because");
+    expect(preamble).not.toContain("is a gate's job, on the committed files, ");
+    // Narrowed rather than deleted: the survivable faults are still named, so
+    // the reason the other four stay green is still on the page.
+    expect(preamble).toContain("not fatal for the faults drift creates");
+    expect(preamble).toContain("`undecided`");
+  });
+
   it("stays green on the faults drift causes rather than a curator", () => {
     // The distinction the exit code turns on. A product retiring at Shopify
     // creates an `unassigned-legacy-value` through nobody's action, and a

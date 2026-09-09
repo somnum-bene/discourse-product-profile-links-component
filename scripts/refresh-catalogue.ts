@@ -173,15 +173,22 @@ async function main(): Promise<void> {
   // Said on stderr and counted, because a fault is a legacy value someone is
   // holding that will now resolve to nothing.
   //
-  // Reported, and deliberately not fatal — neither the write nor the exit code.
-  // The files are still written because what did derive is correct and the
-  // review document is where these are explained one at a time; refusing to
-  // write would take the report away along with the fault. The exit stays zero
-  // because a refresh goes red on catalogue drift it did not cause and cannot
-  // fix: a product retiring at Shopify creates one of these, which is the
-  // standing mechanism working, and a command that failed every time the
-  // catalogue moved is a command people stop reading. Blocking a release on an
-  // uncurated value is a gate's job, on the committed files, and it is #38's.
+  // Reported, and deliberately not fatal for the faults drift creates — an
+  // `unassigned-legacy-value`, an `unadmitted-collection`, a
+  // `stale-product-resolution`, a `curation-disagreement`. Not for every fault:
+  // the block below exits non-zero while any assignment row is `undecided`, so
+  // this paragraph is about which faults are survivable rather than about the
+  // command never failing.
+  //
+  // The files are still written whichever it is, because what did derive is
+  // correct and the review document is where these are explained one at a
+  // time; refusing to write would take the report away along with the fault.
+  // The exit stays zero for drift because a refresh going red on catalogue
+  // movement it did not cause and cannot fix is a refresh people stop reading:
+  // a product retiring at Shopify creates one of these, which is the standing
+  // mechanism working. Blocking a release on drift is a gate's job, on the
+  // committed files. An uncurated value is the exception #38 names, and it is
+  // handled here as well as there.
   if (collectionFaults.length > 0) {
     const counts = new Map<string, number>();
 
