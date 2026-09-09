@@ -182,8 +182,8 @@ describe("every request this pipeline makes is bounded", () => {
   ].sort();
 
   it("finds the call sites at all, so the sweep is not vacuous", () => {
-    const withFetch = commandFiles.filter((path) =>
-      readFileSync(path, "utf8").includes("await fetch(")
+    const withFetch = commandFiles.filter(
+      (path) => fetchCallsIn(path, readFileSync(path, "utf8")).length > 0
     );
 
     expect(withFetch.length).toBeGreaterThanOrEqual(5);
@@ -222,23 +222,53 @@ describe("every request this pipeline makes is bounded", () => {
     return null;
   }
 
-  /** Every `await fetch(` in the pipeline, with its arguments. */
-  const fetchCalls = commandFiles.flatMap((path) => {
-    const source = readFileSync(path, "utf8");
-    const calls: { path: string; args: string | null }[] = [];
+  /**
+   * A call to `fetch`, however it is spelled.
+   *
+   * Discovery used to be `indexOf("await fetch(")`, which is a promise this
+   * sweep could not keep: `return fetch(...)`, a call assigned before it is
+   * awaited, and `await fetch (url)` are all invisible to it, and the floor
+   * assertion below stays green on the five it can see while a sixth,
+   * unbounded, goes unchecked. The claim in the header is that a call site
+   * added later is covered the moment it exists, so discovery has to be about
+   * the call expression rather than one way of writing it.
+   *
+   * The leading character class is what keeps `client.fetch(` and
+   * `prefetch(` out: a member call on some other object is a different
+   * function, and the global `fetch` is the only one this pipeline has to
+   * bound.
+   */
+  const FETCH_CALL = /(^|[^\w.$])fetch\s*\(/gu;
 
-    for (
-      let at = source.indexOf("await fetch(");
-      at !== -1;
-      at = source.indexOf("await fetch(", at + 1)
-    ) {
-      calls.push({
-        path,
-        args: fetchArguments(source, at + "await fetch".length),
-      });
-    }
+  function fetchCallsIn(
+    path: string,
+    source: string
+  ): { path: string; args: string | null }[] {
+    return [...source.matchAll(FETCH_CALL)].map((match) => ({
+      path,
+      // The index of the `(` itself, which is where the bracket balance starts.
+      args: fetchArguments(source, (match.index ?? 0) + match[0].length - 1),
+    }));
+  }
 
-    return calls;
+  /** Every `fetch` call in the pipeline, with its arguments. */
+  const fetchCalls = commandFiles.flatMap((path) =>
+    fetchCallsIn(path, readFileSync(path, "utf8"))
+  );
+
+  it("finds a fetch that is not spelled `await fetch(`", () => {
+    // Non-vacuity for discovery itself, rather than for the assertion it
+    // feeds. Three calls here, none of them the spelling the old scan looked
+    // for, and two near-misses that are not calls to the global at all.
+    const spellings = [
+      "const pending = fetch(url, { signal });",
+      "  return fetch(url, { signal });",
+      "await fetch (url, { signal });",
+      "const body = await client.fetch(url);",
+      "const cached = prefetch(url);",
+    ].join("\n");
+
+    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(3);
   });
 
   it("parses every call it found, so no scan runs off the end", () => {
