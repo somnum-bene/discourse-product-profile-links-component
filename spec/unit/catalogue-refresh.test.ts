@@ -918,7 +918,7 @@ describe("the catalogue file", () => {
 
     expect(() =>
       readResolvedProducts(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/empty field/);
+    ).toThrow(/row 2, column 5 is empty — it names no url/);
   });
 });
 
@@ -1079,7 +1079,7 @@ describe("the collection-links file", () => {
 
     expect(() =>
       readCollectionLinks(`# sha256 ${digestOf(body)}\n${body}`)
-    ).toThrow(/empty field/);
+    ).toThrow(/row 2, column 3 is empty — it names no url/);
   });
 
   it("refuses a row that is not as wide as the header says", () => {
@@ -1581,6 +1581,109 @@ describe("the disposition table file", () => {
       expect(
         readDispositionTable(dispositionTableCsv(acrossFields))
       ).toHaveLength(2);
+    });
+
+    it("reports a structural fault without echoing the row", () => {
+      // Deliberately *not* an email address. An email would be stopped by the
+      // scan above, so a test using one would pass with the echo restored and
+      // prove nothing about this rule. The scan is a tripwire for one shape of
+      // member data, not a filter for member data; a name sails straight
+      // through it. So the diagnostics carry coordinates and nothing else, and
+      // this is the case that holds them to it.
+      const name = "Marjorie Fenwick-Abara";
+      const short =
+        `${HEADER}\n` + `Machine,6240,${name},v,,plain-text,extra\n`;
+      const blank = `${HEADER}\n` + `Machine,6240,${name},,,plain-text\n`;
+
+      for (const body of [short, blank]) {
+        expect(() =>
+          readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+        ).toThrow(/^(?!.*Marjorie)/s);
+      }
+
+      // And still says enough to find the cell.
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(blank)}\n${blank}`)
+      ).toThrow(/row 2, column 4 is empty — it names no value/);
+    });
+
+    it("reports a missing header row without echoing what it found", () => {
+      // The header diagnostic prints `found:` to explain which columns it got,
+      // which is worth keeping — but a file whose header row is absent hands
+      // it a data row to print. The scan runs first so this refuses as
+      // contamination rather than as a header, and prints neither.
+      const body =
+        `Machine,6240,someone@example.com,v,,plain-text\n` +
+        `Machine,6241,Other,Other,,plain-text\n`;
+
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/row 1, column 3 holds something shaped like an email/);
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/^(?!.*someone@example\.com)/s);
+    });
+
+    it("refuses two rows claiming the same legacy value", () => {
+      // The pair is this table's key. Two rows under it hand the non-public
+      // side two different pieces of equipment for one member and nothing to
+      // choose between them, so it picks — silently, and not necessarily the
+      // same way twice.
+      const duplicated: DispositionRow[] = [
+        ...rowWith({}),
+        ...rowWith({
+          disposition: "plain-text",
+          value: "Aircurve 11 asv",
+          url: "",
+        }),
+      ];
+
+      expect(() => dispositionTableCsv(duplicated)).toThrow(
+        /repeats the legacy value "6240" under "Machine", already claimed by row 2/
+      );
+    });
+
+    it("refuses a repeated legacy value on the way in as well", () => {
+      // Hand-assembled rather than round-tripped, because the writer now
+      // refuses this and a round-trip could never produce it. The reader is
+      // the gate that runs against a file someone edited.
+      const body =
+        `${HEADER}\n` +
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n` +
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+
+      expect(() =>
+        readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
+      ).toThrow(/repeats the legacy value "6240"/);
+    });
+
+    it("lets one legacy value appear under two different fields", () => {
+      // The near-miss that has to stay legal. The key is the pair, not the
+      // identifier: the two option tables number their rows independently, so
+      // a Machine 6240 and a Mask 6240 are unrelated and both are real.
+      const sameIdentifier: DispositionRow[] = [
+        ...rowWith({}),
+        ...rowWith({
+          userFieldName: "Mask",
+          legacyText: "Some mask",
+          value: "Some mask",
+          url: "",
+          disposition: "plain-text",
+        }),
+      ];
+
+      expect(
+        readDispositionTable(dispositionTableCsv(sameIdentifier))
+      ).toHaveLength(2);
+    });
+
+    it("refuses a legacy value carrying whitespace", () => {
+      // The join key the far side matches exactly. Padding here finds no
+      // member at all, which is a miss rather than an error — the failure this
+      // table cannot afford, because nothing in this repository can observe it.
+      expect(() =>
+        dispositionTableCsv(rowWith({ legacyValue: " 6240 " }))
+      ).toThrow(/legacy value of " 6240 ", which carries whitespace/);
     });
 
     it("says the same thing whichever side of the boundary refuses", () => {

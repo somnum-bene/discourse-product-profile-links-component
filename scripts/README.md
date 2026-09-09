@@ -256,7 +256,17 @@ all the same kind of thing:
   echoing the cell, on the same reasoning as `readSheetTab`'s guard pointing the
   other way.
 
-  Two rules run the file, and both are checked on read as well as on write.
+  Every rule below is checked on read as well as on write, by one shared
+  validator rather than two that agree until they drift.
+
+  `user_field_name` and `legacy_value` together are the file's **key**. One
+  member holds one identifier per field, so the far side expects a lookup to
+  yield exactly one row; two rows under one key would have it pick between two
+  pieces of equipment with nothing to choose on. A repeat is refused rather than
+  reconciled, and so is a `legacy_value` carrying whitespace — that match is
+  exact, so a padded key finds no member at all, which is a silent miss rather
+  than an error.
+
   A row **with** a URL carries a value byte-identical to a Mapping shipped in
   `settings.yml` — byte-identical, which is deliberately stricter than the
   runtime's own trimmed match, because a value that differs by one byte in
@@ -267,7 +277,12 @@ all the same kind of thing:
   added, so the member keeps what they entered and simply gets no link. That is
   the case for a `plain-text` or `undecided` row and for a title excluded as
   `blank-title` or `ambiguous-title-match`: they appear with no URL rather than
-  being omitted, because the join needs every value.
+  being omitted, because the join needs every value. An unlinked row whose value
+  *trims* onto a linked row's is refused too: resolution is a trimmed match on
+  both sides, so such a row would hand the member a link while saying they get
+  none. The `url` column is likewise either empty or a real URL with nothing
+  around it — `""` is the sentinel every consumer reads as "no link", so a cell
+  of spaces would be a linked row pointing nowhere.
 
   The `Disposition` column widens the curated vocabulary and never narrows it.
   A curator's four words mean what they mean in the Collection Assignment;

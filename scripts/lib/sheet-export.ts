@@ -601,6 +601,22 @@ export function parseCsv(text: string): string[][] {
  * now holding a different volume of data), and the cell contents (a tab now
  * holding email addresses under a header row that still looks right).
  *
+ * The content guard runs **first**, and over every row including the one that
+ * should be the header. That order is the whole of its value. It used to run
+ * third, which meant the two guards above it could fire on a tab holding member
+ * data and report it: the header diagnostic prints the row it found, and a tab
+ * with a row inserted above its header — or a range that slid onto a different
+ * tab — hands that diagnostic a data row to print. The two conditions are not
+ * independent, which is what makes the order matter rather than merely tidy. A
+ * workbook restructured until this tab holds member data is the same workbook
+ * whose header row has moved, so precisely when the tripwire is needed, the
+ * echo beats it to the terminal.
+ *
+ * Scanning the header row too is the other half. If row 1 is really row 1 it
+ * holds column names and the scan costs nothing; if it is a data row that is
+ * exactly the case worth catching, and skipping it would leave the one row the
+ * header diagnostic is about to print as the one row nothing checked.
+ *
  * It takes an `ExportTab`, so the Collection Assignment is held to exactly the
  * same three as the two option tables it sits beside in the same workbook.
  */
@@ -617,6 +633,19 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
 
   const rows = parseCsv(csvText);
   const [header, ...dataRows] = rows;
+
+  for (const [rowIndex, row] of rows.entries()) {
+    const offending = row.findIndex((cell) => EMAIL_SHAPED.test(cell));
+    if (offending !== -1) {
+      // The value itself is not reported. It is the thing we are refusing to
+      // let into the repository, so it does not go into a log either.
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 1}, column ${offending + 1} holds ` +
+          `something shaped like an email address. This command exports ` +
+          `product mappings and nothing else; refusing to write.`
+      );
+    }
+  }
 
   if (!header || !sameHeaders(header, tab.headers)) {
     throw new SheetExportError(
@@ -636,19 +665,6 @@ export function readSheetTab(tab: ExportTab, csvText: string): string[][] {
         `workbook. "At least" because the fetch is bounded at the ceiling — ` +
         `the tab may be far larger than this number, which is the point.`
     );
-  }
-
-  for (const [rowIndex, dataRow] of dataRows.entries()) {
-    const offending = dataRow.findIndex((cell) => EMAIL_SHAPED.test(cell));
-    if (offending !== -1) {
-      // The value itself is not reported. It is the thing we are refusing to
-      // let into the repository, so it does not go into a log either.
-      throw new SheetExportError(
-        `${tab.tab}: row ${rowIndex + 2}, column ${offending + 1} holds ` +
-          `something shaped like an email address. This command exports ` +
-          `product mappings and nothing else; refusing to write.`
-      );
-    }
   }
 
   return dataRows;

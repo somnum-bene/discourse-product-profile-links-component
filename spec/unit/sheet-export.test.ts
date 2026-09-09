@@ -487,10 +487,59 @@ describe("readSheetTab", () => {
     );
   });
 
+  it("checks for personal data before it reports an unexpected header", () => {
+    // The order these two guards run in is the whole of this test. A tab with
+    // a row inserted above its header presents a data row as row 1, and the
+    // header refusal prints the row it found — so on a tab that has come to
+    // hold member data, the diagnostic publishes what the tripwire exists to
+    // refuse. The two faults are not independent: a workbook restructured far
+    // enough for this tab to hold member data is the same workbook whose
+    // header has moved, which is exactly when the echo would win the race.
+    const shifted = [
+      `"1","someone@example.com","https://example.com","Title","https://example.com"`,
+      MACHINE_HEADER,
+    ].join("\n");
+
+    expect(() => readSheetTab(machine, shifted)).toThrow(
+      /shaped like an email address/
+    );
+    expect(() => readSheetTab(machine, shifted)).toThrow(
+      /^(?!.*someone@example\.com)/s
+    );
+  });
+
+  it("names the header row as row 1 when the personal data is in it", () => {
+    // Not row 2. The scan now covers the header, so its row numbering has to
+    // start where the file does or it points a reader at the wrong line.
+    const shifted = [
+      `"1","someone@example.com","https://example.com","Title","https://example.com"`,
+      MACHINE_HEADER,
+    ].join("\n");
+
+    expect(() => readSheetTab(machine, shifted)).toThrow(/row 1, column 2/);
+  });
+
+  it("still numbers a contaminated data row from the top of the file", () => {
+    // The scan moved from `dataRows` to `rows`, so the `+ 2` became a `+ 1`.
+    // Those cancel, and this holds them cancelled: the first data row is row 2.
+    const contaminated = MACHINE_CSV.split("\n");
+    contaminated[1] = `"1","someone@example.com","https://example.com","T","https://example.com"`;
+
+    expect(() => readSheetTab(machine, contaminated.join("\n"))).toThrow(
+      /row 2, column 2/
+    );
+  });
+
   it("does not mistake a real product row for personal data", () => {
     expect(() => readSheetTab(machine, MACHINE_CSV)).not.toThrow();
     expect(() => readSheetTab(mask, MASK_CSV)).not.toThrow();
     expect(() => readSheetTab(noTitleTab, NO_TITLE_CSV)).not.toThrow();
+  });
+
+  it("does not mistake a real header row for personal data", () => {
+    // The scan now reads the header too, so the header itself has to survive
+    // it — otherwise every export refuses.
+    expect(() => readSheetTab(machine, MACHINE_HEADER)).not.toThrow();
   });
 });
 

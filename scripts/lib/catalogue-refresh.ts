@@ -798,6 +798,7 @@ export function dispositionTableCsv(
   }
 
   assertNoResolvingCollisions(dispositions, DISPOSITION_FILE);
+  assertNoDuplicateKeys(dispositions, DISPOSITION_FILE);
 
   const body = `${[
     csvLine([...DISPOSITION_COLUMNS]),
@@ -842,6 +843,7 @@ export function readDispositionTable(text: string): DispositionRow[] {
   });
 
   assertNoResolvingCollisions(rows, DISPOSITION_FILE);
+  assertNoDuplicateKeys(rows, DISPOSITION_FILE);
 
   return rows;
 }
@@ -923,6 +925,24 @@ function assertDispositionRow(
         `third state: every consumer reads an empty \`url\` as "no Profile ` +
         `Link resolves", so a cell of spaces is a linked row pointing nowhere ` +
         `that no check downstream would question.`
+    );
+  }
+
+  // The same rule for the same reason one column over, and this is the column
+  // it matters most in: `legacy_value` is the join key. The non-public side
+  // matches it against the identifier in its member export (CONTEXT.md), which
+  // is an exact match on a bare identifier, so a padded key joins to nothing
+  // and the member's row is simply not found — a silent miss rather than an
+  // error, on the one artifact whose failures this repository cannot observe.
+  // `dispositionTable` trims it on the way in for exactly this reason; saying
+  // so here is what stops a hand-edit from undoing that quietly, and it is what
+  // lets the duplicate check below compare the raw bytes and mean it.
+  if (legacyValue !== legacyValue.trim()) {
+    throw new CatalogueRefreshError(
+      `${where} has a legacy value of ${JSON.stringify(legacyValue)}, which ` +
+        `carries whitespace. This column is the join key the non-public side ` +
+        `matches against its member export, and that match is exact, so a ` +
+        `padded key finds no member rather than failing.`
     );
   }
 
@@ -1036,6 +1056,58 @@ function assertNoResolvingCollisions(
 }
 
 /**
+ * Refuses two rows that claim the same legacy option value.
+ *
+ * `user_field_name` and `legacy_value` are the primary key of this table. The
+ * non-public side joins on them — one member holds one identifier per field, so
+ * one identifier has to name one answer — and the whole artifact is a promise
+ * that looking a key up yields a single row. Two rows under one key breaks the
+ * promise in the worst available way: not an error on the far side but a pick,
+ * arbitrary and invisible, between two different pieces of equipment to write
+ * into a member's profile.
+ *
+ * It is checkable here and nowhere else. `buildCatalogue` builds a `Map` keyed
+ * this way to look outcomes up, so a duplicate silently keeps the last row and
+ * both emitted rows inherit one row's outcome; but that file is a pure
+ * transform that reports faults and never throws (see `byField`, which ranks an
+ * unknown field first rather than throwing, and gives the reason), so a refusal
+ * does not belong in it. The transform's job is to describe what the inputs
+ * say. Refusing to ship it is this boundary's, alongside every other rule the
+ * writer and the reader are both held to.
+ *
+ * Compares raw rather than trimmed, and that is load-bearing rather than lazy:
+ * `assertDispositionRow` has already refused any `legacy_value` carrying
+ * whitespace by the time this runs, so trimmed and raw are the same string and
+ * a check that trimmed here would be describing a state that cannot reach it.
+ */
+function assertNoDuplicateKeys(
+  rows: readonly DispositionRow[],
+  file: string
+): void {
+  const seen = new Map<string, number>();
+
+  for (const [index, row] of rows.entries()) {
+    const key = `${row.userFieldName}\u0000${row.legacyValue}`;
+    const first = seen.get(key);
+
+    if (first !== undefined) {
+      throw new CatalogueRefreshError(
+        `${file} row ${index + 2} repeats the legacy value ` +
+          `${JSON.stringify(row.legacyValue)} under ` +
+          `${JSON.stringify(row.userFieldName)}, already claimed by row ` +
+          `${first + 2}. That pair is this table's key: the non-public side ` +
+          `looks a member's identifier up in it and expects one row, so two ` +
+          `rows mean it picks one of them for that member with nothing to ` +
+          `choose on. A repeated identifier is a defect in the Sheet Export ` +
+          `rather than something to reconcile here.`
+      );
+    }
+
+    seen.set(key, index);
+  }
+}
+
+/**
  * Why an empty disposition table is refused, said the same way on both sides.
  * `holds` differs because the remedy does — a writer sends someone to the Sheet
  * Exports, a reader to the file in front of them — but the reason does not.
@@ -1140,6 +1212,30 @@ function dataRowsOf(
   const rows = parseCsv(verifiedBody(text, file));
   const [header, ...dataRows] = rows;
 
+  // Ahead of every diagnostic below, for the reason `readSheetTab` runs its
+  // copy first: the header refusal prints the row it found, and the row that
+  // makes it fire is a data row sitting where the header should be. The digest
+  // makes this far less reachable here than there — a file has to verify
+  // against its own contents to get this far — but "less reachable" is the
+  // wrong standard for the guard whose entire job is that member data never
+  // reaches a log, and this reader is the last gate before the artifact leaves
+  // for the repository that joins against members.
+  const emailRow = rows.findIndex((row) =>
+    row.some((f) => EMAIL_SHAPED.test(f))
+  );
+
+  if (emailRow !== -1) {
+    const column = (rows[emailRow] ?? []).findIndex((f) =>
+      EMAIL_SHAPED.test(f)
+    );
+
+    throw new CatalogueRefreshError(
+      `${file} row ${emailRow + 1}, column ${column + 1} holds something ` +
+        `shaped like an email address. Refusing to read further, and ` +
+        `reporting neither the cell nor the row it sits in.`
+    );
+  }
+
   if (
     !header ||
     header.length !== columns.length ||
@@ -1155,10 +1251,18 @@ function dataRowsOf(
   return dataRows.map((row, index) => {
     const where = `${file} row ${index + 2}`;
 
+    // Neither of these echoes the row, and the scan above is not the reason.
+    // That scan catches one shape of member data, which is what a tripwire is
+    // for; it is not a filter, and treating a clean pass through it as licence
+    // to print a whole row would make it one. A name, an address or a member
+    // id would sail through it. What the coordinates already give is the file,
+    // the row and — for the blank — the column, which locates the cell exactly,
+    // so the echo was never buying the diagnostic anything the reader could not
+    // get by opening the file at the line it was just handed.
     if (row.length !== columns.length) {
       throw new CatalogueRefreshError(
         `${where} has ${row.length} fields where the header declares ` +
-          `${columns.length}: ${JSON.stringify(row)}`
+          `${columns.length}.`
       );
     }
 
@@ -1168,8 +1272,7 @@ function dataRowsOf(
 
     if (blank !== -1) {
       throw new CatalogueRefreshError(
-        `${where} has an empty field — it names no ${columns[blank]}: ` +
-          JSON.stringify(row)
+        `${where}, column ${blank + 1} is empty — it names no ${columns[blank]}.`
       );
     }
 
