@@ -369,4 +369,16 @@ describe("the disposition table this repository commits", () => {
     expect(counted.get("resolves-to-product")?.length).toBeGreaterThan(0);
     expect(counted.get("collection")?.length).toBeGreaterThan(0);
   });
+
+  it("is not described as read by no command, now that one reads it", () => {
+    // `readDispositionTable`'s docblock explained the reader's strictness by
+    // saying nothing in this repository reads the file. A release gate now
+    // does, and a docblock that says otherwise is the kind of stale contract
+    // someone reasons from before deciding a check is unnecessary.
+    const library = readFileSync("scripts/lib/catalogue-refresh.ts", "utf8");
+    const gate = readFileSync("scripts/check-collection-assignment.ts", "utf8");
+
+    expect(gate).toContain("readDispositionTable(");
+    expect(library).not.toContain("Read by no command");
+  });
 });

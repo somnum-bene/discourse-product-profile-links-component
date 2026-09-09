@@ -929,13 +929,20 @@ export function dispositionTableCsv(
  * The disposition table a file holds, refusing anything that is not exactly
  * what `dispositionTableCsv` writes.
  *
- * Read by no command — the far side of it is a different repository — and that
- * is precisely why it exists. The file is reviewed once and then consumed by a
- * join this repository cannot see, so the checks that would normally be a
- * reader's incidental strictness are the only ones the artifact will ever get:
- * the digest and the six columns here, and then everything
- * `assertDispositionRow` insists on, which is the same list the writer is held
- * to. A gate running here is a gate that runs before the file leaves.
+ * Read by one command, and by nothing downstream — the far side of it is a
+ * different repository — and that is precisely why it exists. The file is
+ * reviewed once and then consumed by a join this repository cannot see, so the
+ * checks that would normally be a reader's incidental strictness are the only
+ * ones the artifact will ever get: the digest and the six columns here, and then
+ * everything `assertDispositionRow` insists on, which is the same list the
+ * writer is held to. A gate running here is a gate that runs before the file
+ * leaves.
+ *
+ * The one command is `pnpm check:collection-assignment`, which reads the
+ * committed table to hold it against the committed Collection Assignment. That
+ * is the release gate on the artifact, not a consumer of it: it reads the file
+ * to refuse it, and no code in this repository does anything with a
+ * `DispositionRow` afterwards.
  */
 export function readDispositionTable(text: string): DispositionRow[] {
   const dataRows = dataRowsOf(
