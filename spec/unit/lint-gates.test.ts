@@ -189,19 +189,90 @@ describe("every request this pipeline makes is bounded", () => {
     expect(withFetch.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("passes an AbortSignal to every one of them", () => {
-    for (const path of commandFiles) {
-      const source = readFileSync(path, "utf8");
+  /**
+   * The argument list of the `fetch(` beginning at `from`, found by balancing
+   * brackets rather than by looking for a closing line at a fixed indentation.
+   *
+   * The delimiter this used to use was `\n  });`, which only matched a call
+   * closed at exactly two spaces. `scripts/export-sheet.ts` closes its fetch at
+   * four, so `indexOf` returned -1, `slice(0, -1)` handed back all but one
+   * character of the rest of the file, and a `signal:` belonging to a later
+   * call would have carried an earlier unbounded one. A sweep that can be
+   * satisfied by a different call site than the one it is looking at is not a
+   * gate.
+   *
+   * Returns null when the brackets do not close, which the caller asserts
+   * against — an unparseable call is a failure here, not a pass.
+   */
+  function fetchArguments(source: string, from: number): string | null {
+    let depth = 0;
 
-      for (const call of source.split("await fetch(").slice(1)) {
-        // The options object ends at the first line that closes it. A signal
-        // has to appear inside, not merely somewhere later in the file.
-        const options = call.slice(0, call.indexOf("\n  });"));
+    for (let at = from; at < source.length; at += 1) {
+      if ("({[".includes(source[at] as string)) {
+        depth += 1;
+      } else if (")}]".includes(source[at] as string)) {
+        depth -= 1;
 
-        expect(options, `${path} has an unbounded fetch`).toContain(
-          "signal: AbortSignal.timeout("
-        );
+        if (depth === 0) {
+          return source.slice(from + 1, at);
+        }
       }
+    }
+
+    return null;
+  }
+
+  /** Every `await fetch(` in the pipeline, with its arguments. */
+  const fetchCalls = commandFiles.flatMap((path) => {
+    const source = readFileSync(path, "utf8");
+    const calls: { path: string; args: string | null }[] = [];
+
+    for (
+      let at = source.indexOf("await fetch(");
+      at !== -1;
+      at = source.indexOf("await fetch(", at + 1)
+    ) {
+      calls.push({
+        path,
+        args: fetchArguments(source, at + "await fetch".length),
+      });
+    }
+
+    return calls;
+  });
+
+  it("parses every call it found, so no scan runs off the end", () => {
+    // The old delimiter failed silently on two of the five. This is the
+    // assertion that would have said so.
+    for (const call of fetchCalls) {
+      expect(
+        call.args,
+        `${call.path} has a fetch this sweep cannot parse`
+      ).not.toBeNull();
+    }
+
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("stops at the end of the call, not at the end of the file", () => {
+    // The failure mode in one assertion: no parsed call may reach as far as
+    // the file it lives in. `export-sheet.ts` scanned 4315 of 4316 remaining
+    // characters before this.
+    for (const call of fetchCalls) {
+      const source = readFileSync(call.path, "utf8");
+
+      expect(
+        (call.args ?? "").length,
+        `${call.path}: the sweep read the rest of the file`
+      ).toBeLessThan(source.length / 2);
+    }
+  });
+
+  it("passes an AbortSignal to every one of them", () => {
+    for (const call of fetchCalls) {
+      expect(call.args ?? "", `${call.path} has an unbounded fetch`).toContain(
+        "signal: AbortSignal.timeout("
+      );
     }
   });
 });
