@@ -161,6 +161,34 @@ export function refuseArguments(argv: readonly string[]): void {
 }
 
 /**
+ * The Resolved Product Catalogue being empty, refused before any request.
+ *
+ * `shippability` already refuses an empty run, and that used to be the same
+ * question: the pass read one file, so no results meant no catalogue. It stopped
+ * being the same question when the Collection Links joined the run. A
+ * header-only `data/resolved-products.csv` beside one valid Collection Link
+ * produces a non-empty result list, every entry verifies, and the command exits
+ * zero on a catalogue that ships no product Mappings at all — which is the exact
+ * outcome the empty-catalogue invariant exists to stop.
+ *
+ * So the count is asked for per sink, before the loop. An empty Collection Links
+ * file is not refused: a repository with no discontinued equipment mapped yet is
+ * a legitimate state, and no Mapping is missing because of it.
+ */
+export function refuseEmptyCatalogue(productCount: number): void {
+  if (productCount > 0) {
+    return;
+  }
+
+  throw new CatalogueVerifyError(
+    `The Resolved Product Catalogue is empty, so there is nothing to verify ` +
+      `about it. That is not a pass: an empty catalogue ships no product ` +
+      `Mappings at all, and Collection Links answering on their own does not ` +
+      `make it one. Run pnpm refresh:catalogue first.`
+  );
+}
+
+/**
  * Whether a catalogue entry is eligible to be requested at all.
  *
  * Shopify's verdict travels in the catalogue's `status` column, so this needs no

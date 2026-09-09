@@ -17,6 +17,7 @@ import {
   productHandleOf,
   proposedCorrection,
   refuseArguments,
+  refuseEmptyCatalogue,
   renderVerification,
   resultFrom,
   retryAfterMs,
@@ -865,5 +866,45 @@ describe("what the verify pass is allowed to be part of", () => {
     // this file would otherwise reintroduce silently.
     expect(command).toContain('kind: "product" as const');
     expect(command).toContain('kind: "collection" as const');
+  });
+
+  it("counts the catalogue before the two sinks become one list", () => {
+    // `shippability` refuses an empty run, and that stopped meaning "an empty
+    // catalogue" the moment the Collection Links joined it. The guard has to
+    // read the per-sink count, so it has to run before the merge.
+    const guardAt = command.indexOf("refuseEmptyCatalogue(catalogue.length)");
+    const mergeAt = command.indexOf("const entries: VerifyEntry[] = [");
+
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(mergeAt).toBeGreaterThan(guardAt);
+  });
+});
+
+describe("an empty Resolved Product Catalogue", () => {
+  it("is refused before anything is requested", () => {
+    expect(() => refuseEmptyCatalogue(0)).toThrow(CatalogueVerifyError);
+    expect(() => refuseEmptyCatalogue(0)).toThrow(/empty/);
+  });
+
+  it("is refused whatever the Collection Links say", () => {
+    // The failure this exists for: a header-only catalogue beside one valid
+    // Collection Link. The combined result list is not empty, so
+    // `shippability` passes it, and the command would exit zero shipping no
+    // product Mappings at all.
+    const links = [
+      resultFrom(link({}), [
+        { kind: "answered", status: 200, finalUrl: link({}).url },
+      ]),
+    ];
+
+    expect(shippability(links).shippable).toBe(true);
+    expect(() => refuseEmptyCatalogue(0)).toThrow(CatalogueVerifyError);
+  });
+
+  it("lets a catalogue with entries through, and an empty links file too", () => {
+    // No discontinued equipment mapped yet is a legitimate state: no Mapping is
+    // missing because of it, so it is not this guard's business.
+    expect(() => refuseEmptyCatalogue(1)).not.toThrow();
+    expect(() => refuseEmptyCatalogue(55)).not.toThrow();
   });
 });

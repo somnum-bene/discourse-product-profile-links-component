@@ -38,6 +38,7 @@ import {
   PACE_MS,
   pauseReason,
   refuseArguments,
+  refuseEmptyCatalogue,
   renderVerification,
   REQUEST_TIMEOUT_MS,
   resultFrom,
@@ -57,6 +58,11 @@ async function main(): Promise<void> {
   const catalogue = readResolvedProducts(catalogueText);
   const linksText = await readFile(COLLECTION_LINKS_FILE, "utf8");
   const collectionLinks = readCollectionLinks(linksText);
+
+  // Before the two sinks are merged, while the counts are still separable. Once
+  // they are one list, `shippability` can no longer tell an empty catalogue from
+  // a catalogue whose entries all happen to be collections.
+  refuseEmptyCatalogue(catalogue.length);
 
   // Both sinks, in one bounded pass. A Catalogue Refresh asks Shopify's Admin
   // API only whether a collection exists, and says so at its `COLLECTION_LOOKUP`
