@@ -255,10 +255,14 @@ async function main(): Promise<void> {
         // to a file to find out which rows it meant.
         //
         // Coordinates, never cells, the way the standalone gate locates the
-        // same rows: `Field` is a Managed Field name this repository owns and
-        // a row number is a position rather than content. `Legacy PNum(s)`,
-        // `Legacy Text`, `Profile Link Value` and `Rationale` are workbook
-        // content and are not reported.
+        // same rows: a row number is a position rather than content, and
+        // `Field` is a Managed Field name — not because the column is
+        // described that way, but because `assignmentRowsFrom` refuses the
+        // tab outright unless every `Field` cell is one of `MANAGED_FIELDS`.
+        // Read verbatim it would be workbook content like any other cell, and
+        // this stderr is a public CI artifact. `Legacy PNum(s)`, `Legacy
+        // Text`, `Profile Link Value` and `Rationale` are workbook content
+        // and are not reported.
         `The ${undecided.length === 1 ? "row is" : "rows are"} located ` +
         `below; the cells are not reported:\n` +
         assignments

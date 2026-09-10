@@ -57,9 +57,12 @@ async function main(): Promise<void> {
     // output is a public artifact, and every column that would identify the
     // row by its content — `Legacy PNum(s)`, `Legacy Text`, `Profile Link
     // Value` — is workbook content read across the boundary. `Legacy Text` in
-    // particular is free text a curator typed into a bulletin board. `Field`
-    // is safe because it is a Managed Field name, a closed set this
-    // repository owns, and the row number is a coordinate rather than a cell.
+    // particular is free text a curator typed into a bulletin board. The
+    // row number is a coordinate rather than a cell, and `Field` is a
+    // Managed Field name — enforced, not assumed: `assignmentRowsFrom`
+    // refuses the whole tab unless every `Field` cell is one of
+    // `MANAGED_FIELDS`, which is what makes the word printed here a member of
+    // a closed set this repository owns rather than whatever the cell held.
     //
     // `undecidedAssignments` filters, so it returns the same object
     // references, and a row's position in `assignments` is its position in
