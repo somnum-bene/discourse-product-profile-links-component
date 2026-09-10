@@ -211,10 +211,35 @@ describe("every request this pipeline makes is bounded", () => {
    */
   function blanked(source: string): string {
     const out = [...source];
-    // Whether a `/` here can open a regular expression rather than divide.
-    // Division only ever follows a value, and none of these end one.
-    const opensRegex = (before: string): boolean =>
-      before === "" || "([{,;:=!&|?+-*%~^<>".includes(before);
+    /**
+     * Whether a `/` here can open a regular expression rather than divide,
+     * given the source `before` it with its trailing space already gone.
+     *
+     * Division only ever follows a value, and none of the punctuators below
+     * end one — with two exceptions, and they cost a real request.
+     * `counter++ / (await fetch(url, {}))` divides after a postfix
+     * increment, but the last character is a `+`, so the slash was read as a
+     * regex opener and everything to the end of the line, the unbounded call
+     * included, was blanked away. `--` is the same token the other way
+     * round. Those two are the whole exception: every other way of ending a
+     * value ends in an identifier character, a digit, a quote, a backtick, a
+     * `)` or a `]`, and none of those is in this set.
+     *
+     * That argument is the reason for the invariant asserted below, not a
+     * substitute for it. Getting this wrong erases executable code, and the
+     * question is contextual in general, so the sweep does not rely on the
+     * answer being right — it refuses to lose a call it could see before
+     * blanking.
+     */
+    const opensRegex = (before: string): boolean => {
+      if (before.endsWith("++") || before.endsWith("--")) {
+        return false;
+      }
+
+      const last = before.slice(-1);
+
+      return last === "" || "([{,;:=!&|?+-*%~^<>".includes(last);
+    };
 
     const blank = (from: number, to: number): void => {
       for (let index = from; index < to; index += 1) {
@@ -298,7 +323,7 @@ describe("every request this pipeline makes is bounded", () => {
 
         if (char === '"' || char === "'" || char === "/") {
           if (char === "/") {
-            const before = source.slice(0, at).trimEnd().slice(-1);
+            const before = source.slice(0, at).trimEnd();
 
             if (!opensRegex(before)) {
               at += 1;
@@ -357,10 +382,25 @@ describe("every request this pipeline makes is bounded", () => {
     return out.join("");
   }
 
-  /** Every source file this sweep reads, with its text already blanked. */
-  const blankedSources = new Map(
-    commandFiles.map((path) => [path, blanked(readFileSync(path, "utf8"))])
+  /** Every source file this sweep reads, exactly as written. */
+  const rawSources = new Map(
+    commandFiles.map((path) => [path, readFileSync(path, "utf8")])
   );
+
+  /** The same files, with their comments and literals blanked. */
+  const blankedSources = new Map(
+    [...rawSources].map(([path, source]) => [path, blanked(source)])
+  );
+
+  function rawOf(path: string): string {
+    const source = rawSources.get(path);
+
+    if (source === undefined) {
+      throw new Error(`${path} is not one of the files this sweep reads`);
+    }
+
+    return source;
+  }
 
   function sourceOf(path: string): string {
     const source = blankedSources.get(path);
@@ -734,6 +774,30 @@ describe("every request this pipeline makes is bounded", () => {
         unreadableGlobals(sourceOf(path)),
         `${path} reaches through the global object in a way this sweep cannot read`
       ).toEqual([]);
+    }
+  });
+
+  it("never blanks away a call it could see before blanking", () => {
+    // The one thing `blanked` must not do. Every other mistake it can make
+    // shows up as a call this sweep cannot parse or cannot vouch for, and
+    // those all fail; erasing the call outright is the mistake that passes.
+    // So rather than trusting the reasoning above about which slashes divide,
+    // the sweep compares what it can discover before blanking with what it
+    // can discover after, and refuses to have lost one.
+    const swallowed = 'const note = "await fetch(url, {})";';
+
+    expect(fetchCallsIn("synthetic", swallowed)).toHaveLength(1);
+    expect(fetchCallsIn("synthetic", blanked(swallowed))).toHaveLength(0);
+
+    // The cost, which is the same shape as the two refusals above: the text
+    // `fetch(` may not appear in a comment or a string literal in `scripts/`.
+    // Nothing there writes one, and a commented-out request is not something
+    // this sweep should be quietly reading past anyway.
+    for (const path of commandFiles) {
+      expect(
+        fetchCallsIn(path, sourceOf(path)).length,
+        `${path} has a fetch call that blanking removed`
+      ).toBe(fetchCallsIn(path, rawOf(path)).length);
     }
   });
 
