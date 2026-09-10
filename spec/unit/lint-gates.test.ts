@@ -465,27 +465,71 @@ describe("every request this pipeline makes is bounded", () => {
   }
 
   /**
+   * The `RequestInit` of a `fetch` call: its second top-level argument, or
+   * null when it has none.
+   *
+   * Split on the commas at depth zero, because a comma inside the options
+   * object, inside an array, or inside a nested call is not an argument
+   * boundary — `fetchArguments` already handed back a balanced slice, so
+   * counting brackets across it is enough to find the ones that are.
+   */
+  function initArgument(args: string): string | null {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+
+    for (let at = 0; at < args.length; at += 1) {
+      const char = args[at] as string;
+
+      if ("({[".includes(char)) {
+        depth += 1;
+      } else if (")}]".includes(char)) {
+        depth -= 1;
+      } else if (char === "," && depth === 0) {
+        parts.push(args.slice(start, at));
+        start = at + 1;
+      }
+    }
+
+    parts.push(args.slice(start));
+
+    return parts.length < 2 ? null : (parts[1] as string).trim();
+  }
+
+  /**
    * Whether `args` bounds its request: whether it passes an
-   * `AbortSignal.timeout()` as the options object's own `signal`, which is
-   * the only place `fetch` reads one.
+   * `AbortSignal.timeout()` as the `signal` of an options object written out
+   * at the call, which is the only place `fetch` reads one from.
    *
-   * The assertion below used to be `toContain("signal: AbortSignal.timeout(")`
-   * over the whole argument list, and that is satisfied by
-   * `fetch(url, { headers: { signal: AbortSignal.timeout(1000) } })` — an
-   * unbounded request carrying a header that happens to be named `signal`.
-   * The same shape as the two holes the blanking above closes: text that
-   * looks right standing in for the thing being asked about.
+   * Three versions of this check have now been satisfied by something other
+   * than a bounded request. `toContain("signal: AbortSignal.timeout(")` over
+   * the whole argument list accepted `{ headers: { signal: ... } }`, a header
+   * that happens to be named `signal`. Depth alone then accepted two more:
+   * `fetch({ signal: AbortSignal.timeout(1000) })`, where the object is the
+   * `Request` and `fetch` never reads a `signal` off it, and
+   * `fetch(url, cond ? { signal: ... } : {})`, which is unbounded on one of
+   * its two branches. Each time the gate was reading something adjacent to
+   * the property it is asking about.
    *
-   * Depth is counted the way `fetchArguments` balances brackets, over the
-   * blanked source, so a brace inside a string or a comment is already gone
-   * by the time it is counted. One level in is the options object's own body;
-   * anything deeper belongs to something nested inside it.
+   * So the question is asked positionally and structurally: the second
+   * top-level argument, required to be an object literal — a variable or a
+   * conditional is not something this sweep can vouch for, and returning
+   * false is the fail-closed answer — with `signal:` among its own
+   * properties, one level in. Depth is counted the way `fetchArguments`
+   * balances brackets, over the blanked source, so a brace inside a string
+   * or a comment is already gone by the time it is counted.
    */
   function boundsItsRequest(args: string): boolean {
+    const init = initArgument(args);
+
+    if (init === null || !init.startsWith("{") || !init.endsWith("}")) {
+      return false;
+    }
+
     const depths: number[] = [];
     let depth = 0;
 
-    for (const char of args) {
+    for (const char of init) {
       if (")}]".includes(char)) {
         depth -= 1;
       }
@@ -497,7 +541,7 @@ describe("every request this pipeline makes is bounded", () => {
       }
     }
 
-    return [...args.matchAll(/signal\s*:\s*AbortSignal\.timeout\s*\(/gu)].some(
+    return [...init.matchAll(/signal\s*:\s*AbortSignal\.timeout\s*\(/gu)].some(
       (match) => depths[match.index ?? 0] === 1
     );
   }
@@ -594,6 +638,35 @@ describe("every request this pipeline makes is bounded", () => {
         `${call.path} has an unbounded fetch`
       ).toBe(true);
     }
+  });
+
+  it("does not count a `signal` outside the options object it must be in", () => {
+    // Depth alone was not the question. Both of these put an
+    // `AbortSignal.timeout(` exactly one level in, and neither bounds a
+    // request: the first has no options argument at all — the object is the
+    // `Request`, and `fetch` does not read a `signal` off it — and the second
+    // is unbounded whenever the condition is false.
+    const [asRequest] = fetchCallsIn(
+      "synthetic",
+      "await fetch({ signal: AbortSignal.timeout(1000) });"
+    );
+    const [conditional] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, cond ? { signal: AbortSignal.timeout(1000) } : {});"
+    );
+
+    expect(initArgument(asRequest?.args ?? "")).toBeNull();
+    expect(boundsItsRequest(asRequest?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(conditional?.args ?? "")).toBe(false);
+
+    // The comma that separates the arguments is the one at depth zero, not
+    // the ones inside the options object.
+    const [ordinary] = fetchCallsIn(
+      "synthetic",
+      "await fetch(urlFor(a, b), { method: 'POST', signal: AbortSignal.timeout(1000) });"
+    );
+
+    expect(boundsItsRequest(ordinary?.args ?? "")).toBe(true);
   });
 
   it("does not count a `signal` that belongs to a nested option", () => {
