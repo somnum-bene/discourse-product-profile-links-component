@@ -465,6 +465,44 @@ describe("every request this pipeline makes is bounded", () => {
   }
 
   /**
+   * Whether `args` bounds its request: whether it passes an
+   * `AbortSignal.timeout()` as the options object's own `signal`, which is
+   * the only place `fetch` reads one.
+   *
+   * The assertion below used to be `toContain("signal: AbortSignal.timeout(")`
+   * over the whole argument list, and that is satisfied by
+   * `fetch(url, { headers: { signal: AbortSignal.timeout(1000) } })` — an
+   * unbounded request carrying a header that happens to be named `signal`.
+   * The same shape as the two holes the blanking above closes: text that
+   * looks right standing in for the thing being asked about.
+   *
+   * Depth is counted the way `fetchArguments` balances brackets, over the
+   * blanked source, so a brace inside a string or a comment is already gone
+   * by the time it is counted. One level in is the options object's own body;
+   * anything deeper belongs to something nested inside it.
+   */
+  function boundsItsRequest(args: string): boolean {
+    const depths: number[] = [];
+    let depth = 0;
+
+    for (const char of args) {
+      if (")}]".includes(char)) {
+        depth -= 1;
+      }
+
+      depths.push(depth);
+
+      if ("({[".includes(char)) {
+        depth += 1;
+      }
+    }
+
+    return [...args.matchAll(/signal\s*:\s*AbortSignal\.timeout\s*\(/gu)].some(
+      (match) => depths[match.index ?? 0] === 1
+    );
+  }
+
+  /**
    * A call to `fetch`, however it is spelled.
    *
    * Discovery used to be `indexOf("await fetch(")`, which is a promise this
@@ -551,9 +589,31 @@ describe("every request this pipeline makes is bounded", () => {
 
   it("passes an AbortSignal to every one of them", () => {
     for (const call of fetchCalls) {
-      expect(call.args ?? "", `${call.path} has an unbounded fetch`).toContain(
-        "signal: AbortSignal.timeout("
-      );
+      expect(
+        boundsItsRequest(call.args ?? ""),
+        `${call.path} has an unbounded fetch`
+      ).toBe(true);
     }
+  });
+
+  it("does not count a `signal` that belongs to a nested option", () => {
+    // `fetch` reads `signal` off the options object and nowhere else, so a
+    // `signal` one level further in is a header named `signal` and the
+    // request is unbounded. Both spellings below contain the substring the
+    // old assertion looked for, which is what made it a gate that could not
+    // fail — and the bounded one is here so the depth rule is not simply
+    // rejecting everything.
+    const [buried] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { headers: { signal: AbortSignal.timeout(1000) } });"
+    );
+    const [bounded] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), headers: {} });"
+    );
+
+    expect(buried?.args).toContain("signal: AbortSignal.timeout(");
+    expect(boundsItsRequest(buried?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(bounded?.args ?? "")).toBe(true);
   });
 });
