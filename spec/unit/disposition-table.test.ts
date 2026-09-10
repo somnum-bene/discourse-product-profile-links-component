@@ -388,6 +388,7 @@ describe("the disposition table this repository commits", () => {
       "nothing in this repository reads it",
       "stays green while they exist",
       "it reads only the committed",
+      "the gate lives away from the refresh",
     ]) {
       expect(prose, `"${retired}" is no longer true`).not.toContain(retired);
     }
@@ -402,6 +403,28 @@ describe("the disposition table this repository commits", () => {
       "it reads `data/collection-assignment.csv` and " +
         "`data/disposition-table.csv`"
     );
+  });
+
+  it("does not leave the binding vocabulary saying the older thing", () => {
+    // `CONTEXT.md` is the binding domain contract, which makes a stale
+    // sentence there worse than a stale one in a README: the glossary is what
+    // an ADR and a ticket are written against. Two of its entries described
+    // the state before this PR — that a Collection Link Fault never fails a
+    // refresh, `undecided` included, and that nothing here reads the
+    // Disposition Table.
+    const prose = readFileSync("CONTEXT.md", "utf8").replace(/\s+/gu, " ");
+
+    for (const retired of [
+      "It does not fail the refresh",
+      "read by nothing in this repository",
+    ]) {
+      expect(prose, `"${retired}" is no longer true`).not.toContain(retired);
+    }
+
+    expect(prose).toContain(
+      "a **Catalogue Refresh** exits non-zero while one exists (#38)"
+    );
+    expect(prose).toContain("read here by one release gate and nothing else");
   });
 
   it("is not described as read by no command, now that one reads it", () => {

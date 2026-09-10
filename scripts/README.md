@@ -428,7 +428,7 @@ so one message covers both: regenerate. The same comparison is also a unit test
 against the real files, which is why a stale `settings.yml` fails `pnpm test`
 too.
 
-## An undecided row blocks the ship, and the gate lives away from the refresh
+## An undecided row blocks the ship, in the refresh and in a gate of its own
 
 `refresh:catalogue` stays green on the faults drift creates — an
 `unassigned-legacy-value`, an `unadmitted-collection`, a
