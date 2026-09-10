@@ -52,11 +52,11 @@ export const SHEETS_READONLY_SCOPE =
 /**
  * How long any one request may take before it is abandoned.
  *
- * Every `fetch` in this pipeline had no timeout, so a hung endpoint blocked
- * indefinitely with nothing on stdout to say why — including part-way through
- * the destructive write loop, where a hang is the worst place to be left
- * guessing. The value matches `catalogue-verify.ts`, which had the only
- * bounded request in the repository.
+ * Every other `fetch` in this pipeline had no timeout, so a hung endpoint
+ * blocked indefinitely with nothing on stdout to say why — including part-way
+ * through the destructive write loop, where a hang is the worst place to be
+ * left guessing. The value matches `catalogue-verify.ts`, which had the only
+ * bounded request in the repository — the one `other` above is excluding.
  */
 export const REQUEST_TIMEOUT_MS = 15_000;
 
