@@ -613,6 +613,64 @@ describe("every request this pipeline makes is bounded", () => {
    */
   const FETCH_CALL = /(^|[^\w.$])(?:global(?:This)?\.)?fetch\s*\(/gu;
 
+  /**
+   * Every mention of the global `fetch`, called or not.
+   *
+   * `FETCH_CALL` finds a call written plainly, and there are other ways to
+   * execute the same function: `(fetch)(url)`, `fetch?.(url)`,
+   * `fetch.call(globalThis, url)`, and a `const send = fetch` called under
+   * another name later. None of them match a pattern ending in `fetch\s*\(`,
+   * so each one is a request this sweep never sees and the floor assertion
+   * below stays green while it goes unbounded.
+   *
+   * Widening discovery to cover the three spellings would leave the fourth,
+   * and the one after that. So the sweep refuses instead: a mention that is
+   * not immediately a call is something it cannot read, and the test below
+   * fails on it rather than passing over it. The cost is that nobody may
+   * alias or indirectly invoke `fetch` in `scripts/` — which is the rule this
+   * pipeline wants anyway, and a failure that says so is better than a gate
+   * that quietly stops covering the thing it names.
+   */
+  const FETCH_MENTION = /(^|[^\w.$])(?:global(?:This)?\.)?fetch\b/gu;
+
+  /** The mentions of `fetch` in `source` that are not plainly a call. */
+  function unreadableFetches(source: string): string[] {
+    return [...source.matchAll(FETCH_MENTION)]
+      .map((match) => source.slice(match.index ?? 0).trim())
+      .filter(
+        (from) => !/^[^\w.$]?(?:global(?:This)?\.)?fetch\s*\(/u.test(from)
+      )
+      .map((from) => from.slice(0, 40));
+  }
+
+  it("refuses a `fetch` it cannot read as a call", () => {
+    // Non-vacuous on its own terms: the three spellings below all execute the
+    // global, and `FETCH_CALL` matches none of them.
+    expect(
+      unreadableFetches(
+        [
+          "await (fetch)(url, {});",
+          "await fetch?.(url, {});",
+          "await fetch.call(globalThis, url, {});",
+          "const send = fetch;",
+        ].join("\n")
+      )
+    ).toHaveLength(4);
+
+    // And the plain spellings are not caught by it, so the rule is a rule
+    // about indirection rather than about the word.
+    expect(
+      unreadableFetches("await fetch(url, {});\nreturn globalThis.fetch(url);")
+    ).toEqual([]);
+
+    for (const path of commandFiles) {
+      expect(
+        unreadableFetches(sourceOf(path)),
+        `${path} spells fetch in a way this sweep cannot bound`
+      ).toEqual([]);
+    }
+  });
+
   function fetchCallsIn(
     path: string,
     source: string
