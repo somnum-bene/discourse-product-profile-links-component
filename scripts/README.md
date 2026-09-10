@@ -244,10 +244,13 @@ all the same kind of thing:
   legacy option value across both Managed Fields: the legacy identifier, the
   name the bulletin board showed for it, the chosen Profile Link value, the
   target URL, and the disposition. It is committed, it carries its own digest,
-  and **nothing in this repository reads it** — it is the entire interface to a
-  separate, non-public repository that joins it against a fresh member export to
-  produce the three columns Discourse's migrations engineer asked for: member
-  identifier, custom field name, value (#28).
+  and **the only thing in this repository that reads it is a release gate** —
+  `check:collection-assignment` refuses a `collection-link-fault` row rather
+  than consuming the file for anything it builds. Nothing here is derived from
+  it: it is the entire interface to a separate, non-public repository that
+  joins it against a fresh member export to produce the three columns
+  Discourse's migrations engineer asked for: member identifier, custom field
+  name, value (#28).
 
   Which string a legacy value becomes is decided here; which member holds it is
   decided there. Keeping that the only interface is what allows the member-level
@@ -427,16 +430,26 @@ too.
 
 ## An undecided row blocks the ship, and the gate lives away from the refresh
 
-`refresh:catalogue` reports `undecided` Collection Assignment rows on stderr
-and stays green while they exist, on purpose: its exit code is a statement
-about Shopify and the Sheet, which move without anyone committing anything, and
-a command that failed every time the catalogue drifted is a command people
-stop reading.
+`refresh:catalogue` stays green on the faults drift creates — an
+`unassigned-legacy-value`, an `unadmitted-collection`, a
+`stale-product-resolution`, a `curation-disagreement` — on purpose: a product
+retiring at Shopify creates one of those through nobody's action, and a command
+that failed every time the catalogue moved is a command people stop reading.
 
-`check:collection-assignment` is the gate instead, and it is a statement about
-the repository: it reads only the committed `data/collection-assignment.csv`
-and exits non-zero while any row's `Disposition` is `undecided`, naming every
-one so the fix does not require opening the file to find it. `undecided` is an
+`undecided` is the exception, and refresh **does** exit non-zero while any
+Collection Assignment row holds it (#38). It cannot appear unless a curator
+opened the Sheet and wrote the word, so going red on it is never going red on
+something the refresh did not cause. The exit code is set after the writes and
+after the report, so the artifacts and the review document still land.
+
+`check:collection-assignment` asks the same question of the committed files,
+which is what lets a gate run in CI and in a pre-commit hook without a
+credential: it reads `data/collection-assignment.csv` and
+`data/disposition-table.csv`, exits non-zero while any row's `Disposition` is
+`undecided` or any disposition row is a `collection-link-fault`, and locates
+every one so the fix does not require opening the file to find it. It asks
+`undecidedAssignments` — the same function refresh asks — so the two agree by
+construction rather than by both being maintained. `undecided` is an
 absence of evidence rather than a preference, so it blocks the same way an
 Unresolved URL does (ADR-0021) — the alternative, letting an uncurated row
 quietly resolve to no link, is indistinguishable from the failure this whole

@@ -370,6 +370,39 @@ describe("the disposition table this repository commits", () => {
     expect(counted.get("collection")?.length).toBeGreaterThan(0);
   });
 
+  it("does not tell an operator the two things that stopped being true", () => {
+    // `scripts/README.md` is the operator-facing copy of the same contract,
+    // and it carried both halves of it wrongly: that nothing here reads the
+    // disposition table, and that `refresh:catalogue` stays green while a row
+    // is `undecided`. Either sentence is what someone reasons from before
+    // deciding a check is unnecessary or a red build is a bug — which is the
+    // whole cost of a stale contract, and why the guard below is here rather
+    // than the change being left to a reader to notice.
+    const prose = readFileSync("scripts/README.md", "utf8").replace(
+      /\s+/gu,
+      " "
+    );
+
+    for (const retired of [
+      "nothing in this repository reads it",
+      "stays green while they exist",
+      "it reads only the committed",
+    ]) {
+      expect(prose, `"${retired}" is no longer true`).not.toContain(retired);
+    }
+
+    // Stated, not merely unstated: a README that dropped the sentence and
+    // said nothing in its place would pass the loop above.
+    expect(prose).toContain(
+      "refresh **does** exit non-zero while any Collection Assignment row " +
+        "holds it (#38)"
+    );
+    expect(prose).toContain(
+      "it reads `data/collection-assignment.csv` and " +
+        "`data/disposition-table.csv`"
+    );
+  });
+
   it("is not described as read by no command, now that one reads it", () => {
     // `readDispositionTable`'s docblock explained the reader's strictness by
     // saying nothing in this repository reads the file. A release gate now
