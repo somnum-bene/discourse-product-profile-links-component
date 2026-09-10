@@ -753,7 +753,9 @@ export function surveyPageFromResponse(
 /**
  * Where the next page of a division survey starts, or `null` when the survey
  * is over. Throws when Shopify says there is another page and does not say
- * where it begins.
+ * where a page this survey has not already asked for begins. `requested` is
+ * every cursor the survey has already sent, which is how a cursor that points
+ * backwards is recognised.
  *
  * The refusal is the point, and it lives here rather than in the loop that
  * needs it so it can be tested: `divisionSurveyQuery(division, null)` omits
@@ -763,11 +765,24 @@ export function surveyPageFromResponse(
  * division that might hold two — and `mergeProducts` deduplicates by handle,
  * so nothing in the output would look wrong either. A failure that reports
  * the wrong cause is worse than the one it replaces.
+ *
+ * A cursor that repeats one already sent does exactly the same thing by a
+ * different route, so it is refused on the same terms. Checking the whole set
+ * rather than only the cursor in hand, because a survey that alternates
+ * between two pages never advances either — non-advancing is the special case
+ * of cyclic, not the other way around. The cursor itself is never quoted: the
+ * division and the page number locate it, and an opaque token in a message
+ * that a curator reads is noise whatever it holds.
+ *
+ * `requested` has no default. A survey that forgot to pass it would silently
+ * lose the check, and this is the second refusal on this code path written
+ * because a silent wrong answer is the failure mode here.
  */
 export function nextSurveyCursor(
   page: SurveyPage,
   division: Division,
-  pageNumber: number
+  pageNumber: number,
+  requested: ReadonlySet<string>
 ): string | null {
   if (!page.hasNextPage) {
     return null;
@@ -779,6 +794,15 @@ export function nextSurveyCursor(
         `cursor to reach it. Continuing would re-request the first page ` +
         `under the same empty cursor, so this stops instead of surveying ` +
         `the division twice and reporting a page limit it never hit.`
+    );
+  }
+
+  if (requested.has(page.endCursor)) {
+    throw new CatalogueRefreshError(
+      `${division.tag} page ${pageNumber} reports another page and points ` +
+        `back at one this survey already asked for. Continuing would walk ` +
+        `the same pages until the page limit ran out, so this stops instead ` +
+        `of reporting a page limit the division never hit.`
     );
   }
 

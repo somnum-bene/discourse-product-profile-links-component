@@ -1056,16 +1056,18 @@ describe("deciding where the next survey page starts", () => {
     endCursor: string | null
   ): SurveyPage => ({ products: [], hasNextPage, endCursor });
 
+  const sent = (...cursors: string[]): ReadonlySet<string> => new Set(cursors);
+
   it("ends the survey when there is no next page", () => {
-    expect(nextSurveyCursor(page(false, "cursor-abc"), DIVISIONS[1], 1)).toBe(
-      null
-    );
+    expect(
+      nextSurveyCursor(page(false, "cursor-abc"), DIVISIONS[1], 1, sent())
+    ).toBe(null);
   });
 
   it("carries the cursor forward when there is one", () => {
-    expect(nextSurveyCursor(page(true, "cursor-abc"), DIVISIONS[1], 2)).toBe(
-      "cursor-abc"
-    );
+    expect(
+      nextSurveyCursor(page(true, "cursor-abc"), DIVISIONS[1], 2, sent("first"))
+    ).toBe("cursor-abc");
   });
 
   it("refuses another page with no cursor to reach it, naming the page", () => {
@@ -1074,9 +1076,54 @@ describe("deciding where the next survey page starts", () => {
     // page limit ran out and then report a page limit the division never
     // hit. Deduplication by handle means the output would look right too, so
     // the only symptom would be a wrong diagnosis.
-    expect(() => nextSurveyCursor(page(true, null), DIVISIONS[1], 3)).toThrow(
-      /page 3 reports another page and gives no cursor/
-    );
+    expect(() =>
+      nextSurveyCursor(page(true, null), DIVISIONS[1], 3, sent())
+    ).toThrow(/page 3 reports another page and gives no cursor/);
+  });
+
+  it("refuses a cursor it has already sent, naming the page", () => {
+    // The same wrong diagnosis by a different route: a cursor that repeats
+    // one already requested walks the same pages until `MAX_SURVEY_PAGES`
+    // runs out, `mergeProducts` deduplicates the repeats away, and the
+    // command reports a division of more than ten pages that has two.
+    expect(() =>
+      nextSurveyCursor(
+        page(true, "cursor-abc"),
+        DIVISIONS[1],
+        4,
+        sent("cursor-abc")
+      )
+    ).toThrow(/page 4 reports another page and points back at one/);
+
+    // Including the cursor it is holding right now, which is how a survey
+    // that stops advancing presents.
+    expect(() =>
+      nextSurveyCursor(page(true, "here"), DIVISIONS[1], 5, sent("a", "here"))
+    ).toThrow(/points back at one this survey already asked for/);
+  });
+
+  it("does not quote the cursor in either refusal", () => {
+    // An opaque token is noise in a message a curator reads, and this
+    // repository's refusals locate rather than quote. The page number and
+    // the division tag are the coordinates.
+    const thrown = ((): string => {
+      try {
+        nextSurveyCursor(
+          page(true, "cursor-abc"),
+          DIVISIONS[1],
+          4,
+          sent("cursor-abc")
+        );
+      } catch (error) {
+        return (error as Error).message;
+      }
+
+      throw new Error("the repeated cursor was not refused");
+    })();
+
+    expect(thrown).not.toContain("cursor-abc");
+    expect(thrown).toContain(DIVISIONS[1]?.tag ?? "");
+    expect(thrown).toContain("page 4");
   });
 });
 

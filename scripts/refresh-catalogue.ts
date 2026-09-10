@@ -337,6 +337,9 @@ async function surveyDivision(
   division: Division
 ): Promise<SurveyedProduct[]> {
   const products: SurveyedProduct[] = [];
+  // Every cursor already sent, so a page pointing back at one is refused
+  // rather than walked again until the page limit reports the wrong cause.
+  const requested = new Set<string>();
   let cursor: string | null = null;
 
   for (let page = 1; page <= MAX_SURVEY_PAGES; page += 1) {
@@ -352,7 +355,7 @@ async function surveyDivision(
     // reports another page and gives no cursor to reach it, is
     // `nextSurveyCursor`'s — in the library because this loop is not
     // reachable from a test, and the refusal is the part worth testing.
-    const next = nextSurveyCursor(surveyed, division, page);
+    const next = nextSurveyCursor(surveyed, division, page, requested);
 
     if (next === null) {
       process.stdout.write(
@@ -361,6 +364,7 @@ async function surveyDivision(
       return products;
     }
 
+    requested.add(next);
     cursor = next;
   }
 
