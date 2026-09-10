@@ -37,6 +37,7 @@ import {
   handlesFromSheetRows,
   MAX_SURVEY_PAGES,
   mergeProducts,
+  nextSurveyCursor,
   productsByHandleQuery,
   productsFromByHandleResponse,
   renderReviewDocument,
@@ -347,31 +348,20 @@ async function surveyDivision(
     const surveyed = surveyPageFromResponse(body, division);
     products.push(...surveyed.products);
 
-    if (!surveyed.hasNextPage) {
+    // The page-transition decision, including the refusal when Shopify
+    // reports another page and gives no cursor to reach it, is
+    // `nextSurveyCursor`'s — in the library because this loop is not
+    // reachable from a test, and the refusal is the part worth testing.
+    const next = nextSurveyCursor(surveyed, division, page);
+
+    if (next === null) {
       process.stdout.write(
         `  ${division.tag}: ${products.length} live products\n`
       );
       return products;
     }
 
-    // Shopify said there is another page and did not say where it starts.
-    // Refused rather than carried on, because `divisionSurveyQuery(division,
-    // null)` omits `after:` entirely: the next request would be the first
-    // request, this loop would re-fetch page one until `MAX_SURVEY_PAGES` ran
-    // out, and the failure it eventually reported would be "more than 10 pages
-    // of live products" — a wrong diagnosis of a division that might hold two.
-    // `mergeProducts` deduplicates by handle, so nothing in the output would
-    // look wrong either.
-    if (surveyed.endCursor === null) {
-      throw new CatalogueRefreshError(
-        `${division.tag} page ${page} reports another page and gives no ` +
-          `cursor to reach it. Continuing would re-request the first page ` +
-          `under the same empty cursor, so this stops instead of surveying ` +
-          `the division twice and reporting a page limit it never hit.`
-      );
-    }
-
-    cursor = surveyed.endCursor;
+    cursor = next;
   }
 
   throw new CatalogueRefreshError(

@@ -36,6 +36,7 @@ import {
   handleBatches,
   handlesFromSheetRows,
   mergeProducts,
+  nextSurveyCursor,
   productsByHandleQuery,
   productsFromByHandleResponse,
   readCollectionLinks,
@@ -47,6 +48,7 @@ import {
   SHOPIFY_API_VERSION,
   shopifyEndpoint,
   type SurveyedProduct,
+  type SurveyPage,
   surveyPageFromResponse,
   TOKEN_VAR,
   undecidedAssignments,
@@ -1045,6 +1047,36 @@ describe("reading a survey page", () => {
         DIVISIONS[1]
       )
     ).toThrow(/endCursor/);
+  });
+});
+
+describe("deciding where the next survey page starts", () => {
+  const page = (
+    hasNextPage: boolean,
+    endCursor: string | null
+  ): SurveyPage => ({ products: [], hasNextPage, endCursor });
+
+  it("ends the survey when there is no next page", () => {
+    expect(nextSurveyCursor(page(false, "cursor-abc"), DIVISIONS[1], 1)).toBe(
+      null
+    );
+  });
+
+  it("carries the cursor forward when there is one", () => {
+    expect(nextSurveyCursor(page(true, "cursor-abc"), DIVISIONS[1], 2)).toBe(
+      "cursor-abc"
+    );
+  });
+
+  it("refuses another page with no cursor to reach it, naming the page", () => {
+    // Not a hypothetical shape: `divisionSurveyQuery(division, null)` omits
+    // `after:`, so returning null here would re-request page one until the
+    // page limit ran out and then report a page limit the division never
+    // hit. Deduplication by handle means the output would look right too, so
+    // the only symptom would be a wrong diagnosis.
+    expect(() => nextSurveyCursor(page(true, null), DIVISIONS[1], 3)).toThrow(
+      /page 3 reports another page and gives no cursor/
+    );
   });
 });
 

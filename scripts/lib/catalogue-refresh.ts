@@ -751,6 +751,41 @@ export function surveyPageFromResponse(
 }
 
 /**
+ * Where the next page of a division survey starts, or `null` when the survey
+ * is over. Throws when Shopify says there is another page and does not say
+ * where it begins.
+ *
+ * The refusal is the point, and it lives here rather than in the loop that
+ * needs it so it can be tested: `divisionSurveyQuery(division, null)` omits
+ * `after:` entirely, so carrying on with a null cursor re-requests page one.
+ * The survey would then walk the same page until `MAX_SURVEY_PAGES` ran out
+ * and report "more than 10 pages of live products" — a wrong diagnosis of a
+ * division that might hold two — and `mergeProducts` deduplicates by handle,
+ * so nothing in the output would look wrong either. A failure that reports
+ * the wrong cause is worse than the one it replaces.
+ */
+export function nextSurveyCursor(
+  page: SurveyPage,
+  division: Division,
+  pageNumber: number
+): string | null {
+  if (!page.hasNextPage) {
+    return null;
+  }
+
+  if (page.endCursor === null) {
+    throw new CatalogueRefreshError(
+      `${division.tag} page ${pageNumber} reports another page and gives no ` +
+        `cursor to reach it. Continuing would re-request the first page ` +
+        `under the same empty cursor, so this stops instead of surveying ` +
+        `the division twice and reporting a page limit it never hit.`
+    );
+  }
+
+  return page.endCursor;
+}
+
+/**
  * One list of products from several, deduplicated by handle and sorted by it.
  * The by-handle fetch and the division surveys overlap heavily by design — a
  * curated product is usually also on sale — and the transform must see each
