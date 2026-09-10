@@ -437,6 +437,15 @@ describe("the disposition table this repository commits", () => {
 
     expect(gate).toContain("readDispositionTable(");
     expect(library).not.toContain("Read by no command");
+    expect(library).not.toContain("read by nothing in this repository");
+
+    // And not the second version of the same claim, which was narrower and
+    // still false: the gate does act on the rows it reads — it passes them to
+    // `unfinishedCollectionLinks` — it just never ships anything derived from
+    // one. Trading a stale contract for a wrong one is the failure mode this
+    // whole test is about.
+    expect(library).not.toContain("does anything with a");
+    expect(library).toContain("unfinishedCollectionLinks");
 
     // Including this file, which is where the guard was weakest: its own
     // header repeated the retired sentence while the assertion above declared

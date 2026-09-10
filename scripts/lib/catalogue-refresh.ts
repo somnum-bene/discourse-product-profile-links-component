@@ -86,7 +86,7 @@ export const CATALOGUE_FILE = "data/resolved-products.csv";
 export const COLLECTION_LINKS_FILE = "data/collection-links.csv";
 
 /**
- * The disposition table: committed, and read by nothing in this repository.
+ * The disposition table: committed, and read here only to be refused.
  *
  * It is the one artifact that crosses into the non-public repository that holds
  * member data (#28). Every other output here feeds a Discourse instance; this
@@ -982,10 +982,13 @@ export function dispositionTableCsv(
  * leaves.
  *
  * The one command is `pnpm check:collection-assignment`, which reads the
- * committed table to hold it against the committed Collection Assignment. That
- * is the release gate on the artifact, not a consumer of it: it reads the file
- * to refuse it, and no code in this repository does anything with a
- * `DispositionRow` afterwards.
+ * committed table to hold it against the committed Collection Assignment. It
+ * does act on the rows — it passes them to `unfinishedCollectionLinks` — but
+ * only to decide whether to refuse: no build, apply or export path consumes a
+ * `DispositionRow`, so nothing this repository ships is derived from one. That
+ * is the distinction worth stating, and stating it the shorter way ("nothing
+ * does anything with them afterwards") replaced a true contract with a false
+ * one.
  */
 export function readDispositionTable(text: string): DispositionRow[] {
   const dataRows = dataRowsOf(
