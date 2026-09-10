@@ -195,6 +195,13 @@ describe("every request this pipeline makes is bounded", () => {
    * comment or string holding an unmatched `)` would otherwise end the
    * argument slice early, or run it to the end of the file.
    *
+   * A template literal is blanked in pieces, because only its literal chunks
+   * are text: the body of a `${...}` is code, and blanking it along with the
+   * rest would hide a call rather than reveal one — this function's own
+   * failure, arrived at from the other side. So each interpolation goes back
+   * through `scan` as the source it is, which is also what lets it hold a
+   * nested template, a comment or a string of its own.
+   *
    * Not a parser. A parser is what this wants to be, and `typescript` is only
    * present here as a transitive dependency of `@glint/ember-tsc` — importing
    * it would be reaching through a package this repository does not declare.
@@ -209,8 +216,6 @@ describe("every request this pipeline makes is bounded", () => {
     const opensRegex = (before: string): boolean =>
       before === "" || "([{,;:=!&|?+-*%~^<>".includes(before);
 
-    let at = 0;
-
     const blank = (from: number, to: number): void => {
       for (let index = from; index < to; index += 1) {
         // Newlines are kept so a line number is still a line number, and so a
@@ -221,68 +226,133 @@ describe("every request this pipeline makes is bounded", () => {
       }
     };
 
-    while (at < source.length) {
-      const two = source.slice(at, at + 2);
-      const char = source[at] as string;
+    /**
+     * Blanks the literal chunks of the template opening at `from`, handing
+     * every `${...}` body back to `scan`. Returns the index of the closing
+     * backtick, or the end of the source if it never closes.
+     */
+    function template(from: number): number {
+      let at = from + 1;
 
-      if (two === "//") {
-        const end = source.indexOf("\n", at);
-        const to = end === -1 ? source.length : end;
+      while (at < source.length) {
+        const char = source[at] as string;
 
-        blank(at, to);
-        at = to;
-        continue;
-      }
-
-      if (two === "/*") {
-        const end = source.indexOf("*/", at + 2);
-        const to = end === -1 ? source.length : end + 2;
-
-        blank(at, to);
-        at = to;
-        continue;
-      }
-
-      if (char === '"' || char === "'" || char === "`" || char === "/") {
-        if (char === "/") {
-          const before = source.slice(0, at).trimEnd().slice(-1);
-
-          if (!opensRegex(before)) {
-            at += 1;
-            continue;
-          }
+        if (char === "\\") {
+          blank(at, Math.min(at + 2, source.length));
+          at += 2;
+          continue;
         }
 
-        let index = at + 1;
-
-        while (index < source.length) {
-          const inner = source[index] as string;
-
-          if (inner === "\\") {
-            index += 2;
-            continue;
-          }
-
-          if (inner === char) {
-            break;
-          }
-
-          // An unterminated literal would otherwise blank the rest of the
-          // file; a newline ends every one of these except a template.
-          if (inner === "\n" && char !== "`") {
-            break;
-          }
-
-          index += 1;
+        if (char === "`") {
+          return at;
         }
 
-        blank(at + 1, Math.min(index, source.length));
-        at = index + 1;
-        continue;
+        if (char === "$" && source[at + 1] === "{") {
+          at = scan(at + 2, true) + 1;
+          continue;
+        }
+
+        blank(at, at + 1);
+        at += 1;
       }
 
-      at += 1;
+      return source.length;
     }
+
+    /**
+     * Blanks every comment and literal from `from` onward. With `untilBrace`
+     * it is walking the body of a `${...}` and stops at the `}` that closes
+     * it, counting the braces of any object or block it passes on the way —
+     * a `}` inside a string or a comment is already gone by then.
+     */
+    function scan(from: number, untilBrace: boolean): number {
+      let at = from;
+      let depth = 0;
+
+      while (at < source.length) {
+        const two = source.slice(at, at + 2);
+        const char = source[at] as string;
+
+        if (two === "//") {
+          const end = source.indexOf("\n", at);
+          const to = end === -1 ? source.length : end;
+
+          blank(at, to);
+          at = to;
+          continue;
+        }
+
+        if (two === "/*") {
+          const end = source.indexOf("*/", at + 2);
+          const to = end === -1 ? source.length : end + 2;
+
+          blank(at, to);
+          at = to;
+          continue;
+        }
+
+        if (char === "`") {
+          at = template(at) + 1;
+          continue;
+        }
+
+        if (char === '"' || char === "'" || char === "/") {
+          if (char === "/") {
+            const before = source.slice(0, at).trimEnd().slice(-1);
+
+            if (!opensRegex(before)) {
+              at += 1;
+              continue;
+            }
+          }
+
+          let index = at + 1;
+
+          while (index < source.length) {
+            const inner = source[index] as string;
+
+            if (inner === "\\") {
+              index += 2;
+              continue;
+            }
+
+            if (inner === char) {
+              break;
+            }
+
+            // An unterminated literal would otherwise blank the rest of the
+            // file, and a newline ends every one of these.
+            if (inner === "\n") {
+              break;
+            }
+
+            index += 1;
+          }
+
+          blank(at + 1, Math.min(index, source.length));
+          at = index + 1;
+          continue;
+        }
+
+        if (untilBrace) {
+          if (char === "{") {
+            depth += 1;
+          } else if (char === "}") {
+            if (depth === 0) {
+              return at;
+            }
+
+            depth -= 1;
+          }
+        }
+
+        at += 1;
+      }
+
+      return source.length;
+    }
+
+    scan(0, false);
 
     return out.join("");
   }
@@ -327,6 +397,30 @@ describe("every request this pipeline makes is bounded", () => {
     expect(scrubbed).not.toContain("signal: AbortSignal.timeout(");
     // The first two calls are still calls; only the third was a comment.
     expect(fetchCallsIn("synthetic", scrubbed)).toHaveLength(2);
+  });
+
+  it("keeps a call that lives inside a template interpolation", () => {
+    // The body of a `${...}` is code, not text. Blanking it along with the
+    // literal chunks around it hides an unbounded request from the sweep
+    // outright — the hole a comment gave, entered from the other side, and
+    // worse: a commented-out call at least left the real one visible.
+    const interpolated = [
+      "const body = `${await fetch(url, { method: 'GET' })}`;",
+      "const twice = `${label(`${await fetch(other, { method: 'GET' })}`)}`;",
+    ].join("\n");
+    const scrubbed = blanked(interpolated);
+    const calls = fetchCallsIn("synthetic", scrubbed);
+
+    expect(calls).toHaveLength(2);
+
+    for (const call of calls) {
+      expect(call.args).toContain("method:");
+    }
+
+    // The literal text on either side of the interpolation is still gone,
+    // including the string inside the nested template.
+    expect(scrubbed).not.toContain("GET");
+    expect(scrubbed).toHaveLength(interpolated.length);
   });
 
   it("finds the call sites at all, so the sweep is not vacuous", () => {
