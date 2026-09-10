@@ -34,10 +34,11 @@ import {
  * derived from and the `settings.yml` this repository ships.
  *
  * This file exists because the artifact is the entire interface between this
- * repository and the non-public one that writes to members (#28), and it is the
- * only artifact here that nothing in this repository reads. Every other output
- * is checked by the command that consumes it; this one is checked here or
- * nowhere. What it is checked for is the one property the downstream join
+ * repository and the non-public one that writes to members (#28), and almost
+ * nothing here reads it: `check:collection-assignment` refuses a
+ * `collection-link-fault` row and asks the file nothing else. Every other
+ * output is checked by the command that consumes it, and no command consumes
+ * this one, so the properties below are checked here or nowhere. What it is checked for is the one property the downstream join
  * cannot survive being wrong about: the value has to be reproducible character
  * for character, because Profile Link resolution is an exact string match and a
  * near miss stores fine and silently renders nothing.
@@ -413,5 +414,21 @@ describe("the disposition table this repository commits", () => {
 
     expect(gate).toContain("readDispositionTable(");
     expect(library).not.toContain("Read by no command");
+
+    // Including this file, which is where the guard was weakest: its own
+    // header repeated the retired sentence while the assertion above declared
+    // the contract fixed elsewhere. A test that certifies documentation it is
+    // itself contradicting is worse than no test, because it reads as
+    // evidence the sweep was done.
+    //
+    // The header alone, and not the whole file: the guard above deliberately
+    // holds the retired sentences as literals so it can look for them, and a
+    // whole-file sweep would read those as the contradiction rather than as
+    // the check for it.
+    const self = readFileSync("spec/unit/disposition-table.test.ts", "utf8");
+    const header = self.slice(0, self.indexOf("describe("));
+
+    expect(header).not.toContain("nothing in this repository reads");
+    expect(header).toContain("check:collection-assignment");
   });
 });
