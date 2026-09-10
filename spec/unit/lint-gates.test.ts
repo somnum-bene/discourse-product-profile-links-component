@@ -172,14 +172,51 @@ describe("every request this pipeline makes is bounded", () => {
    * say why. A fifth call site added later is covered here the moment it
    * exists, without anybody remembering to come back.
    */
-  const commandFiles = [
-    ...readdirSync("scripts")
-      .filter((name) => name.endsWith(".ts"))
-      .map((name) => `scripts/${name}`),
-    ...readdirSync("scripts/lib")
-      .filter((name) => name.endsWith(".ts"))
-      .map((name) => `scripts/lib/${name}`),
-  ].sort();
+  /**
+   * The extensions the lint gates accept inside a source directory, which is
+   * what this sweep has to read to be talking about the same files they do.
+   * Pinned against `package.json` below rather than trusted here.
+   */
+  const SOURCE_EXTENSIONS = [
+    "js",
+    "gjs",
+    "mjs",
+    "cjs",
+    "ts",
+    "gts",
+    "mts",
+    "cts",
+  ];
+
+  /**
+   * Every source file under `scripts/`, at any depth.
+   *
+   * This was two `readdirSync` calls — `scripts` and `scripts/lib` — filtered
+   * to `.ts`, which is narrower than the gates two describes above in both
+   * directions. Those accept all eight extensions listed here, anywhere under
+   * a source directory. So a request added in a `.mjs`, or in any
+   * `scripts/` subdirectory that is not `lib/`, was absent from the call,
+   * mention and global-object sweeps while the five-call floor stayed green:
+   * the failure the header promises not to have, reached through the file
+   * list rather than through the pattern.
+   */
+  function sourceFilesUnder(directory: string): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = `${directory}/${entry.name}`;
+
+      if (entry.isDirectory()) {
+        return sourceFilesUnder(path);
+      }
+
+      return SOURCE_EXTENSIONS.some((extension) =>
+        entry.name.endsWith(`.${extension}`)
+      )
+        ? [path]
+        : [];
+    });
+  }
+
+  const commandFiles = sourceFilesUnder("scripts").sort();
 
   /**
    * The source with every comment and string literal blanked out, character
@@ -411,6 +448,26 @@ describe("every request this pipeline makes is bounded", () => {
 
     return source;
   }
+
+  it("reads every extension and every depth the gates accept", () => {
+    // Discovery drifting narrower than the gates is how a whole file goes
+    // unswept, so the list is checked against the gate that defines it rather
+    // than kept in step by hand.
+    const gate = (
+      JSON.parse(readFileSync("package.json", "utf8")).scripts as Record<
+        string,
+        string
+      >
+    )["lint:prettier"] as string;
+
+    expect(gate).toContain(`{${SOURCE_EXTENSIONS.join(",")}}`);
+
+    // And the walk is a walk: `scripts/lib` is reached without being named.
+    expect(commandFiles).toContain("scripts/lib/sheets-auth.ts");
+    expect(commandFiles.every((path) => path.startsWith("scripts/"))).toBe(
+      true
+    );
+  });
 
   it("blanks a comment without moving anything after it", () => {
     // The property the bracket balancer depends on: same length, same lines,
