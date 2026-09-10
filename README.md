@@ -16,7 +16,7 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 | 🚫 **No duplicate rows**     | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
 | ♾️ **No ceiling**            | Map as many Custom User Fields as you like. The old ten-slot limit is gone.                                                                        |
-| 🧪 **Actually tested**       | 457 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance.                                  |
+| 🧪 **Actually tested**       | 904 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance.                                  |
 
 ---
 
