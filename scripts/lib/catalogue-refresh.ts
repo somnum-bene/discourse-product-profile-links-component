@@ -39,6 +39,7 @@ import {
 import {
   type AssignmentRow,
   EMAIL_SHAPED,
+  MANAGED_FIELDS,
   parseCsv,
   SHEET_TABS,
 } from "./sheet-export.ts";
@@ -1002,7 +1003,7 @@ function assertDispositionRow(
   row: readonly string[],
   where: string
 ): DispositionOutcome {
-  const [, legacyValue, legacyText, value, url, disposition] = row;
+  const [userFieldName, legacyValue, legacyText, value, url, disposition] = row;
 
   // Reported by row and column and never by content: this is the tripwire that
   // keeps member data out of the one file that leaves, and a refusal that
@@ -1050,6 +1051,26 @@ function assertDispositionRow(
         `value, so a blank one means its option-table row has an empty ` +
         `\`Text\` and nothing names the equipment at all — a member's ` +
         `equipment quietly deleted.`
+    );
+  }
+
+  // The join column, held to the two names this repository has. Two separate
+  // jobs happen to want it: the far side joins on this column and a name it
+  // has never heard of finds no member, and `check-collection-assignment.ts`
+  // prints this cell to locate a `collection-link-fault` row it is refusing,
+  // in a public CI job. `assertEveryFieldRepresented` asks the other half of
+  // the question — that no field is missing — and a superset check cannot
+  // notice a row naming a field that does not exist.
+  //
+  // Not quoted, on the same terms as every refusal here: what the cell holds
+  // is what this check could not vouch for.
+  if (!MANAGED_FIELDS.includes(userFieldName ?? "")) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("user_field_name")} does not name a Managed ` +
+        `Field. One of ${MANAGED_FIELDS.join(" or ")} is expected, and what ` +
+        `the cell holds instead is not reported. The repository on the far ` +
+        `side joins on this column, so a name it has never heard of drops ` +
+        `every member holding one of the row's values.`
     );
   }
 

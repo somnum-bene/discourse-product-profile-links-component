@@ -1608,6 +1608,24 @@ describe("the disposition table file", () => {
     expect(() => readDispositionTable(digested(body))).not.toThrow(/Marjorie/);
   });
 
+  it("refuses a user_field_name that is not a Managed Field", () => {
+    // The join column. `assertEveryFieldRepresented` asks that no field is
+    // missing, which is a superset check and cannot notice a row naming a
+    // field that does not exist. The far side joins on this column, so a name
+    // it has never heard of drops every member holding the row's value — and
+    // `check-collection-assignment.ts` prints this cell to locate a fault
+    // row, in a public CI job.
+    const body = `${HEADER}\nMarjorie Fenwick-Abara,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /column 1 \(`user_field_name`\) does not name a Managed Field/
+    );
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /Machine or Mask is expected/
+    );
+    expect(() => readDispositionTable(digested(body))).not.toThrow(/Marjorie/);
+  });
+
   it("accepts a product URL as readily as a collection URL", () => {
     // Deliberately looser than `collectionHandleFromUrl`: this column carries
     // both, so insisting on `/collections/` would refuse every resolving row.

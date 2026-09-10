@@ -28,6 +28,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { type DispositionRow } from "./lib/build-catalogue.ts";
 import {
   CatalogueRefreshError,
   COLLECTION_LINK_FAULT,
@@ -89,21 +90,40 @@ async function main(): Promise<void> {
     );
   }
 
-  const faults = unfinishedCollectionLinks(
-    readDispositionTable(await readFile(DISPOSITION_FILE, "utf8"))
-  );
+  const table = readDispositionTable(await readFile(DISPOSITION_FILE, "utf8"));
+  const faults = unfinishedCollectionLinks(table);
 
   if (faults.length > 0) {
+    // Located the same way the undecided rows above are, and for the same
+    // reason. This refusal used to print the row's `legacy_value`, on the
+    // reasoning that a committed join key is an identifier rather than
+    // member data — but nothing constrains that cell to be one. A row whose
+    // columns have shifted holds a neighbour's content there, and this
+    // command's output is a public artifact. The field name survives because
+    // `assertDispositionRow` now holds it to `MANAGED_FIELDS`; the value does
+    // not, so the row number stands in for it.
+    //
+    // `unfinishedCollectionLinks` filters, so it returns the same object
+    // references and a row's position in `table` is its line in the file.
+    const faultRows = new Set<DispositionRow>(faults);
+
     throw new CatalogueRefreshError(
       `${faults.length} legacy ${faults.length === 1 ? "value" : "values"} ` +
         `earned a Collection Link and did not get one, ` +
-        `${faults.length === 1 ? "it is" : "they are"} named below. ` +
+        `${faults.length === 1 ? "it is" : "they are"} located below. ` +
         `A \`${COLLECTION_LINK_FAULT}\` row is the pipeline unable to finish a job it was ` +
         `asked to do, so it blocks the release for the same reason an ` +
         `\`undecided\` row does — a member holding one of these values gets ` +
-        `no Profile Link at all, which is the outcome ADR-0021 rejected:\n` +
-        faults
-          .map((row) => `  - ${row.userFieldName} \`Value\` ${row.legacyValue}`)
+        `no Profile Link at all, which is the outcome ADR-0021 rejected. ` +
+        `The cells are not reported:\n` +
+        table
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => faultRows.has(row))
+          .map(
+            ({ row, index }) =>
+              `  - ${row.userFieldName} row ${index + 2}, column ` +
+              `\`legacy_value\` (\`${DISPOSITION_FILE}\`)`
+          )
           .join("\n")
     );
   }
