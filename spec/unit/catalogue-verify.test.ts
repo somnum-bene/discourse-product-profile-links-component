@@ -1,15 +1,24 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type {
-  ProductStatus,
-  ResolvedProduct,
+import {
+  collectionHandleFromUrl,
+  type ProductStatus,
 } from "../../scripts/lib/build-catalogue";
+import {
+  readCollectionLinks,
+  readResolvedProducts,
+} from "../../scripts/lib/catalogue-refresh.ts";
 import {
   type Attempt,
   BACKOFF_MS,
   CatalogueVerifyError,
   classifyAttempt,
+  collectionHandleOf,
+  collectionUrlFor,
   delayBeforeAttempt,
+  distinctUrls,
+  entriesByUrl,
+  handleOf,
   isEligible,
   MAX_ATTEMPTS,
   MAX_RETRY_AFTER_MS,
@@ -18,24 +27,38 @@ import {
   productHandleOf,
   proposedCorrection,
   refuseArguments,
+  refuseEmptyCatalogue,
   renderVerification,
   resultFrom,
   retryAfterMs,
   shippability,
   shouldRetry,
   summarize,
+  type VerifyEntry,
   type VerifyResult,
 } from "../../scripts/lib/catalogue-verify";
 
-function entry(overrides: Partial<ResolvedProduct> = {}): ResolvedProduct {
+function entry(overrides: Partial<VerifyEntry> = {}): VerifyEntry {
   return {
     userFieldName: "Machine",
     value: "AirSense 11 AutoSet",
     handle: "airsense-11-autoset",
     status: "ACTIVE",
     url: "https://www.cpap.com/products/airsense-11-autoset",
+    kind: "product",
     ...overrides,
   };
+}
+
+/** The other sink, which borrows the product shape and is not a product. */
+function link(overrides: Partial<VerifyEntry> = {}): VerifyEntry {
+  return entry({
+    value: "DreamStation CPAP Machine (Discontinued)",
+    handle: "apap-machines",
+    url: "https://www.cpap.com/collections/apap-machines",
+    kind: "collection",
+    ...overrides,
+  });
 }
 
 function answered(status: number, overrides: Partial<Attempt> = {}): Attempt {
@@ -52,6 +75,7 @@ function result(overrides: Partial<VerifyResult> = {}): VerifyResult {
     userFieldName: "Machine",
     value: "AirSense 11 AutoSet",
     url: "https://www.cpap.com/products/airsense-11-autoset",
+    kind: "product",
     outcome: "verified",
     detail: "HTTP 200",
     attempts: 1,
@@ -216,6 +240,7 @@ describe("the outcome of one entry", () => {
     expect(resultFrom(entry(), [answered(200)])).toEqual({
       userFieldName: "Machine",
       value: "AirSense 11 AutoSet",
+      kind: "product",
       url: "https://www.cpap.com/products/airsense-11-autoset",
       outcome: "verified",
       detail: "HTTP 200",
@@ -295,6 +320,91 @@ describe("the outcome of one entry", () => {
         }),
       ]).outcome
     ).toBe("verified");
+  });
+
+  it("fails a Collection Link that redirected onto a product page", () => {
+    // Not a moved collection. A whole range of discontinued equipment answered
+    // by one product page is the outcome a Collection Link exists to avoid
+    // (ADR-0021), so a 200 from `/products/` is a failure for this sink even
+    // though it is a pass for the other.
+    const verdict = resultFrom(link(), [
+      answered(200, {
+        finalUrl: "https://www.cpap.com/products/airsense-11-autoset",
+      }),
+    ]);
+
+    expect(verdict.outcome).toBe("failed");
+    expect(verdict.detail).toContain("redirected off /collections/");
+    expect(verdict.detail).toContain("not this collection");
+  });
+
+  it("still verifies a Collection Link that redirected to another collection", () => {
+    // The mirror image, and the half that was actively broken: checked against
+    // `/products/`, a collection that cpap.com had merely renamed read as a
+    // soft 404 and blocked the ship for no reason.
+    const verdict = resultFrom(link(), [
+      answered(200, {
+        finalUrl: "https://www.cpap.com/collections/auto-cpap-machines",
+      }),
+    ]);
+
+    expect(verdict.outcome).toBe("verified");
+    expect(verdict.redirectedTo).toBe(
+      "https://www.cpap.com/collections/auto-cpap-machines"
+    );
+  });
+
+  it("carries the sink each result came from", () => {
+    expect(resultFrom(entry(), [answered(200)]).kind).toBe("product");
+    expect(
+      resultFrom(link(), [
+        answered(200, {
+          finalUrl: "https://www.cpap.com/collections/apap-machines",
+        }),
+      ]).kind
+    ).toBe("collection");
+  });
+
+  it("reads the collection handle out of a URL, and only a collection URL", () => {
+    expect(
+      collectionHandleOf("https://www.cpap.com/collections/apap-machines")
+    ).toBe("apap-machines");
+    expect(
+      collectionHandleOf("https://www.cpap.com/collections/apap-machines/")
+    ).toBe("apap-machines");
+    expect(
+      collectionHandleOf("https://www.cpap.com/products/airsense-11")
+    ).toBeNull();
+    expect(collectionHandleOf("https://www.cpap.com/")).toBeNull();
+    expect(collectionHandleOf("not a url")).toBeNull();
+  });
+
+  it("refuses a collection path on any other origin", () => {
+    // The path alone is not the question. A redirect that leaves cpap.com has
+    // not moved the collection, and a landing page on someone else's host that
+    // happens to be spelled /collections/ is not a Collection Link resolving.
+    expect(
+      collectionHandleOf("https://example.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      collectionHandleOf("http://www.cpap.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      collectionHandleOf("https://cpap.com/collections/apap-machines")
+    ).toBeNull();
+    expect(
+      handleOf("collection", "https://example.com/collections/x")
+    ).toBeNull();
+  });
+
+  it("asks the question that matches the sink", () => {
+    const product = "https://www.cpap.com/products/airsense-11";
+    const collection = "https://www.cpap.com/collections/apap-machines";
+
+    expect(handleOf("product", product)).toBe("airsense-11");
+    expect(handleOf("product", collection)).toBeNull();
+    expect(handleOf("collection", collection)).toBe("apap-machines");
+    expect(handleOf("collection", product)).toBeNull();
   });
 
   it("reads the product handle out of a URL, and only a product URL", () => {
@@ -442,6 +552,35 @@ describe("the corrections proposed for a human to approve", () => {
 
   it("proposes regenerating for an entry that should not be in the catalogue", () => {
     expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 200 })
+      )
+    ).toContain("ADR-0021");
+    expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 200 })
+      )
+    ).not.toContain("onlineStoreUrl");
+
+    // ADR-0009 makes Shopify the authority for a *product* URL, so a refresh
+    // is the repair there. A Collection Link's URL is curated (ADR-0021) and a
+    // refresh will never touch it — sending an operator to `refresh:catalogue`
+    // would send them to a command that cannot help.
+    expect(
+      proposedCorrection(
+        result({ kind: "collection", outcome: "failed", status: 404 })
+      )
+    ).toContain("ADR-0017");
+    expect(
+      proposedCorrection(
+        result({
+          kind: "collection",
+          redirectedTo: "https://www.cpap.com/collections/auto-cpap-machines",
+        })
+      )
+    ).toContain("curated rather than derived");
+
+    expect(
       proposedCorrection(result({ outcome: "excluded", status: null }))
     ).toContain("refresh:catalogue");
   });
@@ -470,7 +609,37 @@ describe("whether the catalogue may be applied to an instance", () => {
     const verdict = shippability([result(), result()]);
 
     expect(verdict.shippable).toBe(true);
-    expect(verdict.message).toContain("all 2 URLs");
+    expect(verdict.message).toContain("all 2 Mappings");
+  });
+
+  it("counts Mappings and the URLs actually asked apart", () => {
+    // `summary.verified` counts results, and there is one per Mapping. Two
+    // Mappings sharing a collection page are one request, so a message
+    // calling that count "2 URLs" told an operator the pass hit the
+    // storefront twice as often as it did. Both numbers are said because both
+    // are real: how much shipped, and how much was asked.
+    const shared = "https://www.cpap.com/collections/nasal-cpap-masks";
+    const verdict = shippability([
+      result({ kind: "collection", url: shared, value: "Viva Nasal" }),
+      result({ kind: "collection", url: shared, value: "Wisp Nasal" }),
+    ]);
+
+    expect(verdict.shippable).toBe(true);
+    expect(verdict.message).toContain("all 2 Mappings");
+    expect(verdict.message).toContain("1 distinct URL,");
+    expect(verdict.message).not.toContain("2 distinct");
+  });
+
+  it("says URLs in the plural only when there is more than one", () => {
+    const verdict = shippability([
+      result(),
+      result({
+        url: "https://www.cpap.com/products/airmini",
+        value: "AirMini",
+      }),
+    ]);
+
+    expect(verdict.message).toContain("2 distinct URLs,");
   });
 
   it("blocks on a failure", () => {
@@ -708,5 +877,404 @@ describe("what the verify pass is allowed to be part of", () => {
     expect(command).toContain("readResolvedProducts(");
     expect(command).not.toContain("parseCsv");
     expect(command).not.toContain('.split("\\n")');
+  });
+
+  it("reads the Collection Links through their own reader too", () => {
+    // Both committed sinks, both re-validated on the way in. Reading one by
+    // hand would skip the suffix and collection-URL rules the reader holds.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("COLLECTION_LINKS_FILE");
+  });
+
+  it("asks the storefront about the Collection Links, not just the products", () => {
+    // A Catalogue Refresh asks the Admin API only whether a collection exists,
+    // and assigns public-page reachability here (ADR-0017) — a collection can
+    // exist in the admin, be unpublished to the Online Store, and still 404 for
+    // a member. The loop has to run over both or that question is assigned and
+    // never asked, and a newly shipped Collection Link 404s while this reports
+    // success.
+    const loop = command.slice(
+      command.indexOf("const results: VerifyResult[]")
+    );
+
+    expect(loop).toContain("[...grouped].entries()");
+    expect(command).toMatch(/const entries: VerifyEntry\[\] = \[/);
+    expect(command).toContain("...collectionLinks.map(");
+
+    // And each side has to say which it is. Without the tag the lib checks
+    // every redirect against `/products/`, which is the defect one line of
+    // this file would otherwise reintroduce silently.
+    expect(command).toContain('kind: "product" as const');
+    expect(command).toContain('kind: "collection" as const');
+  });
+
+  it("requests each distinct URL once and judges each Mapping", () => {
+    // The saving has to be in the requests and nowhere else: one `attemptsFor`
+    // per group, and a `resultFrom` per entry in it.
+    expect(command).toContain("const grouped = entriesByUrl(entries)");
+    expect(command).toContain("await attemptsFor(url)");
+    expect(command).toContain("sharing.map((entry) =>");
+    expect(command).toContain(
+      "resultFrom(entry, isEligible(entry) ? attempts : [])"
+    );
+
+    // One request per group, paced against the previous request rather than
+    // the previous entry — pacing off `index` would sleep 750ms for a URL it
+    // never asked about.
+    expect(command).toContain("eligible && requested > 0");
+    expect(command).not.toContain("index > 0 && isEligible(entry)");
+  });
+
+  it("counts the catalogue before the two sinks become one list", () => {
+    // `shippability` refuses an empty run, and that stopped meaning "an empty
+    // catalogue" the moment the Collection Links joined it. The guard has to
+    // read the per-sink count, so it has to run before the merge.
+    const guardAt = command.indexOf("refuseEmptyCatalogue(catalogue.length)");
+    const mergeAt = command.indexOf("const entries: VerifyEntry[] = [");
+
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(mergeAt).toBeGreaterThan(guardAt);
+  });
+});
+
+describe("the URLs a pass actually requests", () => {
+  it("asks a shared page once and answers for every Mapping on it", () => {
+    // 82 committed Collection Links over 10 collections. The pass used to
+    // request each row, which is 72 answers already in hand, about a minute of
+    // pacing, and 72 avoidable hits on somebody else's rate limiter.
+    const shared = [
+      link({ value: "DreamStation CPAP Machine (Discontinued)" }),
+      link({ value: "DreamStation Go (Discontinued)" }),
+      link({
+        value: "AirMini (Discontinued)",
+        url: "https://www.cpap.com/collections/travel-cpap-machines",
+      }),
+    ];
+    const grouped = entriesByUrl(shared);
+
+    expect(grouped.size).toBe(2);
+    expect(grouped.get(link({}).url)).toHaveLength(2);
+    expect(
+      grouped.get("https://www.cpap.com/collections/travel-cpap-machines")
+    ).toHaveLength(1);
+  });
+
+  it("keeps the order the entries arrived in", () => {
+    // Products first, then collections, is the order the command builds and the
+    // order the progress lines read in. Grouping is not licence to reshuffle.
+    const grouped = entriesByUrl([
+      entry(),
+      link({}),
+      { ...entry(), url: "https://www.cpap.com/products/airsense-10" },
+    ]);
+
+    expect([...grouped.keys()]).toEqual([
+      entry().url,
+      link({}).url,
+      "https://www.cpap.com/products/airsense-10",
+    ]);
+  });
+
+  it("still produces one result per Mapping, not per URL", () => {
+    // What ships is a Mapping. A report that collapsed them would name a URL
+    // where an operator needs a `Field` and a `Value`.
+    const sharing = [
+      link({ value: "DreamStation CPAP Machine (Discontinued)" }),
+      link({ value: "DreamStation Go (Discontinued)" }),
+    ];
+    const attempts = [
+      { kind: "answered" as const, status: 200, finalUrl: link({}).url },
+    ];
+    const results = sharing.map((entryOnPage) =>
+      resultFrom(entryOnPage, attempts)
+    );
+
+    expect(results.map((shipped) => shipped.value)).toEqual([
+      "DreamStation CPAP Machine (Discontinued)",
+      "DreamStation Go (Discontinued)",
+    ]);
+    expect(summarize(results).verified).toBe(2);
+  });
+
+  it("groups nothing that is not actually the same URL", () => {
+    const grouped = entriesByUrl([link({}), link({ url: `${link({}).url}/` })]);
+
+    expect(grouped.size).toBe(2);
+  });
+});
+
+describe("the correction offered for a redirected Collection Link", () => {
+  const redirectedTo = (finalUrl: string) =>
+    resultFrom(link({}), [
+      { kind: "answered" as const, status: 200, finalUrl },
+    ]);
+
+  it("recommends a URL the transform will accept back", () => {
+    // The two handle readers do not accept the same strings.
+    // `collectionHandleOf` allows the trailing slash a storefront redirect
+    // adds; `collectionHandleFromUrl` refuses it, because a Collection Link is
+    // one path segment. Pasting the raw landing URL into the Sheet is how the
+    // next refresh answers `unadmitted-collection`.
+    const correction = proposedCorrection(
+      redirectedTo("https://www.cpap.com/collections/travel-cpap-machines/")
+    );
+
+    expect(correction).toContain(
+      "set the Collection URL in the Sheet to " +
+        "https://www.cpap.com/collections/travel-cpap-machines,"
+    );
+    expect(
+      collectionHandleFromUrl(collectionUrlFor("travel-cpap-machines"))
+    ).toBe("travel-cpap-machines");
+  });
+
+  it("drops the query string a landing URL carried", () => {
+    const correction = proposedCorrection(
+      redirectedTo(
+        "https://www.cpap.com/collections/travel-cpap-machines?utm_source=x"
+      )
+    );
+
+    // The landing URL is still quoted as what the storefront answered from —
+    // that is the diagnosis. What must be clean is the URL it tells a curator
+    // to type.
+    expect(correction).toContain(
+      "set the Collection URL in the Sheet to " +
+        "https://www.cpap.com/collections/travel-cpap-machines,"
+    );
+  });
+
+  it("proposes nothing when only the slash changed", () => {
+    // Same handle, so the Sheet already holds the right value. A correction
+    // here is busywork with a wrong-looking diff.
+    expect(proposedCorrection(redirectedTo(`${link({}).url}/`))).toBeNull();
+  });
+
+  it("keeps that entry out of the section that promises one", () => {
+    const report = renderVerification([redirectedTo(`${link({}).url}/`)]);
+
+    expect(report).toContain("verified   1");
+    expect(report).not.toContain("verified, with a proposed correction");
+  });
+
+  it("still proposes one when the handle actually moved", () => {
+    const moved = redirectedTo(
+      "https://www.cpap.com/collections/travel-cpap-machines"
+    );
+
+    expect(proposedCorrection(moved)).toContain("travel-cpap-machines");
+    expect(renderVerification([moved])).toContain(
+      "verified, with a proposed correction"
+    );
+  });
+});
+
+describe("every diagnostic a Collection Link can reach", () => {
+  // The redirect check and the two corrections learned which sink they were
+  // looking at; the messages they share with the product path did not. A
+  // Collection Link timing out was "not evidence about the product", a 503 was
+  // "the storefront failing rather than the product", and a clean run reported
+  // "Shopify admits every product" about 82 collections the Admin API says
+  // nothing reachable about (ADR-0017).
+  const collectionAnswers = (status: number) => [
+    { kind: "answered" as const, status, finalUrl: link({}).url },
+  ];
+
+  it("names the collection when the server declines to answer", () => {
+    const unresolved = resultFrom(link({}), [
+      ...collectionAnswers(429),
+      ...collectionAnswers(429),
+      ...collectionAnswers(429),
+    ]);
+
+    expect(unresolved.outcome).toBe("unresolved");
+    expect(unresolved.detail).toContain("answer about the collection");
+    expect(unresolved.detail).not.toContain("about the product");
+  });
+
+  it("names the collection in the unresolved correction", () => {
+    const correction = proposedCorrection(
+      resultFrom(link({}), [
+        ...collectionAnswers(429),
+        ...collectionAnswers(429),
+        ...collectionAnswers(429),
+      ])
+    );
+
+    expect(correction).toContain("evidence about the collection");
+    expect(correction).not.toContain("about the product");
+  });
+
+  it("names the collection when the storefront itself fails", () => {
+    const correction = proposedCorrection(
+      resultFrom(link({}), [
+        ...collectionAnswers(500),
+        ...collectionAnswers(500),
+        ...collectionAnswers(500),
+      ])
+    );
+
+    expect(correction).toContain("rather than the collection being absent");
+    expect(correction).not.toContain("than the product");
+  });
+
+  it("still names the product when the entry is one", () => {
+    // The whole point is that it says which, not that it stopped saying
+    // "product" everywhere.
+    const failing = resultFrom(entry(), [
+      { kind: "answered", status: 503, finalUrl: entry().url },
+      { kind: "answered", status: 503, finalUrl: entry().url },
+      { kind: "answered", status: 503, finalUrl: entry().url },
+    ]);
+
+    expect(failing.detail).toContain("answer about the product");
+    expect(proposedCorrection(failing)).toContain("evidence about the product");
+  });
+
+  it("counts each sink separately when it says the run is shippable", () => {
+    const results = [
+      resultFrom(entry(), [
+        { kind: "answered", status: 200, finalUrl: entry().url },
+      ]),
+      resultFrom(link({}), [
+        { kind: "answered", status: 200, finalUrl: link({}).url },
+      ]),
+    ];
+    const verdict = shippability(results);
+
+    expect(verdict.shippable).toBe(true);
+    expect(verdict.message).toContain("1 product and 1 collection");
+    expect(verdict.message).not.toContain("admits every product");
+  });
+
+  it("claims nothing about a sink that had no entries", () => {
+    const products = shippability([
+      resultFrom(entry(), [
+        { kind: "answered", status: 200, finalUrl: entry().url },
+      ]),
+    ]);
+
+    expect(products.message).toContain("1 product");
+    expect(products.message).not.toContain("collection");
+  });
+
+  it("does not call a failed collection a product in the report", () => {
+    const report = renderVerification([
+      resultFrom(link({}), [
+        { kind: "answered", status: 404, finalUrl: link({}).url },
+      ]),
+    ]);
+
+    expect(report).toContain("failed (1)");
+    expect(report).not.toContain("admits these products");
+  });
+});
+
+describe("an empty Resolved Product Catalogue", () => {
+  it("is refused before anything is requested", () => {
+    expect(() => refuseEmptyCatalogue(0)).toThrow(CatalogueVerifyError);
+    expect(() => refuseEmptyCatalogue(0)).toThrow(/empty/);
+  });
+
+  it("is refused whatever the Collection Links say", () => {
+    // The failure this exists for: a header-only catalogue beside one valid
+    // Collection Link. The combined result list is not empty, so
+    // `shippability` passes it, and the command would exit zero shipping no
+    // product Mappings at all.
+    const links = [
+      resultFrom(link({}), [
+        { kind: "answered", status: 200, finalUrl: link({}).url },
+      ]),
+    ];
+
+    expect(shippability(links).shippable).toBe(true);
+    expect(() => refuseEmptyCatalogue(0)).toThrow(CatalogueVerifyError);
+  });
+
+  it("lets a catalogue with entries through, and an empty links file too", () => {
+    // No discontinued equipment mapped yet is a legitimate state: no Mapping is
+    // missing because of it, so it is not this guard's business.
+    expect(() => refuseEmptyCatalogue(1)).not.toThrow();
+    expect(() => refuseEmptyCatalogue(55)).not.toThrow();
+  });
+});
+
+describe("what distinctUrls promises about the number it returns", () => {
+  const library = readFileSync("scripts/lib/catalogue-verify.ts", "utf8");
+
+  it("does not call a target count a request count", () => {
+    // The docblock said this was "how many requests the pass actually made",
+    // which holds only when every URL answers first time. `attemptsFor`
+    // retries a URL up to `MAX_ATTEMPTS` on a 429 or a timeout, so a throttled
+    // run covers the same targets with more requests — and the results this
+    // counts cannot see the difference. A contract that overstates what a
+    // number means is the same defect as a message that does.
+    const docblock = library.slice(
+      library.lastIndexOf(
+        "/**",
+        library.indexOf("export function distinctUrls")
+      ),
+      library.indexOf("export function distinctUrls")
+    );
+
+    expect(docblock).not.toContain("how many requests");
+    expect(docblock).toContain("MAX_ATTEMPTS");
+    expect(library).toContain("export const MAX_ATTEMPTS");
+  });
+
+  it("still counts one per URL and not one per result", () => {
+    const shared = "https://www.cpap.com/collections/nasal-cpap-masks";
+
+    expect(
+      distinctUrls([
+        result({ kind: "collection", url: shared, value: "Viva Nasal" }),
+        result({ kind: "collection", url: shared, value: "Wisp Nasal" }),
+        result(),
+      ])
+    ).toBe(2);
+  });
+});
+
+describe("what scripts/README.md claims about the reachability pass", () => {
+  // The prose used to say the pass "asks cpap.com whether each of the 137
+  // URLs this pipeline ships serves a page", which stopped being true the
+  // moment the pass started grouping Mappings that share a collection page:
+  // 137 is the Mapping count and 65 is the request count. Counted from the
+  // committed sinks rather than restated, so the next refresh that moves
+  // either number fails here instead of leaving the document quietly wrong.
+  const readme = readFileSync("scripts/README.md", "utf8");
+  const products = readResolvedProducts(
+    readFileSync("data/resolved-products.csv", "utf8")
+  );
+  const links = readCollectionLinks(
+    readFileSync("data/collection-links.csv", "utf8")
+  );
+  const urls = new Set([...products, ...links].map((shipped) => shipped.url));
+
+  it("counts the Mappings the pass files a result for", () => {
+    expect(readme).toContain(`each of the ${products.length + links.length}`);
+    expect(readme).toContain(`the ${products.length} from the catalogue`);
+    expect(readme).toContain(`the\n${links.length} Collection Links alike`);
+  });
+
+  it("counts the request targets apart from the Mappings", () => {
+    expect(readme).toContain(
+      `${products.length + links.length} Mappings over ${urls.size} distinct URLs`
+    );
+    // Targets, not requests. A URL answering 429 is retried up to
+    // `MAX_ATTEMPTS`, so 65 is a floor on the request count rather than the
+    // count — the same overstatement the verdict line carried, in prose.
+    expect(readme).toContain(`${urls.size} is the number of request _targets_`);
+    expect(readme).not.toContain(`${urls.size}\nis the number of requests`);
+    expect(readme).toContain("`MAX_ATTEMPTS`");
+  });
+
+  it("counts the collection pages the 82 links share", () => {
+    const collectionUrls = new Set(links.map((shipped) => shipped.url));
+
+    // Spelled as a word in the prose, so this is the one that has to be kept
+    // in step by hand if it ever moves — which is why it is asserted at all.
+    expect(collectionUrls.size).toBe(10);
+    expect(readme).toContain("ten collection pages");
   });
 });

@@ -1401,7 +1401,18 @@ function deriveCollectionLinks({
       continue;
     }
 
-    record(url, "collection");
+    // The canonical URL, not the cell. A query string and a fragment pass
+    // `collectionHandleFromUrl` on purpose — they cannot change which
+    // collection resolves — but that is an argument for admitting the cell,
+    // not for shipping it. A curator copies a collection page out of a browser
+    // and the cell arrives carrying `?utm_source=…` or an `sscid`, and what
+    // ships is the Mapping URL every member holding that value clicks. Rebuild
+    // it from the two parts that decide where it lands, so the same collection
+    // ships the same URL however the cell was pasted.
+    record(
+      `${COLLECTION_URL_ORIGIN}${COLLECTION_URL_PREFIX}${handle}`,
+      "collection"
+    );
   }
 
   const collectionLinks: CollectionLink[] = [];

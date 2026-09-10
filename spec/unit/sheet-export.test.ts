@@ -780,6 +780,28 @@ describe("assignmentRowsFrom", () => {
     );
   });
 
+  it("refuses a Field that does not name a Managed Field", () => {
+    // The release gates print this cell to locate an `undecided` row, so a
+    // `Field` carried through verbatim would put workbook content in the
+    // output of a public CI job. Refused here instead, where the check is
+    // also the one that catches a range that slid onto a neighbouring
+    // column — which is exactly when the cell holds something else.
+    const renamed = ASSIGNMENT_CSV.replace(`"Machine",`, `"Machne",`);
+
+    expect(() => assignmentRowsFrom(assignment, renamed)).toThrow(
+      SheetExportError
+    );
+    expect(() => assignmentRowsFrom(assignment, renamed)).toThrow(
+      /row 2, column A \(`Field`\) does not name a Managed Field/
+    );
+    expect(() => assignmentRowsFrom(assignment, renamed)).toThrow(
+      /"Machine", "Mask" is expected/
+    );
+    expect(() => assignmentRowsFrom(assignment, renamed)).toThrow(
+      /^(?!.*Machne)/s
+    );
+  });
+
   it("refuses an empty Disposition rather than reading it as undecided", () => {
     // `undecided` is a curator saying nobody has looked yet. A blank cell
     // cannot say even that, and treating the two alike would let a row skip

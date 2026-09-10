@@ -9,6 +9,7 @@ import {
   type CollectionLink,
   type DispositionRow,
   type ProductRecord,
+  type ProductStatus,
   type ResolvedProduct,
   type SheetRow,
   undeliveredValues,
@@ -35,6 +36,7 @@ import {
   handleBatches,
   handlesFromSheetRows,
   mergeProducts,
+  nextSurveyCursor,
   productsByHandleQuery,
   productsFromByHandleResponse,
   readCollectionLinks,
@@ -46,9 +48,11 @@ import {
   SHOPIFY_API_VERSION,
   shopifyEndpoint,
   type SurveyedProduct,
+  type SurveyPage,
   surveyPageFromResponse,
   TOKEN_VAR,
   undecidedAssignments,
+  unfinishedCollectionLinks,
 } from "../../scripts/lib/catalogue-refresh";
 import {
   ASSIGNMENT_TABS,
@@ -551,7 +555,237 @@ describe("collectionHandlesFrom", () => {
   });
 });
 
+describe("the two writers beside the disposition table", () => {
+  it("refuses to write a Collection Link its reader would reject", () => {
+    // The reader insists every value carries `COLLECTION_LINK_SUFFIX`. Without
+    // the round-trip the writer emitted this happily, `refresh-catalogue.ts`
+    // committed it, and the refusal fired on the next read — leaving the
+    // repository holding a regenerated catalogue beside a links file no
+    // command can load.
+    expect(() =>
+      collectionLinksCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirCurve 11 ASV",
+          url: "https://www.cpap.com/collections/bipap-machines",
+        },
+      ])
+    ).toThrow(CatalogueRefreshError);
+  });
+
+  it("writes one its reader accepts", () => {
+    // Non-vacuity for the test above: the same shape with the suffix passes,
+    // so the refusal is about the rule and not about writing at all.
+    expect(() =>
+      collectionLinksCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirCurve 11 ASV (Discontinued)",
+          url: "https://www.cpap.com/collections/bipap-machines",
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses to write a catalogue entry its reader would reject", () => {
+    // `readResolvedProducts` holds `status` to Shopify's vocabulary, so that
+    // is the rule this round-trip picks up. A derivation emitting a status the
+    // reader has no word for used to be written and refused afterwards.
+    expect(() =>
+      resolvedProductsCsv([
+        {
+          userFieldName: "Machine",
+          value: "AirSense 11 AutoSet",
+          handle: "airsense-11-autoset",
+          status: "RETIRED" as ProductStatus,
+          url: "https://www.cpap.com/products/airsense-11-autoset",
+        },
+      ])
+    ).toThrow(CatalogueRefreshError);
+  });
+});
+
+describe("the refresh command's exit code", () => {
+  const command = readFileSync("scripts/refresh-catalogue.ts", "utf8");
+
+  it("goes red on an undecided row, which #38 names the command for", () => {
+    // "A Catalogue Refresh exits non-zero while any row is `undecided`."
+    //
+    // Asked of the assignment rows, not of `collectionFaults`. A fault is
+    // only ever raised while deriving a link for a row this refresh excluded,
+    // so a gate reading the fault list answers a narrower question than #38
+    // asks and lets an orphaned `undecided` row through — the case
+    // `spec/unit/build-catalogue.test.ts` constructs.
+    expect(command).toContain("undecidedAssignments(assignments)");
+    expect(command).toContain("process.exitCode = 1");
+
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    expect(guard).not.toContain("collectionFaults");
+  });
+
+  it("does not promise a zero exit above the block that sets one", () => {
+    // The paragraph explaining why collection faults are survivable said "The
+    // exit stays zero" and that blocking a release on an uncurated value
+    // "is a gate's job, on the committed files" — written when that was the
+    // whole truth, and left standing when this command took the second half
+    // of that job. A maintainer reads the contract nearest the code, and this
+    // one now sat directly above the branch that contradicts it.
+    const preamble = command.slice(0, command.indexOf("process.exitCode = 1"));
+
+    expect(preamble).not.toContain("The exit stays zero because");
+    expect(preamble).not.toContain("is a gate's job, on the committed files, ");
+    // Narrowed rather than deleted: the survivable faults are still named, so
+    // the reason the other four stay green is still on the page.
+    expect(preamble).toContain("not fatal for the faults drift creates");
+    expect(preamble).toContain("`undecided`");
+  });
+
+  it("stays green on the faults drift causes rather than a curator", () => {
+    // The distinction the exit code turns on. A product retiring at Shopify
+    // creates an `unassigned-legacy-value` through nobody's action, and a
+    // command that failed every time the catalogue moved is one people stop
+    // reading. `undecided` cannot appear unless somebody typed it.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    for (const drift of [
+      "unassigned-legacy-value",
+      "unadmitted-collection",
+      "stale-product-resolution",
+      "curation-disagreement",
+    ]) {
+      expect(guard).not.toContain(drift);
+    }
+  });
+
+  it("locates the undecided rows instead of only counting them", () => {
+    // #38 asks the failure to make the fix obvious without hunting, and a
+    // bare count sends a reader off to a file to find out which rows it meant.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    // Coordinates rather than cells, the same pair the standalone gate
+    // prints: a Managed Field name and a row number. Nothing a curator typed
+    // reaches this stream.
+    expect(guard).toContain("- ${row.field} row ${index + 2}, column");
+    expect(guard).toContain("exportFileName(ASSIGNMENT_TABS[0])");
+
+    for (const cell of [
+      "legacyText",
+      "profileLinkValue",
+      "rationale",
+      "legacyPnums",
+    ]) {
+      expect(guard).not.toContain(cell);
+    }
+  });
+
+  it("names the rows by identifier and quotes no cell a curator typed", () => {
+    // The same boundary the standalone gate holds. `Field` is a Managed Field
+    // name this repository owns and the legacy `Value` is a PNum already
+    // committed in `data/collection-assignment.csv`; the free-text columns are
+    // workbook content and stay out of the output.
+    const guard = command.slice(command.indexOf("process.exitCode = 1"));
+
+    for (const cell of [
+      "fault.detail",
+      "legacyText",
+      "profileLinkValue",
+      "rationale",
+    ]) {
+      expect(guard, `the refusal echoes ${cell}`).not.toContain(cell);
+    }
+  });
+
+  it("writes the artifacts before it decides the exit code", () => {
+    // The report is where a fault gets explained one at a time, so exiting
+    // must not take it away. Both writes precede the guard.
+    expect(command.indexOf("process.exitCode = 1")).toBeGreaterThan(
+      command.indexOf(REVIEW_FILE)
+    );
+  });
+});
+
+describe("unfinishedCollectionLinks", () => {
+  const dispositionRow = (
+    legacyValue: string,
+    disposition: string
+  ): DispositionRow =>
+    ({
+      userFieldName: "Machine",
+      legacyValue,
+      legacyText: "DreamStation CPAP Machine",
+      value: disposition === "collection" ? "Something (Discontinued)" : "",
+      url:
+        disposition === "collection"
+          ? "https://www.cpap.com/collections/cpap-machines"
+          : "",
+      disposition,
+    }) as DispositionRow;
+
+  it("flags a value that earned a Collection Link and did not get one", () => {
+    // The case an `undecided` row cannot catch: nobody typed `undecided`,
+    // because nobody typed anything — there is no Collection Assignment row
+    // for this value at all. It reaches the table as `collection-link-fault`.
+    const fault = dispositionRow("9999", "collection-link-fault");
+
+    const rows = [
+      dispositionRow("5022", "collection"),
+      dispositionRow("5023", "plain-text"),
+      dispositionRow("5024", "resolves-to-product"),
+      fault,
+    ];
+
+    expect(unfinishedCollectionLinks(rows)).toEqual([fault]);
+  });
+
+  it("does not flag a row that carries a decision", () => {
+    // A `plain-text` row is a curator saying no link on purpose, and a
+    // `resolves-to-product` row was never a Collection Link candidate. Neither
+    // is the pipeline failing to finish a job, so neither blocks a release.
+    const rows = [
+      dispositionRow("5022", "collection"),
+      dispositionRow("5023", "plain-text"),
+      dispositionRow("5024", "resolves-to-product"),
+    ];
+
+    expect(unfinishedCollectionLinks(rows)).toEqual([]);
+  });
+
+  it("passes an empty table, which does not by itself prove the check works", () => {
+    // Pinned separately for the same reason the sibling above is: "no faults"
+    // and "no rows at all" both return `[]`, and a suite asserting only the
+    // empty case would pass against a function that never detected anything.
+    expect(unfinishedCollectionLinks([])).toEqual([]);
+  });
+
+  it("is green on the committed disposition table", () => {
+    // The gate has to be green on the data as it ships, or it is a gate
+    // nobody can land anything past. This is also what makes the three tests
+    // above non-vacuous: the fault they detect is one this file constructs,
+    // not one the repository already carries.
+    const committed = readFileSync(DISPOSITION_FILE, "utf8");
+
+    expect(unfinishedCollectionLinks(readDispositionTable(committed))).toEqual(
+      []
+    );
+  });
+});
+
 describe("undecidedAssignments", () => {
+  it("is not documented as belonging only to the committed-file gate", () => {
+    // The docblock said the gate belongs on the committed files and that a
+    // Catalogue Refresh's exit code "stays zero on purpose" — the opposite of
+    // what the command now does for `undecided`. A contract that contradicts
+    // the caller is worse than no contract: the next person adding a caller
+    // reads it and reasons from the wrong half.
+    const library = readFileSync("scripts/lib/catalogue-refresh.ts", "utf8");
+    const refresh = readFileSync("scripts/refresh-catalogue.ts", "utf8");
+
+    expect(refresh).toContain("undecidedAssignments(assignments)");
+    expect(library).not.toContain("stays zero on\n * purpose");
+    expect(library).not.toContain("which stays zero");
+  });
+
   it("flags only the rows still undecided", () => {
     // All four words the schema allows, one row each, so a decided disposition
     // slipping through would be caught here rather than by an accident of
@@ -813,6 +1047,83 @@ describe("reading a survey page", () => {
         DIVISIONS[1]
       )
     ).toThrow(/endCursor/);
+  });
+});
+
+describe("deciding where the next survey page starts", () => {
+  const page = (
+    hasNextPage: boolean,
+    endCursor: string | null
+  ): SurveyPage => ({ products: [], hasNextPage, endCursor });
+
+  const sent = (...cursors: string[]): ReadonlySet<string> => new Set(cursors);
+
+  it("ends the survey when there is no next page", () => {
+    expect(
+      nextSurveyCursor(page(false, "cursor-abc"), DIVISIONS[1], 1, sent())
+    ).toBe(null);
+  });
+
+  it("carries the cursor forward when there is one", () => {
+    expect(
+      nextSurveyCursor(page(true, "cursor-abc"), DIVISIONS[1], 2, sent("first"))
+    ).toBe("cursor-abc");
+  });
+
+  it("refuses another page with no cursor to reach it, naming the page", () => {
+    // Not a hypothetical shape: `divisionSurveyQuery(division, null)` omits
+    // `after:`, so returning null here would re-request page one until the
+    // page limit ran out and then report a page limit the division never
+    // hit. Deduplication by handle means the output would look right too, so
+    // the only symptom would be a wrong diagnosis.
+    expect(() =>
+      nextSurveyCursor(page(true, null), DIVISIONS[1], 3, sent())
+    ).toThrow(/page 3 reports another page and gives no cursor/);
+  });
+
+  it("refuses a cursor it has already sent, naming the page", () => {
+    // The same wrong diagnosis by a different route: a cursor that repeats
+    // one already requested walks the same pages until `MAX_SURVEY_PAGES`
+    // runs out, `mergeProducts` deduplicates the repeats away, and the
+    // command reports a division of more than ten pages that has two.
+    expect(() =>
+      nextSurveyCursor(
+        page(true, "cursor-abc"),
+        DIVISIONS[1],
+        4,
+        sent("cursor-abc")
+      )
+    ).toThrow(/page 4 reports another page and points back at one/);
+
+    // Including the cursor it is holding right now, which is how a survey
+    // that stops advancing presents.
+    expect(() =>
+      nextSurveyCursor(page(true, "here"), DIVISIONS[1], 5, sent("a", "here"))
+    ).toThrow(/points back at one this survey already asked for/);
+  });
+
+  it("does not quote the cursor in either refusal", () => {
+    // An opaque token is noise in a message a curator reads, and this
+    // repository's refusals locate rather than quote. The page number and
+    // the division tag are the coordinates.
+    const thrown = ((): string => {
+      try {
+        nextSurveyCursor(
+          page(true, "cursor-abc"),
+          DIVISIONS[1],
+          4,
+          sent("cursor-abc")
+        );
+      } catch (error) {
+        return (error as Error).message;
+      }
+
+      throw new Error("the repeated cursor was not refused");
+    })();
+
+    expect(thrown).not.toContain("cursor-abc");
+    expect(thrown).toContain(DIVISIONS[1]?.tag ?? "");
+    expect(thrown).toContain("page 4");
   });
 });
 
@@ -1349,6 +1660,62 @@ describe("the disposition table file", () => {
     expect(() => readDispositionTable(digested(body))).toThrow(
       /`collection` and carries no URL/
     );
+  });
+
+  it("refuses a url column holding something that is not a URL", () => {
+    // The half of "either empty or a real URL" the whitespace check does not
+    // give. A name in this column passes the blank check, the trim check and
+    // the pairing check — the last only asks whether the cell is empty — and
+    // reaches the non-public repository as a Profile Link target. A cell that
+    // drifted onto a neighbouring column in a workbook whose other tabs hold
+    // member data is exactly how one arrives.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /is neither empty nor an `https:` URL/
+    );
+  });
+
+  it("does not name the cell it refused", () => {
+    // Same rule as every other refusal on this boundary: what the cell holds
+    // is what the check could not vouch for, so it is located and not quoted.
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /column 5 \(`url`\)/
+    );
+    expect(() => readDispositionTable(digested(body))).not.toThrow(/Marjorie/);
+  });
+
+  it("refuses a user_field_name that is not a Managed Field", () => {
+    // The join column. `assertEveryFieldRepresented` asks that no field is
+    // missing, which is a superset check and cannot notice a row naming a
+    // field that does not exist. The far side joins on this column, so a name
+    // it has never heard of drops every member holding the row's value — and
+    // `check-collection-assignment.ts` prints this cell to locate a fault
+    // row, in a public CI job.
+    const body = `${HEADER}\nMarjorie Fenwick-Abara,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /column 1 \(`user_field_name`\) does not name a Managed Field/
+    );
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /Machine or Mask is expected/
+    );
+    expect(() => readDispositionTable(digested(body))).not.toThrow(/Marjorie/);
+  });
+
+  it("accepts a product URL as readily as a collection URL", () => {
+    // Deliberately looser than `collectionHandleFromUrl`: this column carries
+    // both, so insisting on `/collections/` would refuse every resolving row.
+    // Both Managed Fields, because the reader also refuses a table missing one
+    // — a refusal that would otherwise mask what this test is asking about.
+    const body =
+      `${HEADER}\n` +
+      `Machine,6240,Aircurve 11 asv,AirSense 11 AutoSet,https://www.cpap.com/products/airsense-11-autoset,resolves-to-product\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title\n`;
+
+    expect(() => readDispositionTable(digested(body))).not.toThrow();
   });
 
   it("refuses an unlinked disposition carrying a URL", () => {
@@ -1991,7 +2358,7 @@ describe("the disposition table file", () => {
     // twelve cases reaching no refusal at all is why it does not now.
     const faults: {
       named: string;
-      break: (row: DispositionRow) => DispositionRow[];
+      break: (row: DispositionRow, at: number) => DispositionRow[];
     }[] = [
       {
         named: "a duplicated key",
@@ -1999,9 +2366,17 @@ describe("the disposition table file", () => {
       },
       {
         named: "a blank column beside it",
-        break: (row) => [
-          { ...row, url: "", value: row.legacyText, disposition: " " as never },
-        ],
+        // Beside it, and never on top of it. This blanked `url`, `value` and
+        // `disposition` unconditionally, so for the three columns the canary
+        // occupies at `at === 3`, `4` and `5` it erased the canary it was
+        // planted with — six of the twenty-four cases asserted the absence of
+        // a string that was never in the input.
+        //
+        // Blank `legacy_text` instead, or `url` when `legacy_text` is itself
+        // the contaminated column. Only `url` is blankable, so either one is a
+        // refusal, and neither ever lands on the column under test.
+        break: (row, at) =>
+          at === 2 ? [{ ...row, url: "" }] : [{ ...row, legacyText: "" }],
       },
     ];
 
@@ -2018,7 +2393,7 @@ describe("the disposition table file", () => {
 
       for (const fault of faults) {
         const contaminated = () =>
-          withEveryField(fault.break(contaminatedRow()));
+          withEveryField(fault.break(contaminatedRow(), at));
 
         it(`quotes nothing with a name in \`${column}\` and ${fault.named}, on write`, () => {
           let message = "";

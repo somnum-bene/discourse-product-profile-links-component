@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { COLLECTION_LINK_SUFFIX } from "../../scripts/lib/build-catalogue";
 import {
   ASSIGNMENT_TABS,
   assignmentRowsFrom,
@@ -30,7 +31,10 @@ import {
  * a wrong cell is invisible until it is load-bearing.
  */
 
-const DISCONTINUED = " (Discontinued)";
+// The suffix, imported rather than restated. `COLLECTION_LINK_SUFFIX`'s
+// docblock says "every place that asserts it has to be asserting the same
+// bytes", and a literal here was a second place that could stop agreeing.
+const DISCONTINUED = COLLECTION_LINK_SUFFIX;
 
 function committedExport(tab: ExportTab): string {
   return readFileSync(join("data", exportFileName(tab)), "utf8");
@@ -166,7 +170,17 @@ describe("the committed Collection Assignment", () => {
 
       return readSheetTab(tab, committedExport(tab))
         .map((row) => row[valueAt] ?? "")
-        .filter((value) => !seen.add(value))
+        .filter((value) => {
+          // `seen.add(value)` returns the Set, which is always truthy, so
+          // `!seen.add(value)` was always `false` and this filter returned
+          // nothing whatever the export held. `Set.prototype.has` before the
+          // add is what actually asks the question.
+          const duplicate = seen.has(value);
+
+          seen.add(value);
+
+          return duplicate;
+        })
         .map((value) => `${tab.userFieldName}: PNum ${value}`);
     });
 

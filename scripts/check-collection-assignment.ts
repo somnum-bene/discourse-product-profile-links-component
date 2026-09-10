@@ -1,20 +1,41 @@
 // The Collection Assignment gate. Exits non-zero while any committed row is
-// `undecided`, and names every one so the fix is obvious without hunting. Run
-// it with `pnpm check:collection-assignment`.
+// `undecided`, or while any legacy value earned a Collection Link and did not
+// get one, and locates every one so the fix is obvious without hunting. Run it
+// with `pnpm check:collection-assignment`.
 //
-// A Catalogue Refresh reports `undecided` rows but stays green while they
-// exist — deliberately, because its exit code is a statement about Shopify and
-// the Sheet, which move without anyone committing anything. This check is a
-// statement about the repository instead: it reads only the committed Sheet
-// Export, so it needs no credentials and no network, which is what lets it run
+// Two halves, because `undecided` alone leaves a hole. `undecided` only exists
+// where a curator typed the word; a value that newly starts earning a link has
+// no assignment row at all, and an absent row types nothing. The second half
+// reads the disposition table, where that case lands as a
+// `collection-link-fault`.
+//
+// A Catalogue Refresh now goes red on `undecided` too — #38 names that command
+// as well — so this is not the only thing standing between an undecided row and
+// a release. It is the thing standing between an undecided *committed* row and
+// one, which is a different question: a refresh reports on the Sheet as it was
+// the moment it ran, and nobody has to run one before merging.
+//
+// A `collection-link-fault` is not gated there at all. A refresh stays green on
+// it deliberately, because it is drift — a product retiring at Shopify creates
+// one through nobody's action, and a command that failed every time the
+// catalogue moved is a command people stop reading. It blocks here instead,
+// where the fault is a committed file rather than a passing observation.
+//
+// Either way this is a statement about the repository: it reads only committed
+// files, so it needs no credentials and no network, which is what lets it run
 // in CI and as a pre-commit hook beside `build:settings --check`.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { type DispositionRow } from "./lib/build-catalogue.ts";
 import {
   CatalogueRefreshError,
+  COLLECTION_LINK_FAULT,
+  DISPOSITION_FILE,
+  readDispositionTable,
   undecidedAssignments,
+  unfinishedCollectionLinks,
 } from "./lib/catalogue-refresh.ts";
 import {
   ASSIGNMENT_TABS,
@@ -33,22 +54,75 @@ async function main(): Promise<void> {
   const undecided = undecidedAssignments(assignments);
 
   if (undecided.length > 0) {
+    // Located, never quoted. This runs in CI on a public repository, so its
+    // output is a public artifact, and every column that would identify the
+    // row by its content — `Legacy PNum(s)`, `Legacy Text`, `Profile Link
+    // Value` — is workbook content read across the boundary. `Legacy Text` in
+    // particular is free text a curator typed into a bulletin board. The
+    // row number is a coordinate rather than a cell, and `Field` is a
+    // Managed Field name — enforced, not assumed: `assignmentRowsFrom`
+    // refuses the whole tab unless every `Field` cell is one of
+    // `MANAGED_FIELDS`, which is what makes the word printed here a member of
+    // a closed set this repository owns rather than whatever the cell held.
+    //
+    // `undecidedAssignments` filters, so it returns the same object
+    // references, and a row's position in `assignments` is its position in
+    // the Sheet. `+ 2` for the header row and for counting from one, the same
+    // convention `assignmentRowsFrom` reports its own refusals in.
+    const undecidedRows = new Set<AssignmentRow>(undecided);
+
     throw new CatalogueRefreshError(
       `${undecided.length} of ${assignments.length} Collection Assignment ` +
         `${undecided.length === 1 ? "row is" : "rows are"} still \`undecided\`, ` +
-        `naming ${undecided.length === 1 ? "it" : "them"} below. Each is an ` +
+        `locating ${undecided.length === 1 ? "it" : "them"} below. Each is an ` +
         `absence of evidence rather than a preference, so it blocks the ` +
         `release the way an Unresolved URL does, until a curator sets its ` +
-        `\`Disposition\`:\n` +
-        undecided
+        `\`Disposition\`. The cells are not reported:\n` +
+        assignments
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => undecidedRows.has(row))
           .map(
-            (row) =>
-              // `legacyPnums` is empty on the rows that only ever carry
-              // `legacyText` — the four retired catch-all titles — so this
-              // falls back rather than naming the row with an empty string.
-              `  - ${row.field} ${JSON.stringify(row.legacyPnums || row.legacyText)}` +
-              ` — proposed \`Profile Link Value\` ` +
-              `${JSON.stringify(row.profileLinkValue.trim())}`
+            ({ row, index }) =>
+              `  - ${row.field} row ${index + 2}, column ` +
+              `\`Disposition\` (\`${exportFileName(ASSIGNMENT_TABS[0])}\`)`
+          )
+          .join("\n")
+    );
+  }
+
+  const table = readDispositionTable(await readFile(DISPOSITION_FILE, "utf8"));
+  const faults = unfinishedCollectionLinks(table);
+
+  if (faults.length > 0) {
+    // Located the same way the undecided rows above are, and for the same
+    // reason. This refusal used to print the row's `legacy_value`, on the
+    // reasoning that a committed join key is an identifier rather than
+    // member data — but nothing constrains that cell to be one. A row whose
+    // columns have shifted holds a neighbour's content there, and this
+    // command's output is a public artifact. The field name survives because
+    // `assertDispositionRow` now holds it to `MANAGED_FIELDS`; the value does
+    // not, so the row number stands in for it.
+    //
+    // `unfinishedCollectionLinks` filters, so it returns the same object
+    // references and a row's position in `table` is its line in the file.
+    const faultRows = new Set<DispositionRow>(faults);
+
+    throw new CatalogueRefreshError(
+      `${faults.length} legacy ${faults.length === 1 ? "value" : "values"} ` +
+        `earned a Collection Link and did not get one, ` +
+        `${faults.length === 1 ? "it is" : "they are"} located below. ` +
+        `A \`${COLLECTION_LINK_FAULT}\` row is the pipeline unable to finish a job it was ` +
+        `asked to do, so it blocks the release for the same reason an ` +
+        `\`undecided\` row does — a member holding one of these values gets ` +
+        `no Profile Link at all, which is the outcome ADR-0021 rejected. ` +
+        `The cells are not reported:\n` +
+        table
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => faultRows.has(row))
+          .map(
+            ({ row, index }) =>
+              `  - ${row.userFieldName} row ${index + 2}, column ` +
+              `\`legacy_value\` (\`${DISPOSITION_FILE}\`)`
           )
           .join("\n")
     );
@@ -56,7 +130,8 @@ async function main(): Promise<void> {
 
   process.stdout.write(
     `${assignments.length} Collection Assignment ` +
-      `${assignments.length === 1 ? "row" : "rows"}, none \`undecided\`.\n`
+      `${assignments.length === 1 ? "row" : "rows"}, none \`undecided\`. ` +
+      `No \`${COLLECTION_LINK_FAULT}\` row in \`${DISPOSITION_FILE}\`.\n`
   );
 }
 

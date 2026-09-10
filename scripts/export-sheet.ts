@@ -25,7 +25,11 @@ import {
   valuesToCsv,
   WORKBOOK_ID_VAR,
 } from "./lib/sheet-export.ts";
-import { accessTokenFor, credentialsFrom } from "./lib/sheets-auth.ts";
+import {
+  accessTokenFor,
+  credentialsFrom,
+  REQUEST_TIMEOUT_MS,
+} from "./lib/sheets-auth.ts";
 
 const OUTPUT_DIR = "data";
 
@@ -50,6 +54,7 @@ async function main(): Promise<void> {
   const fetched = [];
   for (const tab of EXPORT_TABS) {
     const response = await fetch(sheetValuesUrl(workbookId, tab), {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { authorization: `Bearer ${accessToken}` },
     });
 

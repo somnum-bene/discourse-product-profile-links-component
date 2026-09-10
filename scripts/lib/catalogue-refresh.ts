@@ -39,9 +39,18 @@ import {
 import {
   type AssignmentRow,
   EMAIL_SHAPED,
+  MANAGED_FIELDS,
   parseCsv,
   SHEET_TABS,
 } from "./sheet-export.ts";
+
+/**
+ * How long any one request may take before it is abandoned. Same value and
+ * same reason as `catalogue-verify.ts`, which had the only bounded request in
+ * the repository: a hung endpoint otherwise blocks indefinitely with nothing
+ * on stdout to say why.
+ */
+export const REQUEST_TIMEOUT_MS = 15_000;
 
 /** The shop to query. A bare host — `example.myshopify.com`, no scheme, no path. */
 export const SHOP_DOMAIN_VAR = "SHOPIFY_SHOP_DOMAIN";
@@ -77,7 +86,7 @@ export const CATALOGUE_FILE = "data/resolved-products.csv";
 export const COLLECTION_LINKS_FILE = "data/collection-links.csv";
 
 /**
- * The disposition table: committed, and read by nothing in this repository.
+ * The disposition table: committed, and read here only to be refused.
  *
  * It is the one artifact that crosses into the non-public repository that holds
  * member data (#28). Every other output here feeds a Discourse instance; this
@@ -573,11 +582,18 @@ export function collectionHandlesFrom(
 /**
  * The Collection Assignment rows still `undecided`, in Sheet order. `undecided`
  * is an absence of evidence rather than a preference, so it blocks a release
- * the way an Unresolved URL does (ADR-0021) — but that gate belongs on the
- * committed files, not on a Catalogue Refresh's exit code, which stays zero on
- * purpose (see `refresh-catalogue.ts`). This is what a standalone check runs
- * over `data/collection-assignment.csv` alone, with no Shopify call and no
- * Excluded Product to join against.
+ * the way an Unresolved URL does (ADR-0021), and it blocks in both places: a
+ * Catalogue Refresh exits non-zero when the Sheet it just read holds one
+ * (issue #38, see `refresh-catalogue.ts`), and the standalone check exits
+ * non-zero when the committed file does. A refresh still exits zero for the
+ * drift faults — `unassigned-legacy-value`, `unadmitted-collection`,
+ * `stale-product-resolution`, `curation-disagreement` — which are reported and
+ * deliberately not fatal, because they describe a Sheet that has moved rather
+ * than a decision nobody has made.
+ *
+ * This function is what both of them ask. The standalone check runs it over
+ * `data/collection-assignment.csv` alone, with no Shopify call and no Excluded
+ * Product to join against.
  *
  * A `switch` rather than `=== "undecided"`, so a fifth `Disposition` added to
  * `DISPOSITIONS` fails to compile here instead of silently reading as decided.
@@ -612,6 +628,56 @@ export function undecidedAssignments(
       }
     }
   });
+}
+
+/**
+ * Whether a cell is an `https:` URL, which is the only thing the disposition
+ * table's `url` column may hold besides nothing.
+ *
+ * Shape only, and deliberately looser than `collectionHandleFromUrl`: this
+ * column carries product URLs and collection URLs alike, so it cannot insist on
+ * `/collections/`. `https:` rather than any scheme, because these are links
+ * Discourse renders for a member to click and the scheme is part of where they
+ * land — the same reason `collectionHandleFromUrl` compares `origin`.
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** The disposition a legacy value carries when it earned a link and has none. */
+export const COLLECTION_LINK_FAULT = "collection-link-fault";
+
+/**
+ * The rows of the disposition table that earned a Collection Link and did not
+ * get one — the other half of the gate `undecidedAssignments` opens, and the
+ * half that catches the case an `undecided` row cannot.
+ *
+ * `undecided` is a curator saying nobody has looked yet, so it only ever exists
+ * where somebody typed the word. A legacy value that newly starts earning a
+ * Collection Link — a product Shopify stops selling six months from now — has
+ * no Collection Assignment row at all, and an absent row types nothing. It
+ * derives `unassigned-legacy-value`, lands here as a `collection-link-fault`,
+ * and every other gate stays green: a Catalogue Refresh reports it and exits
+ * zero on purpose, and the assignment half of the check reads the curated tab,
+ * where the row it is looking for does not exist.
+ *
+ * The result is the exact outcome ADR-0021 says was rejected — a newly
+ * discontinued product silently degrading to no Profile Link, "with nothing to
+ * show it had". This is the something to show it.
+ *
+ * Every one of the nine `CollectionLinkProblem`s reaches the table under this
+ * one disposition and every one of them means the same thing, so the gate
+ * blocks on the disposition rather than enumerating the reasons behind it: a
+ * tenth added later is covered without being listed.
+ */
+export function unfinishedCollectionLinks(
+  rows: readonly DispositionRow[]
+): DispositionRow[] {
+  return rows.filter((row) => row.disposition === COLLECTION_LINK_FAULT);
 }
 
 /** One request asking whether Shopify admits each collection in a batch. */
@@ -685,6 +751,65 @@ export function surveyPageFromResponse(
 }
 
 /**
+ * Where the next page of a division survey starts, or `null` when the survey
+ * is over. Throws when Shopify says there is another page and does not say
+ * where a page this survey has not already asked for begins. `requested` is
+ * every cursor the survey has already sent, which is how a cursor that points
+ * backwards is recognised.
+ *
+ * The refusal is the point, and it lives here rather than in the loop that
+ * needs it so it can be tested: `divisionSurveyQuery(division, null)` omits
+ * `after:` entirely, so carrying on with a null cursor re-requests page one.
+ * The survey would then walk the same page until `MAX_SURVEY_PAGES` ran out
+ * and report "more than 10 pages of live products" — a wrong diagnosis of a
+ * division that might hold two — and `mergeProducts` deduplicates by handle,
+ * so nothing in the output would look wrong either. A failure that reports
+ * the wrong cause is worse than the one it replaces.
+ *
+ * A cursor that repeats one already sent does exactly the same thing by a
+ * different route, so it is refused on the same terms. Checking the whole set
+ * rather than only the cursor in hand, because a survey that alternates
+ * between two pages never advances either — non-advancing is the special case
+ * of cyclic, not the other way around. The cursor itself is never quoted: the
+ * division and the page number locate it, and an opaque token in a message
+ * that a curator reads is noise whatever it holds.
+ *
+ * `requested` has no default. A survey that forgot to pass it would silently
+ * lose the check, and this is the second refusal on this code path written
+ * because a silent wrong answer is the failure mode here.
+ */
+export function nextSurveyCursor(
+  page: SurveyPage,
+  division: Division,
+  pageNumber: number,
+  requested: ReadonlySet<string>
+): string | null {
+  if (!page.hasNextPage) {
+    return null;
+  }
+
+  if (page.endCursor === null) {
+    throw new CatalogueRefreshError(
+      `${division.tag} page ${pageNumber} reports another page and gives no ` +
+        `cursor to reach it. Continuing would re-request the first page ` +
+        `under the same empty cursor, so this stops instead of surveying ` +
+        `the division twice and reporting a page limit it never hit.`
+    );
+  }
+
+  if (requested.has(page.endCursor)) {
+    throw new CatalogueRefreshError(
+      `${division.tag} page ${pageNumber} reports another page and points ` +
+        `back at one this survey already asked for. Continuing would walk ` +
+        `the same pages until the page limit ran out, so this stops instead ` +
+        `of reporting a page limit the division never hit.`
+    );
+  }
+
+  return page.endCursor;
+}
+
+/**
  * One list of products from several, deduplicated by handle and sorted by it.
  * The by-handle fetch and the division surveys overlap heavily by design — a
  * curated product is usually also on sale — and the transform must see each
@@ -753,8 +878,20 @@ export function resolvedProductsCsv(
     ])
   );
   const body = `${[csvLine([...CATALOGUE_COLUMNS]), ...rows].join("\n")}\n`;
+  const text = `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
 
-  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+  // Held to its reader, for the reason `dispositionTableCsv` is. A writer
+  // enforcing a subset of its reader's rules is a gate that reports success on
+  // the way out and failure on the way in, and the file in between is already
+  // committed — `refresh-catalogue.ts` writes this one first, so a file the
+  // reader would reject leaves the repository holding a regenerated catalogue
+  // that no later command can load.
+  //
+  // Round-tripped rather than restating the rules, so the two cannot drift:
+  // whatever `readResolvedProducts` insists on is what this refuses to emit.
+  readResolvedProducts(text);
+
+  return text;
 }
 
 /**
@@ -769,8 +906,15 @@ export function collectionLinksCsv(
     csvLine([entry.userFieldName, entry.value, entry.url])
   );
   const body = `${[csvLine([...COLLECTION_LINK_COLUMNS]), ...rows].join("\n")}\n`;
+  const text = `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
 
-  return `${DIGEST_PREFIX}${digestOf(body)}\n${body}`;
+  // Same round-trip, same reason. This reader is the stricter of the two: it
+  // holds every value to carrying `COLLECTION_LINK_SUFFIX` and every URL to
+  // being a cpap.com collection URL, and a derivation change that broke either
+  // would otherwise be written here and only refused on the next read.
+  readCollectionLinks(text);
+
+  return text;
 }
 
 /**
@@ -852,13 +996,23 @@ export function dispositionTableCsv(
  * The disposition table a file holds, refusing anything that is not exactly
  * what `dispositionTableCsv` writes.
  *
- * Read by no command — the far side of it is a different repository — and that
- * is precisely why it exists. The file is reviewed once and then consumed by a
- * join this repository cannot see, so the checks that would normally be a
- * reader's incidental strictness are the only ones the artifact will ever get:
- * the digest and the six columns here, and then everything
- * `assertDispositionRow` insists on, which is the same list the writer is held
- * to. A gate running here is a gate that runs before the file leaves.
+ * Read by one command, and by nothing downstream — the far side of it is a
+ * different repository — and that is precisely why it exists. The file is
+ * reviewed once and then consumed by a join this repository cannot see, so the
+ * checks that would normally be a reader's incidental strictness are the only
+ * ones the artifact will ever get: the digest and the six columns here, and then
+ * everything `assertDispositionRow` insists on, which is the same list the
+ * writer is held to. A gate running here is a gate that runs before the file
+ * leaves.
+ *
+ * The one command is `pnpm check:collection-assignment`, which reads the
+ * committed table to hold it against the committed Collection Assignment. It
+ * does act on the rows — it passes them to `unfinishedCollectionLinks` — but
+ * only to decide whether to refuse: no build, apply or export path consumes a
+ * `DispositionRow`, so nothing this repository ships is derived from one. That
+ * is the distinction worth stating, and stating it the shorter way ("nothing
+ * does anything with them afterwards") replaced a true contract with a false
+ * one.
  */
 export function readDispositionTable(text: string): DispositionRow[] {
   const dataRows = dataRowsOf(
@@ -911,7 +1065,7 @@ function assertDispositionRow(
   row: readonly string[],
   where: string
 ): DispositionOutcome {
-  const [, legacyValue, legacyText, value, url, disposition] = row;
+  const [userFieldName, legacyValue, legacyText, value, url, disposition] = row;
 
   // Reported by row and column and never by content: this is the tripwire that
   // keeps member data out of the one file that leaves, and a refusal that
@@ -962,6 +1116,26 @@ function assertDispositionRow(
     );
   }
 
+  // The join column, held to the two names this repository has. Two separate
+  // jobs happen to want it: the far side joins on this column and a name it
+  // has never heard of finds no member, and `check-collection-assignment.ts`
+  // prints this cell to locate a `collection-link-fault` row it is refusing,
+  // in a public CI job. `assertEveryFieldRepresented` asks the other half of
+  // the question — that no field is missing — and a superset check cannot
+  // notice a row naming a field that does not exist.
+  //
+  // Not quoted, on the same terms as every refusal here: what the cell holds
+  // is what this check could not vouch for.
+  if (!MANAGED_FIELDS.includes(userFieldName ?? "")) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("user_field_name")} does not name a Managed ` +
+        `Field. One of ${MANAGED_FIELDS.join(" or ")} is expected, and what ` +
+        `the cell holds instead is not reported. The repository on the far ` +
+        `side joins on this column, so a name it has never heard of drops ` +
+        `every member holding one of the row's values.`
+    );
+  }
+
   // `url` is the one column allowed to be empty, which makes `""` the sentinel
   // every consumer reads as "no link" — `resolvingValues`, the review
   // document's counts, and the committed-file gate all test it exactly. So the
@@ -978,6 +1152,29 @@ function assertDispositionRow(
         `consumer reads an empty \`url\` as "no Profile Link resolves", so a ` +
         `cell of spaces is a linked row pointing nowhere that no check ` +
         `downstream would question.`
+    );
+  }
+
+  // And the other half of "either empty or a real URL", which the whitespace
+  // check alone does not give. Without this the column accepts any text at
+  // all: a row dispositioned `collection` whose `url` reads as a person's name
+  // passes every rule above, the pairing check below (which only asks whether
+  // the cell is empty) and the writer, and reaches the non-public repository
+  // as a Profile Link target.
+  //
+  // That is the shape this table exists to make impossible. It is the one
+  // artifact crossing the boundary, and a cell that drifted onto a neighbouring
+  // column in a workbook whose other tabs hold member data is exactly how
+  // something that is not a URL arrives here.
+  //
+  // The cell is not quoted, for the reason every refusal on this boundary does
+  // not quote one: what it holds is what the check could not vouch for.
+  if (url !== "" && !isHttpsUrl(url)) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("url")} is neither empty nor an \`https:\` URL. ` +
+        `A resolving row's URL is what a member's Profile Link opens, so a ` +
+        `cell that is not one is a link to nothing at best. What the cell ` +
+        `holds is not reported.`
     );
   }
 

@@ -6,19 +6,19 @@ send the catalogue pipeline to every forum visitor.
 
 The commands and what each one is allowed to touch:
 
-| Command                  | Reads                                    | Writes                                                 | Configuration                                                       |
-| ------------------------ | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `pnpm export:sheet`      | three allowlisted spreadsheet tabs       | `data/user_*.csv`, `data/collection-assignment.csv`    | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
-| `pnpm refresh:catalogue` | `data/` Sheet Exports, `data/collection-assignment.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `data/disposition-table.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
-| `pnpm build:settings`    | `data/resolved-products.csv`, `data/collection-links.csv` | `settings.yml`                        | none, so it runs in CI                                              |
-| `pnpm check:collection-assignment` | `data/collection-assignment.csv`  | nothing — it prints, or refuses     | none, so it runs in CI                                              |
-| `pnpm verify:catalogue`  | `data/resolved-products.csv`, cpap.com    | nothing — it prints                                    | none, and it cannot read `.env`                                     |
-| `pnpm apply:catalogue`   | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml` | one Discourse instance         | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
+| Command                            | Reads                                                                      | Writes                                                                                                             | Configuration                                                       |
+| ---------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `pnpm export:sheet`                | three allowlisted spreadsheet tabs                                         | `data/user_*.csv`, `data/collection-assignment.csv`                                                                | `SHEET_WORKBOOK_ID`, `GOOGLE_SERVICE_ACCOUNT_*` (3)                 |
+| `pnpm refresh:catalogue`           | `data/` Sheet Exports, `data/collection-assignment.csv`, Shopify Admin API | `data/resolved-products.csv`, `data/collection-links.csv`, `data/disposition-table.csv`, `.ig.catalogue-review.md` | `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_API_TOKEN`                          |
+| `pnpm build:settings`              | `data/resolved-products.csv`, `data/collection-links.csv`                  | `settings.yml`                                                                                                     | none, so it runs in CI                                              |
+| `pnpm check:collection-assignment` | `data/collection-assignment.csv`, `data/disposition-table.csv`             | nothing — it prints, or refuses                                                                                    | none, so it runs in CI                                              |
+| `pnpm verify:catalogue`            | `data/resolved-products.csv`, `data/collection-links.csv`, cpap.com        | nothing — it prints                                                                                                | none, and it cannot read `.env`                                     |
+| `pnpm apply:catalogue`             | `data/resolved-products.csv`, `data/collection-links.csv`, `settings.yml`  | one Discourse instance                                                                                             | `DISCOURSE_BASE_URL`, `DISCOURSE_API_USERNAME`, `DISCOURSE_API_KEY` |
 
 Configuration comes from an ignored `.env`, read by Node's own
 `--env-file-if-exists`, and is never logged, never printed in an error, and
 never committed. The two commands that need nothing omit that flag on purpose: a
-command that *could* read `.env` is one that might come to depend on it, and then
+command that _could_ read `.env` is one that might come to depend on it, and then
 it could no longer run in CI.
 
 ## The Sheet Export refuses more than it accepts
@@ -36,7 +36,7 @@ runs while the danger is visible is a guard you find out about too late.
   to customer data, which is what the inherited spreadsheet was — the id is
   withheld for a weaker reason than it used to be, and still withheld.)
 - **The allowlist is the only way through.** `SHEET_TABS` names the two option
-  tables and, for each, the exact header row and the two columns read from it;
+  tables and, for each, the exact header row and the four columns read from it;
   `ASSIGNMENT_TABS` names the Collection Assignment and its eleven. The command
   iterates `EXPORT_TABS` and never handles a tab name at all, so an unlisted tab
   has nothing to travel on; a name reaching this from outside becomes a tab only
@@ -86,10 +86,10 @@ allowlist is written in names. And the fetch asks for **two ranges, not one**,
 through `values:batchGet` — so they still cost a single request against a
 single snapshot of the workbook:
 
-| Range | What it is |
-| --- | --- |
-| `'user_machine'!A1:E2002` | the export, pinned to exactly the declared width and one row past the ceiling |
-| `'user_machine'!F1:ZZZ2002` | everything to the right of it, which has to come back empty |
+| Range                       | What it is                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `'user_machine'!A1:E2002`   | the export, pinned to exactly the declared width and one row past the ceiling |
+| `'user_machine'!F1:ZZZ2002` | everything to the right of it, which has to come back empty                   |
 
 The second range is the guard. Bounding the fetch at the declared width was the
 obvious thing and it defeated the check it was meant to serve: asked only for
@@ -159,7 +159,7 @@ PERMISSION_DENIED` from the first tab it asks for. Nothing in either response
 mentions the claim set. Verified against the live endpoint, because the
 handoff this was built from claimed the token request fails instead.
 
-`unauthorized_client` is the *other* failure, and it means the opposite: `sub`
+`unauthorized_client` is the _other_ failure, and it means the opposite: `sub`
 was sent, and the delegation grant is missing or still propagating.
 
 ### What this key can actually do
@@ -171,8 +171,8 @@ the private key can sign an assertion naming **any** cpap.com Workspace user as
 `sub`, and read every Sheet that user can open. `GOOGLE_SERVICE_ACCOUNT_IMPERSONATE_EMAIL`
 is this repository's choice of subject; it is not a limit on the credential.
 
-So the blast radius of a leaked key is *read access to every Google Sheet in
-the domain*, not read access to one workbook. That is inherent to domain-wide
+So the blast radius of a leaked key is _read access to every Google Sheet in
+the domain_, not read access to one workbook. That is inherent to domain-wide
 delegation, and it is the mechanism we have: the org's policy blocks link
 sharing and blocks sharing a file to a service account, which is what the two
 bullets above are about. There is no narrower version of this that still works
@@ -181,24 +181,24 @@ piece of admin work, deliberately not done here.
 
 **Accepted, with these bounds:**
 
-| Control | What it bounds |
-| --- | --- |
-| One authorised scope | `spreadsheets.readonly` and nothing else. Sheets only, read only — no Drive, no Gmail, no writes. Widening it is an Admin Console change, not a code change. |
-| Scope named in code | `SHEETS_READONLY_SCOPE` is asked for by name in `lib/sheets-auth.ts`, so a wider console grant still does not widen what this command requests. |
+| Control                     | What it bounds                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| One authorised scope        | `spreadsheets.readonly` and nothing else. Sheets only, read only — no Drive, no Gmail, no writes. Widening it is an Admin Console change, not a code change. |
+| Scope named in code         | `SHEETS_READONLY_SCOPE` is asked for by name in `lib/sheets-auth.ts`, so a wider console grant still does not widen what this command requests.              |
 | Key never in the repository | It lives only in the ignored `.env`. Nothing logs it, nothing prints it in an error, and `credentialsFrom`'s refusals are asserted not to echo the material. |
-| Read-only by construction | This code cannot write to the Sheet even if asked to. Correcting the Sheet is a human editing it, followed by a re-export. |
-| Revocable in one place | Removing the client id from Admin Console → Security → API controls → Domain-wide delegation kills the credential outright, without touching the repository. |
+| Read-only by construction   | This code cannot write to the Sheet even if asked to. Correcting the Sheet is a human editing it, followed by a re-export.                                   |
+| Revocable in one place      | Removing the client id from Admin Console → Security → API controls → Domain-wide delegation kills the credential outright, without touching the repository. |
 
 Raised by code review on PR #45. Accepted for an internal read-only export
 rather than redesigned, on the grounds that the alternative is an admin round
 trip for a dedicated least-privilege user and the controls above bound it to
-domain-wide Sheets *reads* with a single revocation point. Reconsider if this
+domain-wide Sheets _reads_ with a single revocation point. Reconsider if this
 credential is ever wanted for anything beyond exporting these tabs.
 
 The escaped `\n` is the other trap. A PEM holds real newlines, `.env` cannot,
 and Node's `--env-file` hands the value over still escaped — so a key used as
 read is a string that looks right, signs nothing, and fails at the token
-endpoint with an error about the *client* rather than about the key.
+endpoint with an error about the _client_ rather than about the key.
 `credentialsFrom` unescapes it and then asks OpenSSL to parse it, so that
 becomes one legible refusal at startup rather than a puzzle three layers down.
 Neither the key nor the underlying parse error is ever printed: a refusal that
@@ -239,14 +239,18 @@ all the same kind of thing:
   Dropdown Options, and that asymmetry is the feature: `dropdownOptionsFor` is
   handed the products alone, so it cannot offer a discontinued machine to a User
   choosing theirs.
+
 - **`data/disposition-table.csv` is the only output that leaves.** One row per
   legacy option value across both Managed Fields: the legacy identifier, the
   name the bulletin board showed for it, the chosen Profile Link value, the
   target URL, and the disposition. It is committed, it carries its own digest,
-  and **nothing in this repository reads it** — it is the entire interface to a
-  separate, non-public repository that joins it against a fresh member export to
-  produce the three columns Discourse's migrations engineer asked for: member
-  identifier, custom field name, value (#28).
+  and **the only thing in this repository that reads it is a release gate** —
+  `check:collection-assignment` refuses a `collection-link-fault` row rather
+  than consuming the file for anything it builds. Nothing here is derived from
+  it: it is the entire interface to a separate, non-public repository that
+  joins it against a fresh member export to produce the three columns
+  Discourse's migrations engineer asked for: member identifier, custom field
+  name, value (#28).
 
   Which string a legacy value becomes is decided here; which member holds it is
   decided there. Keeping that the only interface is what allows the member-level
@@ -262,12 +266,12 @@ all the same kind of thing:
   missing its digest line presents a data row as line 1, and a tab with a row
   inserted above its header presents one as row 1 — so the two earliest
   diagnostics are reached by exactly the malformations that hand them file
-  content to print. And the guard is a tripwire for one *shape* of member data
+  content to print. And the guard is a tripwire for one _shape_ of member data
   rather than a filter for member data, so a clean pass through it is not
   licence to echo a row: a name goes straight through. Coordinates locate a
   cell exactly and carry nothing, which is why that is all any refusal gives.
 
-  *Any* refusal, and the rule needs stating that widely because the columns it
+  _Any_ refusal, and the rule needs stating that widely because the columns it
   protects are not the ones intent would suggest. `legacy_text` is free text a
   curator typed into a bulletin board, carried verbatim (ADR-0023), and on an
   unlinked row `value` is a copy of it — so a contaminated cell lands in the
@@ -300,7 +304,7 @@ all the same kind of thing:
   the assertion made of whatever comes back is only that the canary is not in
   it. A refusal added later, in a function nobody has written yet, is covered
   as soon as it is reachable. Two details are what make it worth anything:
-  the fixtures put the canary in a *valid* row and in one whose range has
+  the fixtures put the canary in a _valid_ row and in one whose range has
   slid, because a correct header row is what makes the per-row refusals
   reachable and what makes the header refusal unreachable; and every case
   pairs the canary with a fault and asserts a refusal fired, because a name
@@ -341,7 +345,7 @@ all the same kind of thing:
   the case for a `plain-text` or `undecided` row and for a title excluded as
   `blank-title` or `ambiguous-title-match`: they appear with no URL rather than
   being omitted, because the join needs every value. An unlinked row whose value
-  *trims* onto a linked row's is refused too: resolution is a trimmed match on
+  _trims_ onto a linked row's is refused too: resolution is a trimmed match on
   both sides, so such a row would hand the member a link while saying they get
   none. The `url` column is likewise either empty or a real URL with nothing
   around it — `""` is the sentinel every consumer reads as "no link", so a cell
@@ -353,6 +357,7 @@ all the same kind of thing:
   outcomes nobody decided. They are apart from `plain-text` on purpose — the
   result for the member is the same and the causes are not, and one count
   merging a settled decision with a fixable data fault would read as settled.
+
 - **`.ig.catalogue-review.md` is the deliverable a human approves.** It is
   ignored, because it is regenerated on every refresh: every Mapping per field,
   every excluded Suggested Title under the reason it was excluded, and both
@@ -395,10 +400,10 @@ nothing to do with the catalogue. So the generated part is fenced, and only that
 part is rewritten:
 
 ```yaml
-  # BEGIN GENERATED profile_link_fields default
-  # Catalogue digest (sha256): c3c3c7d9…
-  default: …
-  # END GENERATED profile_link_fields default
+# BEGIN GENERATED profile_link_fields default
+# Catalogue digest (sha256): c3c3c7d9…
+default: …
+# END GENERATED profile_link_fields default
 ```
 
 Reserialising the whole document would reformat and comment-strip parts nobody
@@ -423,18 +428,28 @@ so one message covers both: regenerate. The same comparison is also a unit test
 against the real files, which is why a stale `settings.yml` fails `pnpm test`
 too.
 
-## An undecided row blocks the ship, and the gate lives away from the refresh
+## An undecided row blocks the ship, in the refresh and in a gate of its own
 
-`refresh:catalogue` reports `undecided` Collection Assignment rows on stderr
-and stays green while they exist, on purpose: its exit code is a statement
-about Shopify and the Sheet, which move without anyone committing anything, and
-a command that failed every time the catalogue drifted is a command people
-stop reading.
+`refresh:catalogue` stays green on the faults drift creates — an
+`unassigned-legacy-value`, an `unadmitted-collection`, a
+`stale-product-resolution`, a `curation-disagreement` — on purpose: a product
+retiring at Shopify creates one of those through nobody's action, and a command
+that failed every time the catalogue moved is a command people stop reading.
 
-`check:collection-assignment` is the gate instead, and it is a statement about
-the repository: it reads only the committed `data/collection-assignment.csv`
-and exits non-zero while any row's `Disposition` is `undecided`, naming every
-one so the fix does not require opening the file to find it. `undecided` is an
+`undecided` is the exception, and refresh **does** exit non-zero while any
+Collection Assignment row holds it (#38). It cannot appear unless a curator
+opened the Sheet and wrote the word, so going red on it is never going red on
+something the refresh did not cause. The exit code is set after the writes and
+after the report, so the artifacts and the review document still land.
+
+`check:collection-assignment` asks the same question of the committed files,
+which is what lets a gate run in CI and in a pre-commit hook without a
+credential: it reads `data/collection-assignment.csv` and
+`data/disposition-table.csv`, exits non-zero while any row's `Disposition` is
+`undecided` or any disposition row is a `collection-link-fault`, and locates
+every one so the fix does not require opening the file to find it. It asks
+`undecidedAssignments` — the same function refresh asks — so the two agree by
+construction rather than by both being maintained. `undecided` is an
 absence of evidence rather than a preference, so it blocks the same way an
 Unresolved URL does (ADR-0021) — the alternative, letting an uncurated row
 quietly resolve to no link, is indistinguishable from the failure this whole
@@ -471,8 +486,8 @@ Mapping has a URL, not that the URL is one. URL syntax is the schema's
 `validations: url: true`, enforced server-side by Ruby, on an administrator's
 input — a generated `default:` never passes through it during development. And a
 single refusal invalidates the entire `profile_link_fields` value rather than the
-one offending Mapping (ADR-0006), so one bad URL takes all 58 Profile Links down
-with it — the 55 from the catalogue and the three Collection Links alike. That
+one offending Mapping (ADR-0006), so one bad URL takes all 137 Profile Links
+down with it — the 55 from the catalogue and the 82 Collection Links alike. That
 is why `readCollectionLinks` checks the shape of a collection URL where it
 reads it: it is the only URL here anyone types by hand.
 
@@ -548,7 +563,7 @@ authorisation stories. A Collection Link is matched by an exact trimmed-string
 match — the rule the runtime resolves by, and the same one everything else here
 uses (ADR-0010): a User holding `CPAP Machines` is not covered by a Mapping
 keyed on `CPAP Machines (Discontinued)`, and claiming otherwise would promise a
-Profile Link that never appears. One function, `linkCovering`, *is* that rule,
+Profile Link that never appears. One function, `linkCovering`, _is_ that rule,
 and the refusal, the warning and the retention all ask it rather than each
 spelling it out — which is how two of them once came to say opposite things
 about the same value.
@@ -618,10 +633,24 @@ replans against whatever the instance now holds.
 
 ## The reachability pass is the one check that is not a gate
 
-`pnpm verify:catalogue` asks cpap.com whether each of the 55 catalogue URLs
-serves a page. It reads the catalogue file alone, so the three collection URLs
-are not among them — whether Shopify admits a collection is asked on refresh
-(ADR-0020), and #37 owns it. It is in no pre-commit hook and no CI step, unlike every other
+`pnpm verify:catalogue` asks cpap.com whether the URL behind each of the 137
+Mappings this pipeline ships serves a page — the 55 from the catalogue and the
+82 Collection Links alike. That is 137 Mappings over 65 distinct URLs: the
+Collection Links point at ten collection pages between them, so the pass groups
+the Mappings sharing a URL, asks each page once and files a result under every
+Mapping in the group. The verdict line says both numbers for that reason.
+
+65 is the number of request _targets_, not a promise about how many requests go
+out. A URL that answers 429 or times out is retried up to `MAX_ATTEMPTS`, so a
+run that meets the rate limiter asks the same 65 pages more than 65 times — the
+floor is 65 and the ceiling is four times that. A clean run makes exactly 65,
+which is what the last one did.
+
+The collection URLs are included because the two questions are different:
+whether Shopify _admits_ a collection is asked on refresh (ADR-0020), and a
+collection can be admitted in the admin, be unpublished to the Online Store,
+and still 404 for a member. That second question is this pass's, deliberately
+(ADR-0017). It is in no pre-commit hook and no CI step, unlike every other
 check here, and unit tests read `package.json`, `.pre-commit-config.yaml` and
 `.github/workflows/ci.yml` to keep it that way — including inside another npm
 script, because anything `pnpm build:settings` called would gate CI just as
@@ -646,7 +675,7 @@ or 503 on every attempt, or that nothing answered at all, produces no evidence
 either way — so it is neither a pass nor a failure, it blocks shipping, and the
 pass is run again. Folding it into either of the other two is exactly the mistake
 the outcome exists to prevent: cpap.com throttling reads as a broken product page
-otherwise. A 500 or a 502, by contrast, *is* an answer and is reported as a
+otherwise. A 500 or a 502, by contrast, _is_ an answer and is reported as a
 failure with its status, because retrying past it would substitute a guess for
 the human judgement it needs.
 
@@ -728,7 +757,7 @@ asked — hold every decision worth testing, and they are pure: no network, no
 filesystem, no clock. The commands around them are thin shells: fetch, read,
 write, execute a plan. If a bug can hide in a shell, logic has leaked out of a
 transform and belongs back inside it. The one thing the apply command decides for
-itself is *when* to consult the plan, and a test pins that order, because it is
+itself is _when_ to consult the plan, and a test pins that order, because it is
 the only mistake a shell can make on its own.
 
 Tests live in `spec/unit/`, never in `test/` — Discourse serves a theme's

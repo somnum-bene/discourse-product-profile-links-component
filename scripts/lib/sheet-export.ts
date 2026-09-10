@@ -186,6 +186,20 @@ export const SHEET_TABS: readonly SheetTab[] = [
 ];
 
 /**
+ * The Managed Field names, read off the option-table allowlist rather than
+ * written out again, so a third field is one entry in `SHEET_TABS`.
+ *
+ * This exists because a closed set is the only thing a refusal on this
+ * boundary may name. The Collection Assignment's `Field` column is checked
+ * against it, which is what lets `check-collection-assignment.ts` and
+ * `refresh-catalogue.ts` print the field beside a row they are refusing: the
+ * word they print is one of these two, and never whatever the cell held.
+ */
+export const MANAGED_FIELDS: readonly string[] = SHEET_TABS.map(
+  (tab) => tab.userFieldName
+);
+
+/**
  * The Collection Assignment allowlist, and the second half of the tab
  * allowlist. Its header row is `ASSIGNMENT_COLUMNS` read in order, so a
  * curator who adds, renames or reorders a column stops the run rather than
@@ -721,13 +735,23 @@ export function sheetRowsFrom(tab: SheetTab, csvText: string): SheetRow[] {
  * `undecided`, and neither is resolved here. The header allowlist has already
  * established that the columns are the ones these names mean.
  *
- * The one exception is `Disposition`, which is checked against `DISPOSITIONS`.
- * That is still not a judgment about the row — an unrecognised word is not a
- * disposition this table can express, the way a renamed column is not a column
- * this command was written against, so it is refused on the same fail-closed
- * terms. Doing it here is what lets `AssignmentRow.disposition` be the union
- * rather than `string`, so a transform switching on it gets exhaustiveness
- * from the compiler instead of a default branch nobody revisits.
+ * The two exceptions are `Disposition`, checked against `DISPOSITIONS`, and
+ * `Field`, checked against `MANAGED_FIELDS`. Neither is a judgment about the
+ * row — an unrecognised word is not a disposition this table can express, and
+ * a name that is not a Managed Field is not a field this repository has, the
+ * way a renamed column is not a column this command was written against, so
+ * both are refused on the same fail-closed terms. Doing the first here is what
+ * lets `AssignmentRow.disposition` be the union rather than `string`, so a
+ * transform switching on it gets exhaustiveness from the compiler instead of a
+ * default branch nobody revisits.
+ *
+ * The second is load-bearing somewhere else: the release gates locate an
+ * `undecided` row by naming its field, and a `Field` cell carried through
+ * verbatim would make that a quotation of workbook content in the output of a
+ * public CI job. Checking it here is what makes the printed word a member of a
+ * set this repository owns, and it fails closed in the case that matters —
+ * columns shifted by an insertion upstream, in a workbook whose other tabs
+ * hold member data.
  */
 export function assignmentRowsFrom(
   tab: AssignmentTab,
@@ -739,8 +763,28 @@ export function assignmentRowsFrom(
     string,
   ][];
   const dispositionIndex = tab.headers.indexOf(tab.columns.disposition);
+  const fieldIndex = tab.headers.indexOf(tab.columns.field);
 
   for (const [rowIndex, dataRow] of dataRows.entries()) {
+    const named = dataRow[fieldIndex] ?? "";
+
+    // Not quoted, for the reason the `Disposition` refusal below is not: this
+    // fires exactly when the column does not hold a Managed Field name, which
+    // is what a shifted range looks like from here, and the cell then holds
+    // whatever the neighbouring column holds.
+    if (!MANAGED_FIELDS.includes(named)) {
+      throw new SheetExportError(
+        `${tab.tab}: row ${rowIndex + 2}, column ` +
+          `${columnLetter(fieldIndex + 1)} (\`${tab.columns.field}\`) ` +
+          `does not name a Managed Field. One of ` +
+          `${MANAGED_FIELDS.map((value) => `"${value}"`).join(", ")} is ` +
+          `expected, and what the cell holds instead is not reported. This ` +
+          `column is the one part of a row the release gates may repeat back ` +
+          `when they refuse it, so it holds a name this repository owns or ` +
+          `the run stops here.`
+      );
+    }
+
     const found = dataRow[dispositionIndex] ?? "";
     if (!isDisposition(found)) {
       // The cell is not quoted. It used to be, and the argument for quoting it

@@ -22,6 +22,14 @@ import { type FieldMapping, type FieldOptions } from "./build-catalogue.ts";
 import { SETTING_NAME } from "./build-settings.ts";
 import { type ApplyPlan, type FieldWrite } from "./plan-apply.ts";
 
+/**
+ * How long any one request may take before it is abandoned. Same value and
+ * same reason as `catalogue-verify.ts`, which had the only bounded request in
+ * the repository: a hung endpoint otherwise blocks indefinitely with nothing
+ * on stdout to say why.
+ */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
 /** The one variable that differs between the test and production instances. */
 export const BASE_URL_VAR = "DISCOURSE_BASE_URL";
 export const API_USERNAME_VAR = "DISCOURSE_API_USERNAME";

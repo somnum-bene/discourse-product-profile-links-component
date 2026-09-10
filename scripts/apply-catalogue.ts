@@ -48,6 +48,7 @@ import {
   renderComponent,
   renderPlan,
   renderReadback,
+  REQUEST_TIMEOUT_MS,
   themesUrl,
   type UserFieldRequest,
   userFieldsUrl,
@@ -264,6 +265,7 @@ async function request(
 ): Promise<unknown> {
   const response = await fetch(url, {
     method,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       "Api-Key": credentials.key,
       "Api-Username": credentials.username,
