@@ -671,6 +671,72 @@ describe("every request this pipeline makes is bounded", () => {
     }
   });
 
+  /**
+   * Every mention of the global object.
+   *
+   * `FETCH_MENTION` reads the *name* `fetch`, and a property name can be
+   * written as a string. `globalThis["fetch"](url, {})` calls the same
+   * function, but `blanked()` erases the contents of that string before
+   * either pattern runs, so the word this sweep looks for is already gone by
+   * the time it looks — and the floor assertion stays green on an unbounded
+   * request. `globalThis[name]`, a destructured `const { fetch } =
+   * globalThis` and a `const scope = globalThis` used later are the same hole
+   * spelled differently: each reaches the global through an object this sweep
+   * can still see, even when the property taken off it is unreadable.
+   *
+   * So the refusal above, one level out. A mention of `globalThis` or Node's
+   * `global` that is not immediately `.fetch(` is a reach this sweep cannot
+   * follow, and it fails on it rather than passing over it. Nothing in
+   * `scripts/` reaches through the global object at all today, so the rule
+   * costs this pipeline nothing it was using.
+   */
+  const GLOBAL_MENTION = /(^|[^\w.$])(?:globalThis|global)\b/gu;
+
+  /**
+   * The mentions of the global object in `source` that are not plainly a
+   * `fetch` call.
+   */
+  function unreadableGlobals(source: string): string[] {
+    return [...source.matchAll(GLOBAL_MENTION)]
+      .map((match) => source.slice(match.index ?? 0).trim())
+      .filter(
+        (from) => !/^[^\w.$]?(?:globalThis|global)\.fetch\s*\(/u.test(from)
+      )
+      .map((from) => from.slice(0, 40));
+  }
+
+  it("refuses a reach through the global object it cannot read", () => {
+    // Non-vacuous, and the reason this check is not just more of the one
+    // above: the property name here is a string, so `blanked` erases it and
+    // the mention sweep sees no `fetch` to refuse.
+    const computed = 'await globalThis["fetch"](url, {});';
+
+    expect(unreadableFetches(blanked(computed))).toEqual([]);
+    expect(unreadableGlobals(blanked(computed))).toHaveLength(1);
+
+    expect(
+      unreadableGlobals(
+        [
+          'await globalThis["fetch"](url, {});',
+          "await globalThis[name](url, {});",
+          "const { fetch: send } = globalThis;",
+          "const scope = globalThis;",
+        ].join("\n")
+      )
+    ).toHaveLength(4);
+
+    // The one readable spelling still passes, so this is a rule about
+    // indirection rather than about the word.
+    expect(unreadableGlobals("await globalThis.fetch(url, {});")).toEqual([]);
+
+    for (const path of commandFiles) {
+      expect(
+        unreadableGlobals(sourceOf(path)),
+        `${path} reaches through the global object in a way this sweep cannot read`
+      ).toEqual([]);
+    }
+  });
+
   function fetchCallsIn(
     path: string,
     source: string
