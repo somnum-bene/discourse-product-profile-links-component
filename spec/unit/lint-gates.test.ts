@@ -432,8 +432,9 @@ describe("every request this pipeline makes is bounded", () => {
   });
 
   /**
-   * The argument list of the `fetch(` beginning at `from`, found by balancing
-   * brackets rather than by looking for a closing line at a fixed indentation.
+   * The argument list of the call whose opening bracket is at `from`, found by
+   * balancing brackets rather than by looking for a closing line at a fixed
+   * indentation.
    *
    * The delimiter this used to use was `\n  });`, which only matched a call
    * closed at exactly two spaces. `scripts/export-sheet.ts` closes its fetch at
@@ -446,7 +447,7 @@ describe("every request this pipeline makes is bounded", () => {
    * Returns null when the brackets do not close, which the caller asserts
    * against — an unparseable call is a failure here, not a pass.
    */
-  function fetchArguments(source: string, from: number): string | null {
+  function balancedArguments(source: string, from: number): string | null {
     let depth = 0;
 
     for (let at = from; at < source.length; at += 1) {
@@ -465,35 +466,66 @@ describe("every request this pipeline makes is bounded", () => {
   }
 
   /**
-   * The `RequestInit` of a `fetch` call: its second top-level argument, or
-   * null when it has none.
+   * The parts of `text` separated by its top-level commas.
    *
-   * Split on the commas at depth zero, because a comma inside the options
-   * object, inside an array, or inside a nested call is not an argument
-   * boundary — `fetchArguments` already handed back a balanced slice, so
-   * counting brackets across it is enough to find the ones that are.
+   * A comma inside an object, inside an array or inside a nested call is not a
+   * boundary — both callers below are handed a balanced slice, so counting
+   * brackets across it is enough to find the ones that are.
    */
-  function initArgument(args: string): string | null {
+  function topLevelParts(text: string): string[] {
     const parts: string[] = [];
     let depth = 0;
     let start = 0;
 
-    for (let at = 0; at < args.length; at += 1) {
-      const char = args[at] as string;
+    for (let at = 0; at < text.length; at += 1) {
+      const char = text[at] as string;
 
       if ("({[".includes(char)) {
         depth += 1;
       } else if (")}]".includes(char)) {
         depth -= 1;
       } else if (char === "," && depth === 0) {
-        parts.push(args.slice(start, at));
+        parts.push(text.slice(start, at));
         start = at + 1;
       }
     }
 
-    parts.push(args.slice(start));
+    parts.push(text.slice(start));
 
-    return parts.length < 2 ? null : (parts[1] as string).trim();
+    return parts.map((part) => part.trim());
+  }
+
+  /**
+   * The `RequestInit` of a `fetch` call: its second top-level argument, or
+   * null when it has none.
+   */
+  function initArgument(args: string): string | null {
+    const parts = topLevelParts(args);
+
+    return parts.length < 2 ? null : (parts[1] as string);
+  }
+
+  /**
+   * Whether `value` is a call to `AbortSignal.timeout()` and nothing else.
+   *
+   * The whole value, because `AbortSignal.timeout(1000) && undefined` begins
+   * with one and evaluates to `undefined`. Anything left after the call's
+   * closing bracket — an operator, a `??`, a member access — means the
+   * property does not hold the signal its prefix advertised.
+   */
+  function isTimeoutCall(value: string): boolean {
+    const opened = /^AbortSignal\s*\.\s*timeout\s*\(/u.exec(value);
+
+    if (opened === null) {
+      return false;
+    }
+
+    const call = balancedArguments(value, opened[0].length - 1);
+
+    return (
+      call !== null &&
+      value.slice(opened[0].length + call.length + 1).trim() === ""
+    );
   }
 
   /**
@@ -501,23 +533,32 @@ describe("every request this pipeline makes is bounded", () => {
    * `AbortSignal.timeout()` as the `signal` of an options object written out
    * at the call, which is the only place `fetch` reads one from.
    *
-   * Three versions of this check have now been satisfied by something other
+   * Four versions of this check have now been satisfied by something other
    * than a bounded request. `toContain("signal: AbortSignal.timeout(")` over
    * the whole argument list accepted `{ headers: { signal: ... } }`, a header
    * that happens to be named `signal`. Depth alone then accepted two more:
    * `fetch({ signal: AbortSignal.timeout(1000) })`, where the object is the
    * `Request` and `fetch` never reads a `signal` off it, and
    * `fetch(url, cond ? { signal: ... } : {})`, which is unbounded on one of
-   * its two branches. Each time the gate was reading something adjacent to
-   * the property it is asking about.
+   * its two branches. Position and depth together still accepted a prefix:
+   * `{ signal: AbortSignal.timeout(1000) && undefined }` opens with the call
+   * and evaluates to `undefined`, and
+   * `{ signal: AbortSignal.timeout(1000), ...overrides }` hands the property
+   * to whatever the spread carries. Every time, the gate was reading
+   * something adjacent to the property it is asking about.
    *
-   * So the question is asked positionally and structurally: the second
+   * So the object is read as properties rather than as text: the second
    * top-level argument, required to be an object literal — a variable or a
    * conditional is not something this sweep can vouch for, and returning
-   * false is the fail-closed answer — with `signal:` among its own
-   * properties, one level in. Depth is counted the way `fetchArguments`
-   * balances brackets, over the blanked source, so a brace inside a string
-   * or a comment is already gone by the time it is counted.
+   * false is the fail-closed answer — split on its own commas, with exactly
+   * one property named `signal`, holding a whole `AbortSignal.timeout()` call
+   * and nothing more.
+   *
+   * Every key has to be a plain identifier, and that rule rather than the two
+   * examples above is what closes the class. A spread, a computed `[key]:`, a
+   * quoted `"signal":` (blanked to nothing readable before this sees it) and a
+   * shorthand `signal` are all properties this cannot follow, so none of them
+   * can carry a pass on behalf of the one it can.
    */
   function boundsItsRequest(args: string): boolean {
     const init = initArgument(args);
@@ -526,23 +567,27 @@ describe("every request this pipeline makes is bounded", () => {
       return false;
     }
 
-    const depths: number[] = [];
-    let depth = 0;
+    // A trailing comma leaves an empty part behind, and an empty object is one
+    // empty part; neither is a property.
+    const properties = topLevelParts(init.slice(1, -1)).filter(
+      (part) => part !== ""
+    );
+    const named = /^[A-Za-z_$][\w$]*\s*(:|$)/u;
 
-    for (const char of init) {
-      if (")}]".includes(char)) {
-        depth -= 1;
-      }
-
-      depths.push(depth);
-
-      if ("({[".includes(char)) {
-        depth += 1;
-      }
+    if (!properties.every((property) => named.test(property))) {
+      return false;
     }
 
-    return [...init.matchAll(/signal\s*:\s*AbortSignal\.timeout\s*\(/gu)].some(
-      (match) => depths[match.index ?? 0] === 1
+    const signals = properties.filter((property) =>
+      /^signal\s*(:|$)/u.test(property)
+    );
+
+    if (signals.length !== 1) {
+      return false;
+    }
+
+    return isTimeoutCall(
+      (signals[0] as string).replace(/^signal\s*:/u, "").trim()
     );
   }
 
@@ -575,7 +620,7 @@ describe("every request this pipeline makes is bounded", () => {
     return [...source.matchAll(FETCH_CALL)].map((match) => ({
       path,
       // The index of the `(` itself, which is where the bracket balance starts.
-      args: fetchArguments(source, (match.index ?? 0) + match[0].length - 1),
+      args: balancedArguments(source, (match.index ?? 0) + match[0].length - 1),
     }));
   }
 
@@ -667,6 +712,40 @@ describe("every request this pipeline makes is bounded", () => {
     );
 
     expect(boundsItsRequest(ordinary?.args ?? "")).toBe(true);
+  });
+
+  it("does not count a `signal` the rest of the object takes back", () => {
+    // Position and depth were not the question either. All three of these put
+    // a top-level `signal: AbortSignal.timeout(` in the options object, and
+    // in all three the signal `fetch` actually receives is `undefined`: the
+    // value continues past the call, or a later property overwrites it.
+    const [defeated] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000) && undefined });"
+    );
+    const [spread] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), ...{ signal: undefined } });"
+    );
+    const [twice] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), signal: undefined });"
+    );
+
+    expect(isTimeoutCall("AbortSignal.timeout(1000) && undefined")).toBe(false);
+    expect(isTimeoutCall("AbortSignal.timeout(1000)")).toBe(true);
+    expect(boundsItsRequest(defeated?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(spread?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(twice?.args ?? "")).toBe(false);
+
+    // Not a ban on the company the signal keeps: the real call sites pass a
+    // method — one of them in shorthand — headers and a body beside it.
+    const [ordinaryOptions] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { method, signal: AbortSignal.timeout(MS), headers: { accept: 'x' } });"
+    );
+
+    expect(boundsItsRequest(ordinaryOptions?.args ?? "")).toBe(true);
   });
 
   it("does not count a `signal` that belongs to a nested option", () => {
