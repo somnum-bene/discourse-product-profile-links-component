@@ -78,19 +78,42 @@ repos:
         files: ^(javascripts|scripts|spec|types)/.*\.(ts|gts|d\.ts)$|^tsconfig\.json$
 
       # settings.yml and data/ are triggers because tests read them: the shipped
-      # profile_link_fields default is fed through readLinkConfig, and the
-      # Resolved Product Catalogue is what both sinks are generated from. A
-      # change to either can break a test with no source file touched.
-      # The same drift gate CI runs. It is cheap — two file reads, no network —
+      # profile_link_fields default is fed through readLinkConfig, the Resolved
+      # Product Catalogue is what both sinks are generated from, and the
+      # Collection Links are the Mappings sink's second input. A change to any
+      # of them can break a test with no source file touched.
+      # The same drift gate CI runs. It is cheap — three file reads, no network —
       # and catching a stale settings.yml before the commit exists is the whole
       # point: the generated region is where the shipped Mappings and the
       # catalogue they came from drift apart.
       - id: build-settings
-        name: settings.yml matches the catalogue
+        name: settings.yml matches the catalogue and the Collection Links
         entry: pnpm build:settings --check
         language: system
         pass_filenames: false
-        files: ^settings\.yml$|^data/resolved-products\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
+        files: ^settings\.yml$|^data/(resolved-products|collection-links)\.csv$|^scripts/(build-settings\.ts|lib/(build-settings|build-catalogue|catalogue-refresh)\.ts)$
+
+      # The release gate on the committed files. `undecided` blocks the way an
+      # Unresolved URL does (ADR-0021), and so does a value that earned a
+      # Collection Link and did not get one — the case no curator typed a word
+      # for.
+      #
+      # refresh:catalogue exits non-zero on `undecided` as well, so that half
+      # is defence in depth: this asks about the committed row rather than the
+      # one a refresh saw, and nobody has to run a refresh before committing.
+      # The unfinished half is gated only here, because a refresh stays green
+      # on drift by design. No network, no credentials — the same reason
+      # build-settings above can run as a hook.
+      #
+      # `disposition-table.csv` is in `files` because the second half of the
+      # gate reads it: a refresh that lands a new fault row has to trip the
+      # hook that would catch it.
+      - id: check-collection-assignment
+        name: no Collection Assignment row is undecided or unfinished
+        entry: pnpm check:collection-assignment
+        language: system
+        pass_filenames: false
+        files: ^data/(collection-assignment|disposition-table)\.csv$|^scripts/(check-collection-assignment\.ts|lib/(catalogue-refresh|sheet-export)\.ts)$
 
       - id: vitest
         name: unit tests

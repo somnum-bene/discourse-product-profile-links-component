@@ -1,7 +1,9 @@
-// The Catalogue Refresh. Reads the committed Sheet Exports, asks the cpap.com
-// Shopify Admin API about every product they name plus everything those
-// divisions currently sell, and writes the Resolved Product Catalogue and the
-// review document. Run it with `pnpm refresh:catalogue`.
+// The Catalogue Refresh. Reads the committed Sheet Exports and Collection
+// Assignment, asks the cpap.com Shopify Admin API about every product the
+// exports name, everything those divisions currently sell, and every collection
+// the assignment table points at, and writes the Resolved Product Catalogue,
+// the Collection Links, the disposition table and the review document. Run it
+// with `pnpm refresh:catalogue`.
 //
 // This is the only command that needs a Shopify token, and the only one that
 // needs the network at all after the exports are committed. Everything it
@@ -11,11 +13,23 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { buildCatalogue } from "./lib/build-catalogue.ts";
+import {
+  buildCatalogue,
+  resolvingValues,
+  undeliveredValues,
+} from "./lib/build-catalogue.ts";
 import {
   CATALOGUE_FILE,
   CatalogueRefreshError,
+  COLLECTION_LINKS_FILE,
+  collectionHandlesFrom,
+  collectionLinksCsv,
+  collectionsByHandleQuery,
+  collectionsFromByHandleResponse,
+  curatesTitles,
   declaredDigest,
+  DISPOSITION_FILE,
+  dispositionTableCsv,
   type Division,
   DIVISIONS,
   divisionSurveyQuery,
@@ -23,9 +37,11 @@ import {
   handlesFromSheetRows,
   MAX_SURVEY_PAGES,
   mergeProducts,
+  nextSurveyCursor,
   productsByHandleQuery,
   productsFromByHandleResponse,
   renderReviewDocument,
+  REQUEST_TIMEOUT_MS,
   resolvedProductsCsv,
   REVIEW_FILE,
   SHOP_DOMAIN_VAR,
@@ -33,8 +49,12 @@ import {
   type SurveyedProduct,
   surveyPageFromResponse,
   TOKEN_VAR,
+  undecidedAssignments,
 } from "./lib/catalogue-refresh.ts";
 import {
+  ASSIGNMENT_TABS,
+  type AssignmentRow,
+  assignmentRowsFrom,
   exportFileName,
   SHEET_TABS,
   SheetExportError,
@@ -59,8 +79,19 @@ async function main(): Promise<void> {
   const sheetRows = await readSheetExports();
   const handles = handlesFromSheetRows(sheetRows);
 
+  // The Collection Assignment, re-validated on the way in like the option
+  // tables beside it. It is the curated half of every Collection Link — the
+  // Excluded Products are the derived half — and nothing about it is read here
+  // beyond which collections to ask Shopify about. What a row *means* is the
+  // transform's, so `Override` precedence and the four dispositions are decided
+  // there and never here.
+  const assignments = await readCollectionAssignment();
+  const collectionHandles = collectionHandlesFrom(assignments);
+
   process.stdout.write(
-    `${sheetRows.length} sheet rows naming ${handles.length} product handles\n`
+    `${sheetRows.length} sheet rows naming ${handles.length} product handles\n` +
+      `${assignments.length} assignment rows naming ` +
+      `${collectionHandles.length} collections\n`
   );
 
   const fetched: SurveyedProduct[][] = [];
@@ -74,17 +105,49 @@ async function main(): Promise<void> {
     );
   }
 
+  const admittedCollections: string[] = [];
+
+  for (const batch of handleBatches(collectionHandles)) {
+    const body = await post(endpoint, token, collectionsByHandleQuery(batch));
+    const found = collectionsFromByHandleResponse(body, batch);
+    admittedCollections.push(...found);
+    process.stdout.write(
+      `  collections: Shopify admits ${found.length} of ${batch.length}\n`
+    );
+  }
+
   for (const division of DIVISIONS) {
     fetched.push(await surveyDivision(endpoint, token, division));
   }
 
   const products = mergeProducts(...fetched);
-  const { catalogue, exclusions } = buildCatalogue({ sheetRows, products });
+  const {
+    catalogue,
+    exclusions,
+    collectionLinks,
+    collectionFaults,
+    dispositions,
+  } = buildCatalogue({
+    sheetRows,
+    products,
+    assignments,
+    admittedCollections,
+  });
   const csv = resolvedProductsCsv(catalogue);
-  const digest = declaredDigest(csv);
+  const linksCsv = collectionLinksCsv(collectionLinks);
+  // Built before anything is written, because this is the one that can refuse:
+  // an empty table, a row that names no value, or a cell shaped like an email
+  // address. A refusal that fired after three successful writes would leave the
+  // catalogue regenerated and the disposition table missing, which is the one
+  // combination that ships Mappings with nothing to resolve against them.
+  const dispositionCsv = dispositionTableCsv(dispositions);
+  const digest = declaredDigest(csv, CATALOGUE_FILE);
   const review = renderReviewDocument({
     catalogue,
     exclusions,
+    collectionLinks,
+    collectionFaults,
+    dispositions,
     sheetRows,
     products,
     digest,
@@ -92,25 +155,141 @@ async function main(): Promise<void> {
 
   await mkdir(dirname(CATALOGUE_FILE), { recursive: true });
   await writeFile(CATALOGUE_FILE, csv);
+  await writeFile(COLLECTION_LINKS_FILE, linksCsv);
+  await writeFile(DISPOSITION_FILE, dispositionCsv);
   await writeFile(REVIEW_FILE, review);
 
   process.stdout.write(
     `\n${CATALOGUE_FILE}: ${catalogue.length} Mappings, ${exclusions.length} excluded\n` +
+      `${COLLECTION_LINKS_FILE}: ${collectionLinks.length} Collection Links — ` +
+      `Mappings too, and never Dropdown Options\n` +
+      `${DISPOSITION_FILE}: ${dispositions.length} legacy values, ` +
+      `${resolvingValues(dispositions)} resolving a Profile Link — the one ` +
+      `output that crosses to the non-public repository, and the only one ` +
+      `carrying no member data by design\n` +
       `${REVIEW_FILE}: the review document — read this before applying anything\n` +
       `digest: ${digest}\n`
   );
+
+  // Said on stderr and counted, because a fault is a legacy value someone is
+  // holding that will now resolve to nothing.
+  //
+  // Reported, and deliberately not fatal for the faults drift creates — an
+  // `unassigned-legacy-value`, an `unadmitted-collection`, a
+  // `stale-product-resolution`, a `curation-disagreement`. Not for every fault:
+  // the block below exits non-zero while any assignment row is `undecided`, so
+  // this paragraph is about which faults are survivable rather than about the
+  // command never failing.
+  //
+  // The files are still written whichever it is, because what did derive is
+  // correct and the review document is where these are explained one at a
+  // time; refusing to write would take the report away along with the fault.
+  // The exit stays zero for drift because a refresh going red on catalogue
+  // movement it did not cause and cannot fix is a refresh people stop reading:
+  // a product retiring at Shopify creates one of these, which is the standing
+  // mechanism working. Blocking a release on drift is a gate's job, on the
+  // committed files. An uncurated value is the exception #38 names, and it is
+  // handled here as well as there.
+  if (collectionFaults.length > 0) {
+    const counts = new Map<string, number>();
+
+    for (const fault of collectionFaults) {
+      counts.set(fault.problem, (counts.get(fault.problem) ?? 0) + 1);
+    }
+
+    process.stderr.write(
+      `\n${undeliveredValues(collectionFaults)} Collection Links were owed ` +
+        `and not derived, across ${collectionFaults.length} reported ` +
+        `${collectionFaults.length === 1 ? "problem" : "problems"}: ${[
+          ...counts,
+        ]
+          .map(([problem, count]) => `${count} ${problem}`)
+          .join(", ")}.\n` +
+        `They are reported rather than shipped — see "Collection Links not ` +
+        `derived" in ${REVIEW_FILE}. Each one is a legacy value someone can be ` +
+        `holding whose Profile Link is now missing.\n`
+    );
+  }
+
+  // The one fault that does go red, because it is the one a person typed.
+  //
+  // The paragraph above is about drift: a product retiring at Shopify creates
+  // an `unassigned-legacy-value` or an `unadmitted-collection` through nobody's
+  // action, and a command that failed every time the catalogue moved is a
+  // command people stop reading. `undecided` is not that. It cannot appear
+  // unless a curator opened the Sheet and wrote the word, so a refresh going
+  // red on it is never a refresh going red on something it did not cause.
+  //
+  // #38 asks for exactly this and names the command: "A Catalogue Refresh
+  // exits non-zero while any row is `undecided`." Set after the writes and
+  // after the report, so the artifacts and the review document still land —
+  // taking those away would take the explanation away with them.
+  //
+  // Asked of the assignment rows themselves, not of `collectionFaults`. A
+  // fault is only ever raised while deriving a link for a row this refresh
+  // excluded, so reading `undecided` off the fault list asks a narrower
+  // question than #38 does: an `undecided` row whose Suggested Title still
+  // resolves to a product, or that matches no exported sheet row at all, or
+  // whose legacy PNum nothing claims, never reaches that loop and never
+  // becomes a fault. Refresh would then exit zero with the word sitting in
+  // the Sheet, which is the state the gate exists to refuse.
+  // `undecidedAssignments` is the same function the standalone gate asks, so
+  // the two agree by construction rather than by both being maintained.
+  const undecided = undecidedAssignments(assignments);
+
+  if (undecided.length > 0) {
+    process.exitCode = 1;
+    // `undecidedAssignments` filters, so it returns the same object
+    // references, and a row's position in `assignments` is its position in the
+    // Sheet. `+ 2` for the header row and for counting from one, the same
+    // convention `assignmentRowsFrom` and the standalone gate both use.
+    const undecidedRows = new Set<AssignmentRow>(undecided);
+
+    process.stderr.write(
+      `\n${undecided.length} of ${assignments.length} Collection Assignment ` +
+        `${undecided.length === 1 ? "row is" : "rows are"} still ` +
+        `\`undecided\`. That is an absence of evidence rather than a ` +
+        `preference, so it blocks the ship (ADR-0021) and this refresh exits ` +
+        `non-zero. The files above were still written. ` +
+        // Located here, not only in the review document. #38 asks the failure
+        // to make the fix obvious without hunting, and a count sends a reader
+        // to a file to find out which rows it meant.
+        //
+        // Coordinates, never cells, the way the standalone gate locates the
+        // same rows: a row number is a position rather than content, and
+        // `Field` is a Managed Field name — not because the column is
+        // described that way, but because `assignmentRowsFrom` refuses the
+        // tab outright unless every `Field` cell is one of `MANAGED_FIELDS`.
+        // Read verbatim it would be workbook content like any other cell, and
+        // this stderr is a public CI artifact. `Legacy PNum(s)`, `Legacy
+        // Text`, `Profile Link Value` and `Rationale` are workbook content
+        // and are not reported.
+        `The ${undecided.length === 1 ? "row is" : "rows are"} located ` +
+        `below; the cells are not reported:\n` +
+        assignments
+          .map((row, index) => ({ row, index }))
+          .filter(({ row }) => undecidedRows.has(row))
+          .map(
+            ({ row, index }) =>
+              `  - ${row.field} row ${index + 2}, column ` +
+              `\`Disposition\` (\`${exportFileName(ASSIGNMENT_TABS[0])}\`)`
+          )
+          .join("\n") +
+        `\n`
+    );
+  }
 
   for (const division of DIVISIONS) {
     const mappings = catalogue.filter(
       (entry) => entry.userFieldName === division.userFieldName
     ).length;
 
-    // Stated rather than left as a zero to be interpreted: `Humidifier` is
-    // meant to produce nothing (ADR-0012), and a run that printed the same
-    // silence for "nothing to map" and "everything failed to resolve" would
-    // make the expected case look like the broken one.
+    // Stated rather than left as a zero to be interpreted: a field whose tab
+    // curates no Suggested columns is meant to produce nothing (ADR-0012), and
+    // a run that printed the same silence for "nothing to map" and "everything
+    // failed to resolve" would make the expected case look like the broken one.
     process.stdout.write(
-      mappings === 0
+      mappings === 0 && !curatesTitles(division.userFieldName)
         ? `${division.userFieldName}: no Mappings — expected, the tab curates none\n`
         : `${division.userFieldName}: ${mappings} Mappings\n`
     );
@@ -118,7 +297,7 @@ async function main(): Promise<void> {
 }
 
 /**
- * The three Sheet Exports, re-validated on the way in. They are committed, so
+ * The Sheet Exports, re-validated on the way in. They are committed, so
  * this rereads them rather than the spreadsheet — the point of committing them
  * is that a refresh and a review are looking at the same rows.
  */
@@ -134,12 +313,33 @@ async function readSheetExports(): Promise<SheetRow[]> {
   return rows;
 }
 
+/**
+ * The Collection Assignment, re-validated on the way in. Committed for the same
+ * reason the option tables are, and read here for the first time: until this
+ * command derived Collection Links from it, the export was written and nothing
+ * consumed it.
+ */
+async function readCollectionAssignment(): Promise<AssignmentRow[]> {
+  const rows: AssignmentRow[] = [];
+
+  for (const tab of ASSIGNMENT_TABS) {
+    const path = join(EXPORT_DIR, exportFileName(tab));
+    const csvText = await readFile(path, "utf8");
+    rows.push(...assignmentRowsFrom(tab, csvText));
+  }
+
+  return rows;
+}
+
 async function surveyDivision(
   endpoint: string,
   token: string,
   division: Division
 ): Promise<SurveyedProduct[]> {
   const products: SurveyedProduct[] = [];
+  // Every cursor already sent, so a page pointing back at one is refused
+  // rather than walked again until the page limit reports the wrong cause.
+  const requested = new Set<string>();
   let cursor: string | null = null;
 
   for (let page = 1; page <= MAX_SURVEY_PAGES; page += 1) {
@@ -151,14 +351,21 @@ async function surveyDivision(
     const surveyed = surveyPageFromResponse(body, division);
     products.push(...surveyed.products);
 
-    if (!surveyed.hasNextPage) {
+    // The page-transition decision, including the refusal when Shopify
+    // reports another page and gives no cursor to reach it, is
+    // `nextSurveyCursor`'s — in the library because this loop is not
+    // reachable from a test, and the refusal is the part worth testing.
+    const next = nextSurveyCursor(surveyed, division, page, requested);
+
+    if (next === null) {
       process.stdout.write(
         `  ${division.tag}: ${products.length} live products\n`
       );
       return products;
     }
 
-    cursor = surveyed.endCursor;
+    requested.add(next);
+    cursor = next;
   }
 
   throw new CatalogueRefreshError(
@@ -181,6 +388,7 @@ async function post(
 ): Promise<unknown> {
   const response = await fetch(endpoint, {
     method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": token,

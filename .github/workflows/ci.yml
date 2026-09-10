@@ -46,11 +46,27 @@ jobs:
 
       - run: pnpm test
 
-      # The drift gate. `settings.yml` ships the catalogue as the setting's
-      # default (ADR-0008), so the committed file and
-      # data/resolved-products.csv have to agree — a hand edit to the generated
-      # region is exactly how they stop agreeing, and it looks like ordinary
-      # configuration in a diff. The build needs no credentials, which is what
-      # lets this run here at all.
-      - name: settings.yml matches the catalogue
+      # The drift gate. `settings.yml` ships the Mappings as the setting's
+      # default (ADR-0008), so the committed file, data/resolved-products.csv
+      # and data/collection-links.csv all have to agree — a hand edit to the
+      # generated region is exactly how they stop agreeing, and it looks like
+      # ordinary configuration in a diff. The build needs no credentials, which
+      # is what lets this run here at all.
+      - name: settings.yml matches the catalogue and the Collection Links
         run: pnpm build:settings --check
+
+      # The release gate on the committed files. An `undecided` Collection
+      # Assignment row is an absence of evidence, not a preference, and blocks
+      # the way an Unresolved URL does (ADR-0021); a value that earned a
+      # Collection Link and did not get one blocks for the same reason.
+      #
+      # refresh:catalogue also exits non-zero on `undecided`, so that half is
+      # defence in depth — this catches the row that is committed, which is a
+      # different question from the row a refresh happened to see, because
+      # nobody has to run a refresh before merging. The unfinished half is
+      # gated only here: a refresh stays green on it because it is drift.
+      #
+      # Needs no credentials either, for the same reason build:settings
+      # doesn't.
+      - name: no Collection Assignment row is undecided or unfinished
+        run: pnpm check:collection-assignment

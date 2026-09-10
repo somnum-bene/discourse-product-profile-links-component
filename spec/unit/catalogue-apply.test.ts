@@ -32,16 +32,24 @@ import {
   CATALOGUE_FILE,
   readResolvedProducts,
 } from "../../scripts/lib/catalogue-refresh.ts";
-import { type FieldWrite, planApply } from "../../scripts/lib/plan-apply.ts";
+import {
+  type FieldWrite,
+  MANAGED_FIELDS,
+  planApply,
+} from "../../scripts/lib/plan-apply.ts";
 
 const LIB_FILE = "scripts/lib/catalogue-apply.ts";
 const COMMAND_FILE = "scripts/apply-catalogue.ts";
 
 /**
- * The test instance's three fields exactly as `/admin/config/user_fields.json`
- * reported them on 2026-08-05, all thirteen keys of each. The nine keys the plan
- * has no opinion about are here because the update route takes a whole field
- * object, so they are the thing most likely to be lost.
+ * `Machine` and `Mask` exactly as `/admin/config/user_fields.json` reported
+ * them on 2026-08-05, all thirteen keys of each, plus a third field the
+ * instance also defines that this pipeline does not manage — a leftover from
+ * before ADR-0022 dropped `Humidifier` from scope, standing in generically for
+ * "a Custom User Field on the instance this pipeline has no opinion about".
+ * The nine keys the plan has no opinion about are here because the update
+ * route takes a whole field object, so they are the thing most likely to be
+ * lost.
  */
 const LIVE_RESPONSE = {
   user_fields: [
@@ -80,8 +88,8 @@ const LIVE_RESPONSE = {
     },
     {
       id: 4,
-      name: "Humidifier",
-      description: "Humidifier link",
+      name: "Sleep Position",
+      description: "Sleep Position",
       field_type: "dropdown",
       editable: true,
       required: false,
@@ -91,12 +99,7 @@ const LIVE_RESPONSE = {
       show_on_signup: true,
       searchable: false,
       position: 3,
-      options: [
-        "DreamStation Heated Humidifier",
-        "HC150 Heated Humidifier",
-        "Dreamstation Heated Humidifier",
-        "S9™ Series H5i™ Heated Humidifier",
-      ],
+      options: ["Side Sleeper", "Back Sleeper", "Stomach Sleeper"],
     },
   ],
 };
@@ -172,12 +175,8 @@ describe("the arguments the command takes", () => {
   });
 
   it("takes a field to clear either spelling", () => {
-    expect(parseApplyArgs(["--clear", "Humidifier"]).clear).toEqual([
-      "Humidifier",
-    ]);
-    expect(parseApplyArgs(["--clear=Humidifier"]).clear).toEqual([
-      "Humidifier",
-    ]);
+    expect(parseApplyArgs(["--clear", "Vendor"]).clear).toEqual(["Vendor"]);
+    expect(parseApplyArgs(["--clear=Vendor"]).clear).toEqual(["Vendor"]);
   });
 
   it("takes a field name with spaces in it", () => {
@@ -188,8 +187,8 @@ describe("the arguments the command takes", () => {
 
   it("collects more than one field, one name at a time", () => {
     expect(
-      parseApplyArgs(["--clear", "Humidifier", "--clear", "Mask"]).clear
-    ).toEqual(["Humidifier", "Mask"]);
+      parseApplyArgs(["--clear", "Vendor", "--clear", "Mask"]).clear
+    ).toEqual(["Vendor", "Mask"]);
   });
 
   it("refuses clear with nothing after it, rather than clearing everything", () => {
@@ -279,10 +278,10 @@ describe("reading the field definitions", () => {
     expect(fields.map((entry) => [entry.id, entry.name])).toEqual([
       [2, "Machine"],
       [3, "Mask"],
-      [4, "Humidifier"],
+      [4, "Sleep Position"],
     ]);
     expect(Object.keys(fields[0])).toHaveLength(13);
-    expect(fields[2].description).toBe("Humidifier link");
+    expect(fields[2].description).toBe("Sleep Position");
     expect(fields[2].position).toBe(3);
   });
 
@@ -339,10 +338,10 @@ describe("reading the field definitions", () => {
 });
 
 describe("the body one write sends", () => {
-  const humidifier = parseUserFields(LIVE_RESPONSE)[2];
+  const sleepPosition = parseUserFields(LIVE_RESPONSE)[2];
 
   it("carries every key the instance reported except the id", () => {
-    const { user_field: body } = writePayload(humidifier, ["Only this"]);
+    const { user_field: body } = writePayload(sleepPosition, ["Only this"]);
 
     expect(body.id).toBeUndefined();
     expect(Object.keys(body).sort()).toEqual(
@@ -361,30 +360,29 @@ describe("the body one write sends", () => {
         "show_on_user_card",
       ].sort()
     );
-    expect(body.description).toBe("Humidifier link");
+    expect(body.description).toBe("Sleep Position");
     expect(body.show_on_user_card).toBe(true);
     expect(body.position).toBe(3);
   });
 
   it("replaces the options and nothing else", () => {
-    const { user_field: body } = writePayload(humidifier, ["A", "B"]);
+    const { user_field: body } = writePayload(sleepPosition, ["A", "B"]);
 
     expect(body.options).toEqual(["A", "B"]);
   });
 
   it("leaves the field it was given alone", () => {
-    writePayload(humidifier, ["A"]);
+    writePayload(sleepPosition, ["A"]);
 
-    expect(humidifier.options).toEqual([
-      "DreamStation Heated Humidifier",
-      "HC150 Heated Humidifier",
-      "Dreamstation Heated Humidifier",
-      "S9™ Series H5i™ Heated Humidifier",
+    expect(sleepPosition.options).toEqual([
+      "Side Sleeper",
+      "Back Sleeper",
+      "Stomach Sleeper",
     ]);
   });
 
   it("writes options in the order it was given, not sorted", () => {
-    const { user_field: body } = writePayload(humidifier, [
+    const { user_field: body } = writePayload(sleepPosition, [
       "zeta",
       "Alpha",
       "Mu",
@@ -398,12 +396,12 @@ describe("the body one write sends", () => {
 describe("a write this transport cannot carry out", () => {
   const clear: FieldWrite = {
     id: 4,
-    user_field_name: "Humidifier",
+    user_field_name: "Vendor",
     reason: "clear",
-    before: ["DreamStation Heated Humidifier"],
+    before: ["Acme Supply Co"],
     after: [],
     added: [],
-    removed: ["DreamStation Heated Humidifier"],
+    removed: ["Acme Supply Co"],
   };
   const populate: FieldWrite = {
     id: 2,
@@ -435,18 +433,24 @@ describe("whether a plan gets sent at all", () => {
 
   it("proceeds when there is nothing in the way", () => {
     expect(
-      applyDecision(planApply(current, catalogue, { replace: true }))
+      applyDecision(planApply(current, catalogue, [], { replace: true }))
     ).toEqual({ kind: "proceed" });
   });
 
   it("proceeds when there is nothing to do either", () => {
     expect(
-      applyDecision({ writes: [], refusals: [], warnings: [], unchanged: [] })
+      applyDecision({
+        writes: [],
+        refusals: [],
+        warnings: [],
+        unchanged: [],
+        retained: [],
+      })
     ).toEqual({ kind: "proceed" });
   });
 
   it("stops on a refusal and says nothing was written", () => {
-    const decision = applyDecision(planApply(current, catalogue));
+    const decision = applyDecision(planApply(current, catalogue, []));
 
     expect(decision.kind).toBe("refused");
     expect(decision.kind === "refused" && decision.message).toContain(
@@ -459,7 +463,11 @@ describe("whether a plan gets sent at all", () => {
 
   it("counts the refusals, because one field refusing stops them all", () => {
     const decision = applyDecision(
-      planApply([...current, dropdown(9, "Mask", ["Typed by hand"])], catalogue)
+      planApply(
+        [...current, dropdown(9, "Mask", ["Typed by hand"])],
+        catalogue,
+        []
+      )
     );
 
     expect(decision.kind === "refused" && decision.message).toMatch(
@@ -469,12 +477,15 @@ describe("whether a plan gets sent at all", () => {
 
   it("stops on a clear before any request, not partway through the writes", () => {
     const decision = applyDecision(
-      planApply(current, catalogue, { replace: true, clear: ["Humidifier"] })
+      planApply(current, catalogue, [], {
+        replace: true,
+        clear: ["Sleep Position"],
+      })
     );
 
     expect(decision.kind).toBe("impossible");
     expect(decision.kind === "impossible" && decision.message).toContain(
-      "Humidifier"
+      "Sleep Position"
     );
     expect(decision.kind === "impossible" && decision.message).toContain(
       CLEAR_UNSUPPORTED
@@ -485,12 +496,16 @@ describe("whether a plan gets sent at all", () => {
     // Nothing to remove means no write, so there is nothing this transport
     // cannot carry out.
     const plan = planApply(
-      [...current, dropdown(9, "Sleep Position", [])],
+      [...current, dropdown(9, "Vendor", [])],
       catalogue,
-      { replace: true, clear: ["Sleep Position"] }
+      [],
+      {
+        replace: true,
+        clear: ["Vendor"],
+      }
     );
 
-    expect(plan.unchanged).toContain("Sleep Position");
+    expect(plan.unchanged).toContain("Vendor");
     expect(applyDecision(plan)).toEqual({ kind: "proceed" });
   });
 });
@@ -641,14 +656,12 @@ describe("how far the instance's component is from the catalogue", () => {
   it("mentions a field the instance maps and the catalogue does not", () => {
     const live = [
       ...shipped,
-      field("Humidifier", [
-        mapping("HC150", "https://www.cpap.com/products/h"),
-      ]),
+      field("Vendor", [mapping("Acme", "https://www.cpap.com/products/h")]),
     ];
     const notes = componentDrift(live, shipped);
 
     expect(notes).toHaveLength(1);
-    expect(notes[0].user_field_name).toBe("Humidifier");
+    expect(notes[0].user_field_name).toBe("Vendor");
     expect(notes[0].detail).toContain("does not touch that field");
   });
 
@@ -658,7 +671,10 @@ describe("how far the instance's component is from the catalogue", () => {
     // catalogue on disk carries 55 Mappings. Writing the Dropdown Options now
     // would produce an Unmatched Value for every one of them.
     const catalogue = realCatalogue();
-    const notes = componentDrift([], renderFieldMappings(catalogue));
+    const notes = componentDrift(
+      [],
+      renderFieldMappings(catalogue, [], MANAGED_FIELDS)
+    );
 
     expect(notes.map((note) => note.user_field_name)).toEqual([
       "Machine",
@@ -689,12 +705,12 @@ describe("reading the write back", () => {
     // The failure this exists for: an empty options list is answered 200 and
     // changes nothing, so the run is green and the site is untouched.
     const mismatches = readbackMismatches(
-      [dropdown(4, "Humidifier", ["DreamStation Heated Humidifier"])],
-      [{ user_field_name: "Humidifier", options: [] }]
+      [dropdown(4, "Vendor", ["Acme Supply Co"])],
+      [{ user_field_name: "Vendor", options: [] }]
     );
 
     expect(mismatches).toHaveLength(1);
-    expect(mismatches[0].actual).toEqual(["DreamStation Heated Humidifier"]);
+    expect(mismatches[0].actual).toEqual(["Acme Supply Co"]);
     expect(mismatches[0].detail).toContain("a 200 is not confirmation");
   });
 
@@ -773,7 +789,7 @@ describe("the two digests that have to agree", () => {
 
 describe("what a person is shown before authorising anything", () => {
   it("puts the refusals first, since they are why nothing happens", () => {
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue());
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), []);
     const rendered = renderPlan(plan);
 
     expect(rendered.startsWith("REFUSED Machine (would-remove-options)")).toBe(
@@ -784,7 +800,7 @@ describe("what a person is shown before authorising anything", () => {
 
   it("names each option it would remove and what it is probably a spelling of", () => {
     const rendered = renderPlan(
-      planApply(parseUserFields(LIVE_RESPONSE), realCatalogue())
+      planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), [])
     );
 
     expect(rendered).toContain(
@@ -794,9 +810,14 @@ describe("what a person is shown before authorising anything", () => {
   });
 
   it("prints added and removed in full rather than as a count", () => {
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), realCatalogue(), {
-      replace: true,
-    });
+    const plan = planApply(
+      parseUserFields(LIVE_RESPONSE),
+      realCatalogue(),
+      [],
+      {
+        replace: true,
+      }
+    );
     const rendered = renderPlan(plan);
     const machine = plan.writes.find(
       (write) => write.user_field_name === "Machine"
@@ -824,6 +845,7 @@ describe("what a person is shown before authorising anything", () => {
             url: "https://www.cpap.com/products/a",
           },
         ],
+        [],
         { managedFields: ["Machine"] }
       )
     );
@@ -831,9 +853,67 @@ describe("what a person is shown before authorising anything", () => {
     expect(rendered).toContain("UNCHANGED Machine");
   });
 
+  /** One product left, and the catch-all beside it that no longer resolves. */
+  function retiring(replace: boolean) {
+    return planApply(
+      [dropdown(2, "Machine", ["AirSense 11", "CPAP Machines (Discontinued)"])],
+      [
+        {
+          userFieldName: "Machine",
+          value: "AirSense 11",
+          handle: "a",
+          status: "ACTIVE",
+          url: "https://www.cpap.com/products/a",
+        },
+      ],
+      [
+        {
+          userFieldName: "Machine",
+          value: "CPAP Machines (Discontinued)",
+          url: "https://www.cpap.com/collections/cpap-machines",
+        },
+      ],
+      { managedFields: ["Machine"], replace }
+    );
+  }
+
+  it("says what a removal keeps as well as what it takes", () => {
+    const rendered = renderPlan(retiring(true));
+
+    expect(rendered).toContain(
+      'RETAINED Machine "CPAP Machines (Discontinued)"'
+    );
+    expect(rendered).toContain("removed as a Dropdown Option");
+    expect(rendered).toContain("retained as a Mapping");
+    expect(rendered).toContain(
+      "https://www.cpap.com/collections/cpap-machines"
+    );
+    expect(rendered.indexOf("RETAINED Machine")).toBeGreaterThan(
+      rendered.indexOf('  - "CPAP Machines (Discontinued)"')
+    );
+  });
+
+  it("qualifies the refusal rather than arriving after it is decided", () => {
+    const rendered = renderPlan(retiring(false));
+
+    expect(rendered.startsWith("REFUSED Machine (would-remove-options)")).toBe(
+      true
+    );
+    expect(rendered).toContain('  - "CPAP Machines (Discontinued)"');
+    expect(rendered.indexOf("RETAINED Machine")).toBeGreaterThan(
+      rendered.indexOf('  - "CPAP Machines (Discontinued)"')
+    );
+  });
+
   it("says nothing at all about a plan with nothing in it", () => {
     expect(
-      renderPlan({ writes: [], refusals: [], warnings: [], unchanged: [] })
+      renderPlan({
+        writes: [],
+        refusals: [],
+        warnings: [],
+        unchanged: [],
+        retained: [],
+      })
     ).toBe("");
   });
 
@@ -866,9 +946,9 @@ describe("the whole decision against the instance as it stands", () => {
     const current = parseUserFields(LIVE_RESPONSE);
     const targets = dropdownOptionsFor(catalogue);
 
-    expect(planApply(current, catalogue).writes).toEqual([]);
+    expect(planApply(current, catalogue, []).writes).toEqual([]);
 
-    const plan = planApply(current, catalogue, { replace: true });
+    const plan = planApply(current, catalogue, [], { replace: true });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.writes.map((write) => write.user_field_name)).toEqual([
@@ -898,36 +978,39 @@ describe("the whole decision against the instance as it stands", () => {
     const applied: LiveUserField[] = [
       dropdown(2, "Machine", [...targets[0].options]),
       dropdown(3, "Mask", [...targets[1].options]),
-      dropdown(4, "Humidifier", ["DreamStation Heated Humidifier"]),
+      dropdown(4, "Sleep Position", ["Side Sleeper"]),
     ];
-    const second = planApply(applied, catalogue, { replace: true });
+    const second = planApply(applied, catalogue, [], {
+      replace: true,
+      managedFields: ["Machine", "Mask", "Sleep Position"],
+    });
 
     expect(second.writes).toEqual([]);
     expect(second.refusals).toEqual([]);
     expect(second.unchanged).toEqual(["Machine", "Mask"]);
     expect(readbackMismatches(applied, targets)).toEqual([]);
     expect(second.warnings.map((warning) => warning.user_field_name)).toEqual([
-      "Humidifier",
+      "Sleep Position",
     ]);
   });
 
-  it("leaves Humidifier alone when only Machine and Mask are being written", () => {
+  it("leaves Sleep Position alone when only Machine and Mask are being written", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, [], {
       replace: true,
     });
 
     expect(
-      plan.writes.some((write) => write.user_field_name === "Humidifier")
+      plan.writes.some((write) => write.user_field_name === "Sleep Position")
     ).toBe(false);
     expect(unsupportedWrites(plan.writes)).toEqual([]);
   });
 
-  it("stops before any request when Humidifier clearing is asked for", () => {
+  it("stops before any request when Sleep Position clearing is asked for", () => {
     const catalogue = realCatalogue();
-    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, {
+    const plan = planApply(parseUserFields(LIVE_RESPONSE), catalogue, [], {
       replace: true,
-      clear: ["Humidifier"],
+      clear: ["Sleep Position"],
     });
 
     expect(plan.writes.map((write) => write.reason)).toContain("clear");
@@ -973,6 +1056,64 @@ describe("what this step is not allowed to do", () => {
   it("reads the catalogue through the reader that checks its digest", () => {
     expect(command).toContain("readResolvedProducts(catalogueText)");
     expect(command).not.toContain('split("\\n")');
+  });
+
+  it("reads the Collection Links and compares drift against both arrays", () => {
+    // `settings.yml` ships both, so comparing an instance's live Mappings
+    // against the products alone reports every Collection Link as `extra` —
+    // "the component carries Mappings the catalogue does not" — on every run.
+    // Substituting `[]` for the second argument left the whole suite green,
+    // which is what this asserts against.
+    expect(command).toContain("readCollectionLinks(");
+    expect(command).toContain("COLLECTION_LINKS_FILE");
+    expect(command).toContain(
+      "renderFieldMappings(catalogue, collectionLinks, MANAGED_FIELDS)"
+    );
+  });
+
+  it("hands the plan the links, and not an empty array", () => {
+    // The third reader of the same two arrays, and the only one whose failure
+    // is silent in both directions: a plan built from `[]` finds no Collection
+    // Link behind any removal, so every `RETAINED` line disappears and the
+    // refusal falls back to its unqualified wording. Nothing throws and
+    // nothing looks wrong — the plan stays internally consistent and is
+    // simply mistaken about the world.
+    //
+    // Substituting `[]` for this argument left all 687 tests green, exactly
+    // as it did for `renderFieldMappings` above. The `planApply` unit tests
+    // cannot reach it: they hand the function their own links, so they pin
+    // the decision and never the wiring.
+    expect(command).toContain(
+      "planApply(current, catalogue, collectionLinks, {"
+    );
+    expect(command).not.toMatch(/planApply\([^)]*,\s*\[\]/);
+  });
+
+  it("writes Dropdown Options from the products alone", () => {
+    // The other half of the asymmetry, and the reason the two sinks take
+    // different arguments: what this command pushes to a live instance comes
+    // from `dropdownOptionsFor(catalogue)`, which is never handed a Collection
+    // Link (ADR-0021). Drift reads both arrays; the write reads one.
+    expect(command).toContain("dropdownOptionsFor(catalogue)");
+    expect(command).not.toContain("dropdownOptionsFor(catalogue, ");
+    expect(command).not.toMatch(/dropdownOptionsFor\([^)]*collectionLinks/);
+  });
+
+  it("refuses a settings.yml a fresh build would not write", () => {
+    // The digest guard records the catalogue alone, so a links file that was
+    // edited and re-digested without a rebuild passed it while leaving the
+    // drift comparison below measuring against Mappings that were never
+    // shipped. Both guards run before anything is written to a live site.
+    expect(command).toContain("driftReport(");
+    expect(command).toContain("settingsWithCatalogue(");
+
+    const digestGuard = command.indexOf("digestDisagreement(");
+    const staleGuard = command.indexOf("driftReport(");
+    const firstWrite = command.indexOf("for (const write of plan.writes)");
+
+    expect(digestGuard).toBeGreaterThan(-1);
+    expect(staleGuard).toBeGreaterThan(digestGuard);
+    expect(firstWrite).toBeGreaterThan(staleGuard);
   });
 
   it("re-reads the instance after writing instead of trusting the responses", () => {

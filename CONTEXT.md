@@ -8,6 +8,10 @@ A Discourse theme component that turns a User's Custom User Field values into la
 A labelled hyperlink shown for a User, derived from one of their Custom User Field values.
 _Avoid_: link, custom link, product link
 
+**Collection Link**:
+A Profile Link whose target is a cpap.com collection page rather than a product page, held by a User whose equipment cpap.com no longer sells. Its value is the equipment's name with ` (Discontinued)` appended, so the label says what the link is (ADR-0020). It is a Mapping with no Dropdown Option behind it — resolvable by a User who already holds the value, never offered to a User choosing one — and it reaches the Mappings sink through its own array rather than the Resolved Product Catalogue (ADR-0021).
+_Avoid_: category link, collection page link, discontinued link, fallback link
+
 **User**:
 A person with a Discourse account, whose Custom User Field values produce Profile Links.
 _Avoid_: member, customer, profile owner
@@ -21,7 +25,7 @@ A field defined at `/admin/config/user_fields` that Users fill in on their profi
 _Avoid_: user field, profile field, custom field
 
 **Dropdown Option**:
-One of the predefined values a Custom User Field offers. A Mapping's value must equal one exactly, or it resolves no Profile Link.
+One of the predefined values a Custom User Field offers. Every Dropdown Option must have a Mapping behind it or it is an Unmatched Value waiting to happen — but the reverse does not hold, because a Collection Link is a Mapping deliberately absent from the options (ADR-0021). The rule is that the options are a subset of the Mapping values, not that the two agree.
 _Avoid_: choice, option value, field option
 
 **Field Mapping**:
@@ -53,11 +57,15 @@ The setting that logs Unmatched Values to the console. Config Problems are repor
 _Avoid_: verbose mode, logging, dev mode
 
 **Sheet Export**:
-A verbatim export of one tab of the migration spreadsheet, committed for provenance. Its `Suggested Title` and `Suggested URL` columns are the only ones that matter; the rest describe the legacy bulletin board it was written for. Never read by the component.
+A verbatim export of one tab of the migration spreadsheet, committed for provenance. Never read by the component. Two kinds, held to the same fail-closed guards and not to the same shape: an **Option Table** export (`user_machine`, `user_mask`), which maps a legacy identity onto a Suggested pair, and the **Collection Assignment** export, which reduces to no such pair. All four of an Option Table's meaningful columns carry weight — the legacy `Value` is the identifier a member holds and the key the Collection Assignment is curated against, the `Text` is the name the bulletin board showed and the base name a Collection Link falls back to on a retired catch-all title (ADR-0020), and the `Suggested Title` and `Suggested URL` are the curated join to Shopify. The rest describe the legacy board it was written for.
 _Avoid_: the sheet, product CSV, source CSV
 
+**Collection Assignment**:
+The curated table a person fills in to decide which retired titles become Collection Links — one row per retired title someone put into the table, not one per option-table row, carrying its legacy values, its proposed `Profile Link Value`, a recommended collection with a `Confidence` and a `Rationale`, a curator-editable `Override`, and a Disposition. **Not every row is a Collection Link candidate.** A row whose title turns out to resolve to a live product carries `n/a` in both its `Base Name Source` and its `Profile Link Value`, and is a record of that decision rather than a candidate — so a consumer has to read the row before treating it as one. A person edits it; this pipeline only reads it, and a **Catalogue Refresh** is the one thing that does — joining it to the Excluded Products by legacy value to derive every Collection Link, with an `Override` beating a recommendation and a collection Shopify does not admit reported rather than shipped. The recommendation is a proposal rather than a resolved value, which is why it is exported as its own shape rather than as an Option Table with two of its eleven columns picked out.
+_Avoid_: assignment sheet, collection tab, mapping table
+
 **Suggested Title**:
-The curated display name for a product, taken from a Sheet Export. Becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree.
+The curated display name for a product, taken from a Sheet Export. For a Resolved Product it becomes both a Mapping's value and a Dropdown Option, so the two cannot disagree. For a Collection Link it supplies the base name the ` (Discontinued)` suffix is appended to — except on the four retired legacy catch-all titles, which name no equipment, where the base name comes from the Sheet Export's `Text` column instead (ADR-0020).
 _Avoid_: product name, label, title
 
 **Resolved Product**:
@@ -65,15 +73,29 @@ A Suggested Title joined to a live product in the cpap.com Shopify catalogue, ca
 _Avoid_: product, matched product, SKU
 
 **Resolved Product Catalogue**:
-The committed file of Resolved Products. The single input to both sinks — the Mappings shipped in `settings.yml` and the Dropdown Options pushed to a site.
+The committed file of Resolved Products. The only input to the Dropdown Options pushed to a site, and — together with the Collection Links — one of two inputs to the Mappings shipped in `settings.yml`. That asymmetry is the point: what a site offers comes from products alone, so a Collection Link cannot be offered by construction (ADR-0021).
 _Avoid_: product CSV, catalogue file, product list
 
 **Excluded Product**:
-A Suggested Title left out of the Resolved Product Catalogue because Shopify reports its product archived, unpublished, or tagged `Discontinued`. Reported with its reason, never dropped silently.
+A Suggested Title left out of the Resolved Product Catalogue, reported with its reason and never dropped silently. Exclusion no longer means no Profile Link: five of the seven reasons — `discontinued-suffix`, `not-active`, `unpublished`, `discontinued-tag`, `no-matching-product` — send the title on to become a Collection Link instead. Only `blank-title` and `ambiguous-title-match` end there, the second deliberately, because a title matching two products is evidence the product is still sold and the Sheet Export is wrong (ADR-0020).
 _Avoid_: missing product, failed product, dead link
 
+**Collection Link Fault**:
+A Collection Link that was owed and could not be derived, reported by a **Catalogue Refresh** rather than shipped — an unadmitted collection, a legacy value no Collection Assignment row claims, an `undecided` row, a base name that is nothing but the suffix, a value the curated table and the transform disagree about, a `resolves-to-product` row whose product the store has since retired, one legacy value two assignment rows claim differently, or several legacy values collapsing onto one value that they then disagree about — either naming two collections between them, or only some of them earning a link at all. Distinct from a **Config Problem**, which is a fault in configuration that already shipped, and from an **Excluded Product**, which is the pipeline working: a Fault is the pipeline unable to finish a job it was asked to do, so the link is withheld and named in the review document. Most kinds do not fail the refresh — a product retiring at Shopify produces one through nobody's action, and a command that went red every time the catalogue moved is a command people stop reading. The `undecided` row is the exception, and a **Catalogue Refresh** exits non-zero while one exists (#38): it cannot appear unless a curator opened the Sheet and wrote the word, so going red on it is never going red on drift. The exit code is set after the artifacts and the review document are written, and `pnpm check:collection-assignment` asks the same question of the committed files by calling the same function, so the refresh and the gate agree by construction.
+_Avoid_: derivation error, broken link, missing link, unresolved collection
+
+**Disposition**:
+What the curated collection table says should happen to one of its rows — `collection`, `plain-text`, `resolves-to-product`, or `undecided`. `undecided` is not a preference but an absence of evidence, so it blocks shipping the way an Unresolved URL does, rather than quietly resolving to no link (ADR-0021). `resolves-to-product` is the row that was never a Collection Link candidate: the title names a product the store still sells, so the legacy value becomes an ordinary product Mapping. It is a decision, not an absence of one, and it does **not** mean the row is dropped — the legacy identifier is still one a member can be holding, so it still carries a value downstream. It is also the one disposition the derivation can prove wrong: if that product later retires, its title is excluded for a reason that earns a link, and the row's claim no longer holds — reported as a **Collection Link Fault** rather than honoured, because honouring it would drop the value to plain text with no Mapping and no complaint. An empty cell is none of the four and is refused: `undecided` is a curator saying nobody has looked yet, and a blank is a row that cannot say even that.
+
+The **Disposition Table** widens this vocabulary and never narrows it: a curator's four words mean there exactly what they mean here, and it adds three no curator writes because they are not decisions — `blank-title` and `ambiguous-title-match`, the two exclusions that end a title's journey, and `collection-link-fault`, a **Collection Link Fault** seen from the member's side. They stay apart from `plain-text` because the result for the member being identical is not the same as the cause being identical: one is a curator wanting no link, one is evidence the Sheet Export is wrong, and one is work outstanding.
+_Avoid_: status, state, decision, resolution, `not-a-candidate`
+
+**Disposition Table**:
+One row per legacy option value across both Managed Fields — legacy identifier, legacy display text, chosen Profile Link value, target URL, Disposition — emitted by a **Catalogue Refresh**, committed, and read here by one release gate and nothing else — `pnpm check:collection-assignment` refuses a `collection-link-fault` row and asks the file nothing further, so nothing this repository builds or ships is derived from it. It is the entire interface to a separate, non-public repository, which joins it against a fresh member export to produce the three columns Discourse asked for: member identifier, custom field name, value. Which string a legacy value becomes is decided here; which member holds it is decided there, and that division is what keeps this repository free of personally identifiable information. Two rules run it. A row **with** a URL carries a value byte-identical to a Mapping shipped in `settings.yml` — stricter than the runtime's own trimmed match on purpose, because a one-byte difference in somebody else's join is a member whose Profile Link renders nothing, and that consumer gets none of the runtime's tolerance (ADR-0023). A row **without** one carries the legacy display text verbatim and no suffix, because the suffix is a Collection Link's anchor text (ADR-0020) and a value that is not a link has none: the member keeps what they entered as an **Unmatched Value** rather than losing it. Every legacy value gets a row, including the majority that resolve to a live product, because a table of only the Collection Links would be missing most of what the join needs while looking complete.
+_Avoid_: handoff file, member export, translation table, mapping table
+
 **Catalogue Refresh**:
-Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.
+Rebuilding the Resolved Product Catalogue from the Sheet Exports and Shopify, and emitting the **Disposition Table** alongside it. Deliberate, reviewed as a diff, and the only step that needs Shopify credentials.
 _Avoid_: sync, update, regenerate
 
 **Catalogue Verify**:
@@ -97,11 +119,11 @@ Pushing Dropdown Options from the Resolved Product Catalogue to one Discourse in
 _Avoid_: deploy, push, migration
 
 **Apply Plan**:
-What a Catalogue Apply would do to one instance, decided as data before any request exists — the writes, the refusals that stop all of them, the warnings that do not, and the fields already correct. Produced by one pure function so the destructive decisions are argued with a fixture rather than a live site.
+What a Catalogue Apply would do to one instance, decided as data before any request exists — the writes, the refusals that stop all of them, the warnings that do not, the fields already correct, and the removals that take away a Dropdown Option and nothing else. That last one is a value the catalogue still ships as a **Collection Link**: removed as an option, retained as a Mapping, said in one message because a reader who sees only the first half puts the option back (ADR-0021). It is reported rather than authorised differently — a removal with a retained Collection Link behind it still needs `replace`, like every other removal. Produced by one pure function so the destructive decisions are argued with a fixture rather than a live site.
 _Avoid_: diff, changeset, dry run
 
 **Managed Field**:
-One of the three Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist. A Managed Field with no Mappings behind it is still in scope — that is how `Humidifier` gets reported rather than forgotten — while a field outside the list is never mentioned at all. `Humidifier` is permanently in that state: product decided against a humidifier list, and the field was changed to a text one so a member's legacy entry can be shown as they wrote it (ADR-0012).
+One of the two Custom User Fields this pipeline is responsible for, as named by the Sheet Export allowlist — `Machine` and `Mask`. A Managed Field with no Mappings behind it is still in scope — that is how it gets reported rather than forgotten — while a field outside the list is never mentioned at all. `Humidifier` passed through both states — permanently unmapped under ADR-0012, briefly in scope via Collection Links under ADR-0020 — before being dropped from the pipeline entirely (ADR-0022): its Collection Link targets turned out to carry no real link equity on inspection, and the business no longer needs the field carried through this migration. Its Custom User Field may still exist on the live Discourse instance; that is a site-administration question this pipeline does not answer (ADR-0015). `Software` is a Custom User Field on the instance but was never a Managed Field, and nothing here links it.
 _Avoid_: known field, our field, target field
 
 **Refused URL**:
@@ -132,8 +154,11 @@ A Field Mapping is not a CSV, and a Mapping is not a CSV row — that is what th
 **"Product CSV" is retired.**
 It was reserved for "a genuine CSV file as a source of Mapping data" before there were two of them at different stages. Say **Sheet Export** for the raw spreadsheet tab and **Resolved Product Catalogue** for the file both sinks are generated from; the distinction between them is the whole point of the pipeline, and one name for both erases it.
 
-**Two things are called "discontinued", and only one is authoritative.**
-Shopify's `Discontinued` tag is a live fact about a product. The ` (Discontinued)` suffix on some Suggested Titles is legacy spreadsheet bookkeeping marking a catch-all category link. Both are excluded, for different reasons — see ADR-0012 — but do not treat the suffix as evidence about the catalogue.
+**Three things are called "discontinued", and only one is a fact about a product.**
+Shopify's `Discontinued` tag is a live fact. The ` (Discontinued)` suffix on the four legacy catch-all Suggested Titles is retired spreadsheet bookkeeping and is never evidence about the catalogue. The ` (Discontinued)` suffix on a **Collection Link** value is neither — it is generated by this pipeline, deliberately visible to the User because the value is also the anchor text, and it marks equipment cpap.com no longer sells whatever Shopify's tag says (ADR-0020). A title can reach a Collection Link through the tag, through a non-`ACTIVE` status, through being unpublished, or through matching no product at all.
+
+**"Disposition" means the curated table's column, except where an Apply Plan is the subject.**
+The glossary entry above is the Collection Assignment's column, and it is the only Disposition a Sheet Export, a Catalogue Refresh or the review document has. ADR-0021 and the Apply Plan use the same word for something else — one of the five categories a plan sorts a field into — and that usage is settled rather than sloppy, because a plan has no other word for the set. Qualify it whenever both are in scope, and never let a plan category be called a row's Disposition or the reverse.
 
 **"mapping" unqualified is ambiguous.**
 It spans **Field Mapping** and **Mapping**, which are different things at different levels. Always qualify which one you mean.

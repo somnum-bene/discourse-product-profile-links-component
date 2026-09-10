@@ -162,3 +162,855 @@ describe("what the widened gates still leave alone", () => {
     expect(prettierHook.test("common/common.scss")).toBe(true);
   });
 });
+
+describe("every request this pipeline makes is bounded", () => {
+  /**
+   * Swept rather than listed, for the reason the file header gives. Only
+   * `verify-catalogue.ts` passed a signal; the other four `fetch` calls — the
+   * Google token exchange, the Sheet read, the Shopify survey and the
+   * Discourse write loop — could hang indefinitely with nothing on stdout to
+   * say why. A fifth call site added later is covered here the moment it
+   * exists, without anybody remembering to come back.
+   */
+  /**
+   * The extensions the lint gates accept inside a source directory, which is
+   * what this sweep has to read to be talking about the same files they do.
+   * Pinned against `package.json` below rather than trusted here.
+   */
+  const SOURCE_EXTENSIONS = [
+    "js",
+    "gjs",
+    "mjs",
+    "cjs",
+    "ts",
+    "gts",
+    "mts",
+    "cts",
+  ];
+
+  /**
+   * Every source file under `scripts/`, at any depth.
+   *
+   * This was two `readdirSync` calls — `scripts` and `scripts/lib` — filtered
+   * to `.ts`, which is narrower than the gates two describes above in both
+   * directions. Those accept all eight extensions listed here, anywhere under
+   * a source directory. So a request added in a `.mjs`, or in any
+   * `scripts/` subdirectory that is not `lib/`, was absent from the call,
+   * mention and global-object sweeps while the five-call floor stayed green:
+   * the failure the header promises not to have, reached through the file
+   * list rather than through the pattern.
+   */
+  function sourceFilesUnder(directory: string): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = `${directory}/${entry.name}`;
+
+      if (entry.isDirectory()) {
+        return sourceFilesUnder(path);
+      }
+
+      return SOURCE_EXTENSIONS.some((extension) =>
+        entry.name.endsWith(`.${extension}`)
+      )
+        ? [path]
+        : [];
+    });
+  }
+
+  const commandFiles = sourceFilesUnder("scripts").sort();
+
+  /**
+   * The source with every comment and string literal blanked out, character
+   * for character, so offsets and line structure are unchanged.
+   *
+   * The sweep below reads source text, and text is satisfied by anything that
+   * looks right. An unbounded `fetch(url, {})` whose options hold nothing but
+   * a commented-out `signal:` is discovered, its argument slice contains the
+   * substring the gate demands, and the request passes the check that exists
+   * to catch it — the same trick works with a `signal:` mentioned inside a
+   * string. Blanking
+   * rather than deleting, because the bracket balancer walks indices: a
+   * comment or string holding an unmatched `)` would otherwise end the
+   * argument slice early, or run it to the end of the file.
+   *
+   * A template literal is blanked in pieces, because only its literal chunks
+   * are text: the body of a `${...}` is code, and blanking it along with the
+   * rest would hide a call rather than reveal one — this function's own
+   * failure, arrived at from the other side. So each interpolation goes back
+   * through `scan` as the source it is, which is also what lets it hold a
+   * nested template, a comment or a string of its own.
+   *
+   * Not a parser. A parser is what this wants to be, and `typescript` is only
+   * present here as a transitive dependency of `@glint/ember-tsc` — importing
+   * it would be reaching through a package this repository does not declare.
+   * What the scan below has to survive is the code in `scripts/`, and the
+   * assertions that follow check it did: every call still found, every one
+   * parsed, and none of them reading past its own call.
+   */
+  function blanked(source: string): string {
+    const out = [...source];
+    /**
+     * Whether a `/` here can open a regular expression rather than divide,
+     * given the source `before` it with its trailing space already gone.
+     *
+     * Division only ever follows a value, and none of the punctuators below
+     * end one — with two exceptions, and they cost a real request.
+     * `counter++ / (await fetch(url, {}))` divides after a postfix
+     * increment, but the last character is a `+`, so the slash was read as a
+     * regex opener and everything to the end of the line, the unbounded call
+     * included, was blanked away. `--` is the same token the other way
+     * round. Those two are the whole exception: every other way of ending a
+     * value ends in an identifier character, a digit, a quote, a backtick, a
+     * `)` or a `]`, and none of those is in this set.
+     *
+     * That argument is the reason for the invariant asserted below, not a
+     * substitute for it. Getting this wrong erases executable code, and the
+     * question is contextual in general, so the sweep does not rely on the
+     * answer being right — it refuses to lose a call it could see before
+     * blanking.
+     */
+    const opensRegex = (before: string): boolean => {
+      if (before.endsWith("++") || before.endsWith("--")) {
+        return false;
+      }
+
+      const last = before.slice(-1);
+
+      return last === "" || "([{,;:=!&|?+-*%~^<>".includes(last);
+    };
+
+    const blank = (from: number, to: number): void => {
+      for (let index = from; index < to; index += 1) {
+        // Newlines are kept so a line number is still a line number, and so a
+        // `//` comment cannot swallow the code beneath it.
+        if (out[index] !== "\n") {
+          out[index] = " ";
+        }
+      }
+    };
+
+    /**
+     * Blanks the literal chunks of the template opening at `from`, handing
+     * every `${...}` body back to `scan`. Returns the index of the closing
+     * backtick, or the end of the source if it never closes.
+     */
+    function template(from: number): number {
+      let at = from + 1;
+
+      while (at < source.length) {
+        const char = source[at] as string;
+
+        if (char === "\\") {
+          blank(at, Math.min(at + 2, source.length));
+          at += 2;
+          continue;
+        }
+
+        if (char === "`") {
+          return at;
+        }
+
+        if (char === "$" && source[at + 1] === "{") {
+          at = scan(at + 2, true) + 1;
+          continue;
+        }
+
+        blank(at, at + 1);
+        at += 1;
+      }
+
+      return source.length;
+    }
+
+    /**
+     * Blanks every comment and literal from `from` onward. With `untilBrace`
+     * it is walking the body of a `${...}` and stops at the `}` that closes
+     * it, counting the braces of any object or block it passes on the way —
+     * a `}` inside a string or a comment is already gone by then.
+     */
+    function scan(from: number, untilBrace: boolean): number {
+      let at = from;
+      let depth = 0;
+
+      while (at < source.length) {
+        const two = source.slice(at, at + 2);
+        const char = source[at] as string;
+
+        if (two === "//") {
+          const end = source.indexOf("\n", at);
+          const to = end === -1 ? source.length : end;
+
+          blank(at, to);
+          at = to;
+          continue;
+        }
+
+        if (two === "/*") {
+          const end = source.indexOf("*/", at + 2);
+          const to = end === -1 ? source.length : end + 2;
+
+          blank(at, to);
+          at = to;
+          continue;
+        }
+
+        if (char === "`") {
+          at = template(at) + 1;
+          continue;
+        }
+
+        if (char === '"' || char === "'" || char === "/") {
+          if (char === "/") {
+            const before = source.slice(0, at).trimEnd();
+
+            if (!opensRegex(before)) {
+              at += 1;
+              continue;
+            }
+          }
+
+          let index = at + 1;
+
+          while (index < source.length) {
+            const inner = source[index] as string;
+
+            if (inner === "\\") {
+              index += 2;
+              continue;
+            }
+
+            if (inner === char) {
+              break;
+            }
+
+            // An unterminated literal would otherwise blank the rest of the
+            // file, and a newline ends every one of these.
+            if (inner === "\n") {
+              break;
+            }
+
+            index += 1;
+          }
+
+          blank(at + 1, Math.min(index, source.length));
+          at = index + 1;
+          continue;
+        }
+
+        if (untilBrace) {
+          if (char === "{") {
+            depth += 1;
+          } else if (char === "}") {
+            if (depth === 0) {
+              return at;
+            }
+
+            depth -= 1;
+          }
+        }
+
+        at += 1;
+      }
+
+      return source.length;
+    }
+
+    scan(0, false);
+
+    return out.join("");
+  }
+
+  /** Every source file this sweep reads, exactly as written. */
+  const rawSources = new Map(
+    commandFiles.map((path) => [path, readFileSync(path, "utf8")])
+  );
+
+  /** The same files, with their comments and literals blanked. */
+  const blankedSources = new Map(
+    [...rawSources].map(([path, source]) => [path, blanked(source)])
+  );
+
+  function rawOf(path: string): string {
+    const source = rawSources.get(path);
+
+    if (source === undefined) {
+      throw new Error(`${path} is not one of the files this sweep reads`);
+    }
+
+    return source;
+  }
+
+  function sourceOf(path: string): string {
+    const source = blankedSources.get(path);
+
+    if (source === undefined) {
+      throw new Error(`${path} is not one of the files this sweep reads`);
+    }
+
+    return source;
+  }
+
+  it("reads every extension and every depth the gates accept", () => {
+    // Discovery drifting narrower than the gates is how a whole file goes
+    // unswept, so the list is checked against the gate that defines it rather
+    // than kept in step by hand.
+    const gate = (
+      JSON.parse(readFileSync("package.json", "utf8")).scripts as Record<
+        string,
+        string
+      >
+    )["lint:prettier"] as string;
+
+    expect(gate).toContain(`{${SOURCE_EXTENSIONS.join(",")}}`);
+
+    // And the walk is a walk: `scripts/lib` is reached without being named.
+    expect(commandFiles).toContain("scripts/lib/sheets-auth.ts");
+    expect(commandFiles.every((path) => path.startsWith("scripts/"))).toBe(
+      true
+    );
+  });
+
+  it("blanks a comment without moving anything after it", () => {
+    // The property the bracket balancer depends on: same length, same lines,
+    // so an index into the blanked text is an index into the real file.
+    for (const path of commandFiles) {
+      const source = readFileSync(path, "utf8");
+
+      expect(sourceOf(path)).toHaveLength(source.length);
+      expect(sourceOf(path).split("\n")).toHaveLength(
+        source.split("\n").length
+      );
+    }
+  });
+
+  it("hides a signal that is only mentioned, not passed", () => {
+    // The hole this closes, stated as the two ways of faking a bound request.
+    const faked = [
+      "await fetch(url, { /* signal: AbortSignal.timeout(1) */ });",
+      "await fetch(other, { headers: { note: 'signal: AbortSignal.timeout(' } });",
+      "// await fetch(third, { signal: AbortSignal.timeout(1) });",
+    ].join("\n");
+    const scrubbed = blanked(faked);
+
+    expect(scrubbed).not.toContain("signal: AbortSignal.timeout(");
+    // The first two calls are still calls; only the third was a comment.
+    expect(fetchCallsIn("synthetic", scrubbed)).toHaveLength(2);
+  });
+
+  it("keeps a call that lives inside a template interpolation", () => {
+    // The body of a `${...}` is code, not text. Blanking it along with the
+    // literal chunks around it hides an unbounded request from the sweep
+    // outright — the hole a comment gave, entered from the other side, and
+    // worse: a commented-out call at least left the real one visible.
+    const interpolated = [
+      "const body = `${await fetch(url, { method: 'GET' })}`;",
+      "const twice = `${label(`${await fetch(other, { method: 'GET' })}`)}`;",
+    ].join("\n");
+    const scrubbed = blanked(interpolated);
+    const calls = fetchCallsIn("synthetic", scrubbed);
+
+    expect(calls).toHaveLength(2);
+
+    for (const call of calls) {
+      expect(call.args).toContain("method:");
+    }
+
+    // The literal text on either side of the interpolation is still gone,
+    // including the string inside the nested template.
+    expect(scrubbed).not.toContain("GET");
+    expect(scrubbed).toHaveLength(interpolated.length);
+  });
+
+  it("finds the call sites at all, so the sweep is not vacuous", () => {
+    const withFetch = commandFiles.filter(
+      (path) => fetchCallsIn(path, sourceOf(path)).length > 0
+    );
+
+    expect(withFetch.length).toBeGreaterThanOrEqual(5);
+  });
+
+  /**
+   * The argument list of the call whose opening bracket is at `from`, found by
+   * balancing brackets rather than by looking for a closing line at a fixed
+   * indentation.
+   *
+   * The delimiter this used to use was `\n  });`, which only matched a call
+   * closed at exactly two spaces. `scripts/export-sheet.ts` closes its fetch at
+   * four, so `indexOf` returned -1, `slice(0, -1)` handed back all but one
+   * character of the rest of the file, and a `signal:` belonging to a later
+   * call would have carried an earlier unbounded one. A sweep that can be
+   * satisfied by a different call site than the one it is looking at is not a
+   * gate.
+   *
+   * Returns null when the brackets do not close, which the caller asserts
+   * against — an unparseable call is a failure here, not a pass.
+   */
+  function balancedArguments(source: string, from: number): string | null {
+    let depth = 0;
+
+    for (let at = from; at < source.length; at += 1) {
+      if ("({[".includes(source[at] as string)) {
+        depth += 1;
+      } else if (")}]".includes(source[at] as string)) {
+        depth -= 1;
+
+        if (depth === 0) {
+          return source.slice(from + 1, at);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * The parts of `text` separated by its top-level commas.
+   *
+   * A comma inside an object, inside an array or inside a nested call is not a
+   * boundary — both callers below are handed a balanced slice, so counting
+   * brackets across it is enough to find the ones that are.
+   */
+  function topLevelParts(text: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+
+    for (let at = 0; at < text.length; at += 1) {
+      const char = text[at] as string;
+
+      if ("({[".includes(char)) {
+        depth += 1;
+      } else if (")}]".includes(char)) {
+        depth -= 1;
+      } else if (char === "," && depth === 0) {
+        parts.push(text.slice(start, at));
+        start = at + 1;
+      }
+    }
+
+    parts.push(text.slice(start));
+
+    return parts.map((part) => part.trim());
+  }
+
+  /**
+   * The `RequestInit` of a `fetch` call: its second top-level argument, or
+   * null when it has none.
+   */
+  function initArgument(args: string): string | null {
+    const parts = topLevelParts(args);
+
+    return parts.length < 2 ? null : (parts[1] as string);
+  }
+
+  /**
+   * Whether `value` is a call to `AbortSignal.timeout()` and nothing else.
+   *
+   * The whole value, because `AbortSignal.timeout(1000) && undefined` begins
+   * with one and evaluates to `undefined`. Anything left after the call's
+   * closing bracket — an operator, a `??`, a member access — means the
+   * property does not hold the signal its prefix advertised.
+   */
+  function isTimeoutCall(value: string): boolean {
+    const opened = /^AbortSignal\s*\.\s*timeout\s*\(/u.exec(value);
+
+    if (opened === null) {
+      return false;
+    }
+
+    const call = balancedArguments(value, opened[0].length - 1);
+
+    return (
+      call !== null &&
+      value.slice(opened[0].length + call.length + 1).trim() === ""
+    );
+  }
+
+  /**
+   * Whether `args` bounds its request: whether it passes an
+   * `AbortSignal.timeout()` as the `signal` of an options object written out
+   * at the call, which is the only place `fetch` reads one from.
+   *
+   * Four versions of this check have now been satisfied by something other
+   * than a bounded request. `toContain("signal: AbortSignal.timeout(")` over
+   * the whole argument list accepted `{ headers: { signal: ... } }`, a header
+   * that happens to be named `signal`. Depth alone then accepted two more:
+   * `fetch({ signal: AbortSignal.timeout(1000) })`, where the object is the
+   * `Request` and `fetch` never reads a `signal` off it, and
+   * `fetch(url, cond ? { signal: ... } : {})`, which is unbounded on one of
+   * its two branches. Position and depth together still accepted a prefix:
+   * `{ signal: AbortSignal.timeout(1000) && undefined }` opens with the call
+   * and evaluates to `undefined`, and
+   * `{ signal: AbortSignal.timeout(1000), ...overrides }` hands the property
+   * to whatever the spread carries. Every time, the gate was reading
+   * something adjacent to the property it is asking about.
+   *
+   * So the object is read as properties rather than as text: the second
+   * top-level argument, required to be an object literal — a variable or a
+   * conditional is not something this sweep can vouch for, and returning
+   * false is the fail-closed answer — split on its own commas, with exactly
+   * one property named `signal`, holding a whole `AbortSignal.timeout()` call
+   * and nothing more.
+   *
+   * Every key has to be a plain identifier, and that rule rather than the two
+   * examples above is what closes the class. A spread, a computed `[key]:`, a
+   * quoted `"signal":` (blanked to nothing readable before this sees it) and a
+   * shorthand `signal` are all properties this cannot follow, so none of them
+   * can carry a pass on behalf of the one it can.
+   */
+  function boundsItsRequest(args: string): boolean {
+    const init = initArgument(args);
+
+    if (init === null || !init.startsWith("{") || !init.endsWith("}")) {
+      return false;
+    }
+
+    // A trailing comma leaves an empty part behind, and an empty object is one
+    // empty part; neither is a property.
+    const properties = topLevelParts(init.slice(1, -1)).filter(
+      (part) => part !== ""
+    );
+    const named = /^[A-Za-z_$][\w$]*\s*(:|$)/u;
+
+    if (!properties.every((property) => named.test(property))) {
+      return false;
+    }
+
+    const signals = properties.filter((property) =>
+      /^signal\s*(:|$)/u.test(property)
+    );
+
+    if (signals.length !== 1) {
+      return false;
+    }
+
+    return isTimeoutCall(
+      (signals[0] as string).replace(/^signal\s*:/u, "").trim()
+    );
+  }
+
+  /**
+   * A call to `fetch`, however it is spelled.
+   *
+   * Discovery used to be `indexOf("await fetch(")`, which is a promise this
+   * sweep could not keep: `return fetch(...)`, a call assigned before it is
+   * awaited, and `await fetch (url)` are all invisible to it, and the floor
+   * assertion below stays green on the five it can see while a sixth,
+   * unbounded, goes unchecked. The claim in the header is that a call site
+   * added later is covered the moment it exists, so discovery has to be about
+   * the call expression rather than one way of writing it.
+   *
+   * The leading character class is what keeps `client.fetch(` and
+   * `prefetch(` out: a member call on some other object is a different
+   * function, and the global `fetch` is the only one this pipeline has to
+   * bound. `globalThis.fetch(` and Node's `global.fetch(` are the two member
+   * calls that *are* that global, so both are spelled out — excluding them by
+   * the same rule that excludes `client.fetch(` left standard spellings of
+   * the API this sweep exists to bound invisible, and an unbounded one could
+   * be added with the floor assertion still green.
+   */
+  const FETCH_CALL = /(^|[^\w.$])(?:global(?:This)?\.)?fetch\s*\(/gu;
+
+  /**
+   * Every mention of the global `fetch`, called or not.
+   *
+   * `FETCH_CALL` finds a call written plainly, and there are other ways to
+   * execute the same function: `(fetch)(url)`, `fetch?.(url)`,
+   * `fetch.call(globalThis, url)`, and a `const send = fetch` called under
+   * another name later. None of them match a pattern ending in `fetch\s*\(`,
+   * so each one is a request this sweep never sees and the floor assertion
+   * below stays green while it goes unbounded.
+   *
+   * Widening discovery to cover the three spellings would leave the fourth,
+   * and the one after that. So the sweep refuses instead: a mention that is
+   * not immediately a call is something it cannot read, and the test below
+   * fails on it rather than passing over it. The cost is that nobody may
+   * alias or indirectly invoke `fetch` in `scripts/` — which is the rule this
+   * pipeline wants anyway, and a failure that says so is better than a gate
+   * that quietly stops covering the thing it names.
+   */
+  const FETCH_MENTION = /(^|[^\w.$])(?:global(?:This)?\.)?fetch\b/gu;
+
+  /** The mentions of `fetch` in `source` that are not plainly a call. */
+  function unreadableFetches(source: string): string[] {
+    return [...source.matchAll(FETCH_MENTION)]
+      .map((match) => source.slice(match.index ?? 0).trim())
+      .filter(
+        (from) => !/^[^\w.$]?(?:global(?:This)?\.)?fetch\s*\(/u.test(from)
+      )
+      .map((from) => from.slice(0, 40));
+  }
+
+  it("refuses a `fetch` it cannot read as a call", () => {
+    // Non-vacuous on its own terms: the three spellings below all execute the
+    // global, and `FETCH_CALL` matches none of them.
+    expect(
+      unreadableFetches(
+        [
+          "await (fetch)(url, {});",
+          "await fetch?.(url, {});",
+          "await fetch.call(globalThis, url, {});",
+          "const send = fetch;",
+        ].join("\n")
+      )
+    ).toHaveLength(4);
+
+    // And the plain spellings are not caught by it, so the rule is a rule
+    // about indirection rather than about the word.
+    expect(
+      unreadableFetches("await fetch(url, {});\nreturn globalThis.fetch(url);")
+    ).toEqual([]);
+
+    for (const path of commandFiles) {
+      expect(
+        unreadableFetches(sourceOf(path)),
+        `${path} spells fetch in a way this sweep cannot bound`
+      ).toEqual([]);
+    }
+  });
+
+  /**
+   * Every mention of the global object.
+   *
+   * `FETCH_MENTION` reads the *name* `fetch`, and a property name can be
+   * written as a string. `globalThis["fetch"](url, {})` calls the same
+   * function, but `blanked()` erases the contents of that string before
+   * either pattern runs, so the word this sweep looks for is already gone by
+   * the time it looks — and the floor assertion stays green on an unbounded
+   * request. `globalThis[name]`, a destructured `const { fetch } =
+   * globalThis` and a `const scope = globalThis` used later are the same hole
+   * spelled differently: each reaches the global through an object this sweep
+   * can still see, even when the property taken off it is unreadable.
+   *
+   * So the refusal above, one level out. A mention of `globalThis` or Node's
+   * `global` that is not immediately `.fetch(` is a reach this sweep cannot
+   * follow, and it fails on it rather than passing over it. Nothing in
+   * `scripts/` reaches through the global object at all today, so the rule
+   * costs this pipeline nothing it was using.
+   */
+  const GLOBAL_MENTION = /(^|[^\w.$])(?:globalThis|global)\b/gu;
+
+  /**
+   * The mentions of the global object in `source` that are not plainly a
+   * `fetch` call.
+   */
+  function unreadableGlobals(source: string): string[] {
+    return [...source.matchAll(GLOBAL_MENTION)]
+      .map((match) => source.slice(match.index ?? 0).trim())
+      .filter(
+        (from) => !/^[^\w.$]?(?:globalThis|global)\.fetch\s*\(/u.test(from)
+      )
+      .map((from) => from.slice(0, 40));
+  }
+
+  it("refuses a reach through the global object it cannot read", () => {
+    // Non-vacuous, and the reason this check is not just more of the one
+    // above: the property name here is a string, so `blanked` erases it and
+    // the mention sweep sees no `fetch` to refuse.
+    const computed = 'await globalThis["fetch"](url, {});';
+
+    expect(unreadableFetches(blanked(computed))).toEqual([]);
+    expect(unreadableGlobals(blanked(computed))).toHaveLength(1);
+
+    expect(
+      unreadableGlobals(
+        [
+          'await globalThis["fetch"](url, {});',
+          "await globalThis[name](url, {});",
+          "const { fetch: send } = globalThis;",
+          "const scope = globalThis;",
+        ].join("\n")
+      )
+    ).toHaveLength(4);
+
+    // The one readable spelling still passes, so this is a rule about
+    // indirection rather than about the word.
+    expect(unreadableGlobals("await globalThis.fetch(url, {});")).toEqual([]);
+
+    for (const path of commandFiles) {
+      expect(
+        unreadableGlobals(sourceOf(path)),
+        `${path} reaches through the global object in a way this sweep cannot read`
+      ).toEqual([]);
+    }
+  });
+
+  it("never blanks away a call it could see before blanking", () => {
+    // The one thing `blanked` must not do. Every other mistake it can make
+    // shows up as a call this sweep cannot parse or cannot vouch for, and
+    // those all fail; erasing the call outright is the mistake that passes.
+    // So rather than trusting the reasoning above about which slashes divide,
+    // the sweep compares what it can discover before blanking with what it
+    // can discover after, and refuses to have lost one.
+    const swallowed = 'const note = "await fetch(url, {})";';
+
+    expect(fetchCallsIn("synthetic", swallowed)).toHaveLength(1);
+    expect(fetchCallsIn("synthetic", blanked(swallowed))).toHaveLength(0);
+
+    // The cost, which is the same shape as the two refusals above: the text
+    // `fetch(` may not appear in a comment or a string literal in `scripts/`.
+    // Nothing there writes one, and a commented-out request is not something
+    // this sweep should be quietly reading past anyway.
+    for (const path of commandFiles) {
+      expect(
+        fetchCallsIn(path, sourceOf(path)).length,
+        `${path} has a fetch call that blanking removed`
+      ).toBe(fetchCallsIn(path, rawOf(path)).length);
+    }
+  });
+
+  function fetchCallsIn(
+    path: string,
+    source: string
+  ): { path: string; args: string | null }[] {
+    return [...source.matchAll(FETCH_CALL)].map((match) => ({
+      path,
+      // The index of the `(` itself, which is where the bracket balance starts.
+      args: balancedArguments(source, (match.index ?? 0) + match[0].length - 1),
+    }));
+  }
+
+  /** Every `fetch` call in the pipeline, with its arguments. */
+  const fetchCalls = commandFiles.flatMap((path) =>
+    fetchCallsIn(path, sourceOf(path))
+  );
+
+  it("finds a fetch that is not spelled `await fetch(`", () => {
+    // Non-vacuity for discovery itself, rather than for the assertion it
+    // feeds. Three calls here, none of them the spelling the old scan looked
+    // for, and three near-misses that are not calls to the global at all —
+    // including `myglobal.fetch(`, which the `global` alternative must not
+    // start matching in the middle of a longer identifier.
+    const spellings = [
+      "const pending = fetch(url, { signal });",
+      "  return fetch(url, { signal });",
+      "await fetch (url, { signal });",
+      "await globalThis.fetch(url, { signal });",
+      "await global.fetch(url, { signal });",
+      "const body = await client.fetch(url);",
+      "const cached = prefetch(url);",
+      "const stale = myglobal.fetch(url);",
+    ].join("\n");
+
+    expect(fetchCallsIn("synthetic", spellings)).toHaveLength(5);
+  });
+
+  it("parses every call it found, so no scan runs off the end", () => {
+    // The old delimiter failed silently on two of the five. This is the
+    // assertion that would have said so.
+    for (const call of fetchCalls) {
+      expect(
+        call.args,
+        `${call.path} has a fetch this sweep cannot parse`
+      ).not.toBeNull();
+    }
+
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("stops at the end of the call, not at the end of the file", () => {
+    // The failure mode in one assertion: no parsed call may reach as far as
+    // the file it lives in. `export-sheet.ts` scanned 4315 of 4316 remaining
+    // characters before this.
+    for (const call of fetchCalls) {
+      const source = sourceOf(call.path);
+
+      expect(
+        (call.args ?? "").length,
+        `${call.path}: the sweep read the rest of the file`
+      ).toBeLessThan(source.length / 2);
+    }
+  });
+
+  it("passes an AbortSignal to every one of them", () => {
+    for (const call of fetchCalls) {
+      expect(
+        boundsItsRequest(call.args ?? ""),
+        `${call.path} has an unbounded fetch`
+      ).toBe(true);
+    }
+  });
+
+  it("does not count a `signal` outside the options object it must be in", () => {
+    // Depth alone was not the question. Both of these put an
+    // `AbortSignal.timeout(` exactly one level in, and neither bounds a
+    // request: the first has no options argument at all — the object is the
+    // `Request`, and `fetch` does not read a `signal` off it — and the second
+    // is unbounded whenever the condition is false.
+    const [asRequest] = fetchCallsIn(
+      "synthetic",
+      "await fetch({ signal: AbortSignal.timeout(1000) });"
+    );
+    const [conditional] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, cond ? { signal: AbortSignal.timeout(1000) } : {});"
+    );
+
+    expect(initArgument(asRequest?.args ?? "")).toBeNull();
+    expect(boundsItsRequest(asRequest?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(conditional?.args ?? "")).toBe(false);
+
+    // The comma that separates the arguments is the one at depth zero, not
+    // the ones inside the options object.
+    const [ordinary] = fetchCallsIn(
+      "synthetic",
+      "await fetch(urlFor(a, b), { method: 'POST', signal: AbortSignal.timeout(1000) });"
+    );
+
+    expect(boundsItsRequest(ordinary?.args ?? "")).toBe(true);
+  });
+
+  it("does not count a `signal` the rest of the object takes back", () => {
+    // Position and depth were not the question either. All three of these put
+    // a top-level `signal: AbortSignal.timeout(` in the options object, and
+    // in all three the signal `fetch` actually receives is `undefined`: the
+    // value continues past the call, or a later property overwrites it.
+    const [defeated] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000) && undefined });"
+    );
+    const [spread] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), ...{ signal: undefined } });"
+    );
+    const [twice] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), signal: undefined });"
+    );
+
+    expect(isTimeoutCall("AbortSignal.timeout(1000) && undefined")).toBe(false);
+    expect(isTimeoutCall("AbortSignal.timeout(1000)")).toBe(true);
+    expect(boundsItsRequest(defeated?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(spread?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(twice?.args ?? "")).toBe(false);
+
+    // Not a ban on the company the signal keeps: the real call sites pass a
+    // method — one of them in shorthand — headers and a body beside it.
+    const [ordinaryOptions] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { method, signal: AbortSignal.timeout(MS), headers: { accept: 'x' } });"
+    );
+
+    expect(boundsItsRequest(ordinaryOptions?.args ?? "")).toBe(true);
+  });
+
+  it("does not count a `signal` that belongs to a nested option", () => {
+    // `fetch` reads `signal` off the options object and nowhere else, so a
+    // `signal` one level further in is a header named `signal` and the
+    // request is unbounded. Both spellings below contain the substring the
+    // old assertion looked for, which is what made it a gate that could not
+    // fail — and the bounded one is here so the depth rule is not simply
+    // rejecting everything.
+    const [buried] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { headers: { signal: AbortSignal.timeout(1000) } });"
+    );
+    const [bounded] = fetchCallsIn(
+      "synthetic",
+      "await fetch(url, { signal: AbortSignal.timeout(1000), headers: {} });"
+    );
+
+    expect(buried?.args).toContain("signal: AbortSignal.timeout(");
+    expect(boundsItsRequest(buried?.args ?? "")).toBe(false);
+    expect(boundsItsRequest(bounded?.args ?? "")).toBe(true);
+  });
+});
