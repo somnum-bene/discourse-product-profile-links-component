@@ -56,6 +56,24 @@ Neither is in #62's scope list and both fall straight out of the rule above.
 
 **The `RETAINED` line moves its terminus again.** #61 corrected it to name the profile save as the point a retained value dies, and the editability flag as the thing that stops it. A Shadow Field stops it too, permanently and without taking self-service editing away, so the line names that rather than leaving a freeze as the only answer on offer.
 
+## Measured, anonymously
+
+Run against `tyler-test.discourse.group` on 2026-09-14, with both Shadow Fields created in the forced configuration — `text`, `editable: false`, `show_on_profile: true`, `show_on_user_card: true`, `requirement: optional` — and confirmed by a fresh `GET` rather than any write's `200` ([ADR-0014](0014-a-write-is-confirmed-by-reading-it-back.md)). A throwaway non-staff User held `AirSense 10 Elite with HumidAir (Discontinued)` in `Machine (Discontinued)` with `Machine` itself empty, and was deleted afterwards.
+
+An `Api-Key` carrying that User's `Api-Username` is genuinely that account, on #61's test: `/admin/config/user_fields.json` answered `404` on those credentials and `200` for the Administrator a moment later.
+
+- **The value survives the save.** The non-staff User saved their own profile submitting `{ "2": "", "11": "" }` and the Shadow Field came back unchanged. The same request wrote `probe-humidifier` to an unrelated `editable: true` field, and *that* landed — which is what proves the save was a real one rather than a request failing wholesale earlier. A later save submitting an actual value for the Shadow Field was refused the same way.
+- **An anonymous reader gets it.** Read with no `Api-Key` and no cookie, `/u/<username>.json` carried the Shadow Field's value, and `/site.json` declared both Shadow Fields at `editable: false` with both visibility flags true.
+- **It resolves to the Collection Link.** The anonymous payload, the anonymous `/site.json` field list and the shipped `settings.yml` default were fed through `readLinkConfig` and `resolveProfileLinks` unchanged: no Config Problems, both Shadow Fields joined, and one Profile Link — `Machine: AirSense 10 Elite with HumidAir (Discontinued)` to `https://www.cpap.com/collections/cpap-machines`, read from `Machine (Discontinued)`, with `Machine (Discontinued)` named as the core row to hide.
+
+### The trap that makes an anonymous check lie
+
+`hide_new_user_profiles` is on, and it hides a new, trust-level-0 User's profile from anonymous readers **entirely** — `user_fields` is absent from the payload, not empty. A throwaway User created for this check is exactly that User.
+
+The first anonymous read here came back with no `user_fields` at all, which is byte-for-byte the symptom ADR-0024 describes for a Shadow Field hidden from profile and card. It was not that: a populated `Machine`, a Managed Field visible on both surfaces since long before any of this, was missing from the same payload. Raising the throwaway User's trust level made every field appear at once.
+
+Anyone re-running this must raise the trust level first, and must read a *populated Managed Field* in the same payload as a control. Without that control the check reports the forced configuration as broken, and the obvious conclusion — that ADR-0024's visibility finding is wrong — is the wrong one.
+
 ## What is not settled here
 
 **The migration-window freeze stays an operator step.** ADR-0025 left automating it undesigned, and nothing here designs it.
