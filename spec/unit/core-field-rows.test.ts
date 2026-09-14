@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coreRowsToHide,
+  replacedFieldNames,
   usableDasherizedNames,
 } from "../../javascripts/discourse/lib/core-field-rows";
 
@@ -141,5 +142,98 @@ describe("usableDasherizedNames", () => {
     );
 
     expect(coreRowsToHide(rows, safe)).toEqual([]);
+  });
+});
+
+describe("replacedFieldNames", () => {
+  function link(fieldName: string, valueFieldName: string) {
+    return {
+      fieldName,
+      valueFieldName,
+      value: "AirSense 11",
+      url: "https://example.com/airsense-11",
+    };
+  }
+
+  it("names the Managed Field when the value came from it", () => {
+    expect(replacedFieldNames([link("Machine", "Machine")])).toEqual([
+      "Machine",
+    ]);
+  });
+
+  it("names the Shadow Field when the fallback fired", () => {
+    // The row core rendered belongs to the field holding the value. Under a
+    // fallback the Managed Field is empty, so it has no row to hide, and
+    // matching on the link's label would leave the Shadow Field's plain text
+    // sitting under the Profile Link that replaced it.
+    expect(
+      replacedFieldNames([link("Machine", "Machine (Discontinued)")])
+    ).toEqual(["Machine (Discontinued)"]);
+  });
+
+  it("never names the Managed Field and its Shadow Field for one link", () => {
+    // One link replaces one row. Naming both would hide a row belonging to a
+    // field whose value is not on screen.
+    expect(
+      replacedFieldNames([link("Machine", "Machine (Discontinued)")])
+    ).not.toContain("Machine");
+  });
+
+  it("leaves a Shadow Field's row alone when the Managed Field won", () => {
+    // Both populated and disagreeing: the Managed Field wins the link, and the
+    // Shadow Field's row is a second value with no link behind it. Hiding it
+    // would take a value off the profile, which this module refuses to do.
+    expect(replacedFieldNames([link("Machine", "Machine")])).not.toContain(
+      "Machine (Discontinued)"
+    );
+  });
+
+  it("names one field per link, in the order the links render", () => {
+    expect(
+      replacedFieldNames([
+        link("Machine", "Machine (Discontinued)"),
+        link("Mask", "Mask"),
+      ])
+    ).toEqual(["Machine (Discontinued)", "Mask"]);
+  });
+
+  it("returns an empty list when nothing resolved", () => {
+    expect(replacedFieldNames([])).toEqual([]);
+  });
+
+  it("hands names the row matcher can use unchanged", () => {
+    // The end-to-end shape, because the two halves are only useful together:
+    // a Shadow Field's name carries spaces and parentheses, and it has to
+    // survive dasherizing into a class core actually emits. `dasherize` maps
+    // " " to "-" and leaves the parentheses, on both surfaces' spellings.
+    const names = replacedFieldNames([
+      link("Machine", "Machine (Discontinued)"),
+    ]);
+    const dasherized = names.map((name) =>
+      name.toLowerCase().replace(/[ _]/g, "-")
+    );
+
+    expect(dasherized).toEqual(["machine-(discontinued)"]);
+
+    const profile = profileRow("machine-(discontinued)");
+    const card = cardRow("machine-(discontinued)");
+
+    expect(coreRowsToHide([profile, card], dasherized)).toEqual([
+      profile,
+      card,
+    ]);
+  });
+
+  it("keeps a Shadow Field name distinguishable from the field it shadows", () => {
+    // `usableDasherizedNames` drops a name two Custom User Fields share after
+    // dasherizing. "Machine" and "Machine (Discontinued)" must not collide, or
+    // the fallback's duplicate could never be hidden on any site running both.
+    const site = ["Machine", "Mask", "Machine (Discontinued)"].map((name) =>
+      name.toLowerCase().replace(/[ _]/g, "-")
+    );
+
+    expect(usableDasherizedNames(["machine-(discontinued)"], site)).toEqual([
+      "machine-(discontinued)",
+    ]);
   });
 });
