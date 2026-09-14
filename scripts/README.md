@@ -556,6 +556,14 @@ one message. Without it the operator reads a bare `- "CPAP Machines
 (Discontinued)"` and has every reason to put the option back, which offers a
 machine cpap.com no longer sells to the next User choosing one.
 
+**What the line promises is bounded, and it says so.** A retained value survives
+the option removal, and then dies on the holder's next profile save that submits
+that field — Discourse resolves an off-list `dropdown` value to `nil` on write,
+which is #58. The `RETAINED` line names that terminus rather than promising the
+Profile Link outright, because an operator who believes the unconditional
+version under-reacts to it. Marking the field not-User-editable stops it
+(ADR-0024), which is what ADR-0025 adopts for the duration of a migration.
+
 It changes what the plan says and not what it needs — a removal with a retained
 Collection Link behind it is still authorised by `replace`, like every other
 removal, because the plan is all-or-nothing and one flag should not have two
