@@ -34,6 +34,7 @@ import {
   resolvesALink,
   resolvingValues,
   type SheetRow,
+  targetFieldNameFor,
   undeliveredValues,
 } from "./build-catalogue.ts";
 import {
@@ -226,6 +227,12 @@ export const DISPOSITION_COLUMNS = [
   "value",
   "url",
   "disposition",
+  // Appended rather than placed beside `user_field_name`, which is where it
+  // belongs by meaning. Every refusal in this file points at a column number,
+  // and the far side has been reading five of these columns for a while; a new
+  // column at the end shifts nothing, where an inserted one silently moves
+  // every cell after it.
+  "target_field_name",
 ] as const;
 
 /**
@@ -951,6 +958,7 @@ export function dispositionTableCsv(
     entry.value,
     entry.url,
     entry.disposition,
+    targetFieldNameFor(entry.userFieldName, entry.disposition),
   ]);
 
   // A refusal rather than a floor in a test, because a test only guards the
@@ -1065,7 +1073,15 @@ function assertDispositionRow(
   row: readonly string[],
   where: string
 ): DispositionOutcome {
-  const [userFieldName, legacyValue, legacyText, value, url, disposition] = row;
+  const [
+    userFieldName,
+    legacyValue,
+    legacyText,
+    value,
+    url,
+    disposition,
+    targetFieldName,
+  ] = row;
 
   // Reported by row and column and never by content: this is the tripwire that
   // keeps member data out of the one file that leaves, and a refusal that
@@ -1239,6 +1255,28 @@ function assertDispositionRow(
         `text, and an unlinked value has none). These are the two columns ` +
         `carried verbatim from the bulletin board, which is what makes them ` +
         `the two this refusal most has to leave unquoted.`
+    );
+  }
+
+  // Asked of the transform rather than restated here, for the reason the
+  // pairing above is: a copy of the rule beside the check drifts from the one
+  // that writes the file.
+  //
+  // This is the column the far side writes *into*, and getting it wrong is
+  // silent on both sides. Naming the Managed Field on a `collection` row puts
+  // the value in the one field that cannot keep it, and the loss arrives on a
+  // profile save weeks later (#58). Naming the Shadow Field on any other row
+  // puts a value a User can still choose into a field they cannot edit, where
+  // it is frozen and unreachable. Neither produces an error anywhere.
+  if (targetFieldName !== targetFieldNameFor(userFieldName, disposition)) {
+    throw new CatalogueRefreshError(
+      `${where}, ${columnAt("target_field_name")} does not name the Custom ` +
+        `User Field a \`${disposition}\` row's value belongs in. A ` +
+        `\`collection\` row names the Managed Field's Shadow Field, because ` +
+        `a Collection Link has no Dropdown Option behind it and a dropdown ` +
+        `drops an off-list value on the holder's next profile save; every ` +
+        `other row names the Managed Field itself (ADR-0026). What the cell ` +
+        `holds is not quoted, on the same terms as every refusal here.`
     );
   }
 

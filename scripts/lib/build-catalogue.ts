@@ -497,6 +497,34 @@ export function shadowFieldNameFor(userFieldName: string): string {
   return `${userFieldName} (Discontinued)`;
 }
 
+/**
+ * Which Custom User Field the repository joining against member data must
+ * write this row's value into.
+ *
+ * A `collection` row goes to the Shadow Field and every other row goes to the
+ * Managed Field (ADR-0026). A Collection Link is off-list the instant it lands
+ * — it is a Mapping with no Dropdown Option, by construction (ADR-0021) — so
+ * writing it into a `dropdown` puts it one profile save from `""`, which is the
+ * whole of #58. Every other disposition carries a value the Managed Field can
+ * keep: a `resolves-to-product` row's value is a live Dropdown Option, and an
+ * unlinked row's value is text the member keeps as an Unmatched Value.
+ *
+ * Derived from two columns the table already carries rather than stored on a
+ * `DispositionRow`, so there is one place that decides it and nothing to keep
+ * in step at the four sites a row is built. It is still written out as its own
+ * column: the disposition table is the *entire* interface to that repository
+ * (ADR-0023), and leaving the far side to apply a naming convention it cannot
+ * see change here is how the two sides drift without either noticing.
+ */
+export function targetFieldNameFor(
+  userFieldName: string,
+  disposition: DispositionOutcome
+): string {
+  return disposition === "collection"
+    ? shadowFieldNameFor(userFieldName)
+    : userFieldName;
+}
+
 /** The Dropdown Options one Custom User Field should offer. */
 export interface FieldOptions {
   user_field_name: string;

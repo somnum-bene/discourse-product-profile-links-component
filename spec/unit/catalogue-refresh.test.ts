@@ -1580,7 +1580,8 @@ describe("the disposition table file", () => {
   }
 
   const HEADER =
-    "user_field_name,legacy_value,legacy_text,value,url,disposition";
+    "user_field_name,legacy_value,legacy_text,value,url,disposition," +
+    "target_field_name";
 
   /**
    * The rows, plus a minimal row for any Managed Field they do not cover.
@@ -1621,6 +1622,12 @@ describe("the disposition table file", () => {
     // The legacy identifier is only unique within a field, and the non-public
     // side has to emit the custom field name as one of its three columns. A
     // table without it would make the join guess at both.
+    //
+    // `target_field_name` is a seventh rather than a replacement for the
+    // first: `user_field_name` says which option table the legacy identifier
+    // came from, which is what makes the identifier unique, and the target
+    // says where the value is written. They differ on exactly the `collection`
+    // rows, and collapsing them would lose the join key on those rows.
     expect(DISPOSITION_COLUMNS).toEqual([
       "user_field_name",
       "legacy_value",
@@ -1628,7 +1635,61 @@ describe("the disposition table file", () => {
       "value",
       "url",
       "disposition",
+      "target_field_name",
     ]);
+  });
+
+  it("sends a collection row to the Shadow Field and every other row to the Managed Field", () => {
+    // The rule the far side reads this column for. A Collection Link written
+    // into the `dropdown` is one profile save from "" (#58), and every other
+    // disposition carries a value the Managed Field can keep (ADR-0026).
+    const written = dispositionTableCsv(ROWS).split("\n");
+
+    expect(written[2]).toContain(",resolves-to-product,Machine");
+    expect(written[2]).not.toContain("(Discontinued)");
+    expect(written[3]).toContain(",collection,Machine (Discontinued)");
+    expect(written[4]).toContain(",blank-title,Mask");
+  });
+
+  it("refuses a row whose target field contradicts its disposition", () => {
+    // Silent on both sides if it got through. Naming the Managed Field on a
+    // collection row puts the value in the field that cannot keep it, and the
+    // loss arrives weeks later on a profile save.
+    const body =
+      `${HEADER}\n` +
+      `Machine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),` +
+      `${CPAP_MACHINES},collection,Machine\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title,Mask\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /does not name the Custom User Field/
+    );
+  });
+
+  it("refuses an ordinary row sent to a Shadow Field", () => {
+    // The mirror fault, and the one a well-meaning edit produces: a value a
+    // User can still choose, parked in a field they cannot edit.
+    const body =
+      `${HEADER}\n` +
+      `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text,` +
+      `Machine (Discontinued)\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title,Mask\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /does not name the Custom User Field/
+    );
+  });
+
+  it("quotes no cell when it refuses a contradictory target field", () => {
+    const body =
+      `${HEADER}\n` +
+      `Machine,6240,Marjorie Fenwick-Abara,Aircurve 11 asv,,plain-text,` +
+      `Machine (Discontinued)\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title,Mask\n`;
+
+    expect(() => readDispositionTable(digested(body))).toThrow(
+      /^(?!.*Marjorie)/s
+    );
   });
 
   it("round-trips every row unchanged, empty URL included", () => {
@@ -1639,7 +1700,7 @@ describe("the disposition table file", () => {
     // An empty value is the one field this file cannot carry. The whole point
     // of a row with no URL is that it still tells the non-public side what to
     // write, so a blank there is a member's equipment quietly deleted.
-    const body = `${HEADER}\nMask,3005,Unlisted mask,,,blank-title\n`;
+    const body = `${HEADER}\nMask,3005,Unlisted mask,,,blank-title,Mask\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /names no value/
@@ -1647,7 +1708,7 @@ describe("the disposition table file", () => {
   });
 
   it("refuses a disposition this repository has no word for", () => {
-    const body = `${HEADER}\nMask,3005,Unlisted mask,Unlisted mask,,retired\n`;
+    const body = `${HEADER}\nMask,3005,Unlisted mask,Unlisted mask,,retired,Mask\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /column 6 \(`disposition`\) is not one of/
@@ -1655,7 +1716,7 @@ describe("the disposition table file", () => {
   });
 
   it("refuses a linked disposition with no URL", () => {
-    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),,collection\n`;
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),,collection,Machine (Discontinued)\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /`collection` and carries no URL/
@@ -1669,7 +1730,7 @@ describe("the disposition table file", () => {
     // reaches the non-public repository as a Profile Link target. A cell that
     // drifted onto a neighbouring column in a workbook whose other tabs hold
     // member data is exactly how one arrives.
-    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection,Machine (Discontinued)\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /is neither empty nor an `https:` URL/
@@ -1679,7 +1740,7 @@ describe("the disposition table file", () => {
   it("does not name the cell it refused", () => {
     // Same rule as every other refusal on this boundary: what the cell holds
     // is what the check could not vouch for, so it is located and not quoted.
-    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection\n`;
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,AirCurve 11 ASV (Discontinued),Marjorie Fenwick-Abara,collection,Machine (Discontinued)\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /column 5 \(`url`\)/
@@ -1694,7 +1755,7 @@ describe("the disposition table file", () => {
     // it has never heard of drops every member holding the row's value — and
     // `check-collection-assignment.ts` prints this cell to locate a fault
     // row, in a public CI job.
-    const body = `${HEADER}\nMarjorie Fenwick-Abara,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+    const body = `${HEADER}\nMarjorie Fenwick-Abara,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text,Marjorie Fenwick-Abara\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /column 1 \(`user_field_name`\) does not name a Managed Field/
@@ -1712,8 +1773,8 @@ describe("the disposition table file", () => {
     // — a refusal that would otherwise mask what this test is asking about.
     const body =
       `${HEADER}\n` +
-      `Machine,6240,Aircurve 11 asv,AirSense 11 AutoSet,https://www.cpap.com/products/airsense-11-autoset,resolves-to-product\n` +
-      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title\n`;
+      `Machine,6240,Aircurve 11 asv,AirSense 11 AutoSet,https://www.cpap.com/products/airsense-11-autoset,resolves-to-product,Machine\n` +
+      `Mask,3005,Unlisted mask,Unlisted mask,,blank-title,Mask\n`;
 
     expect(() => readDispositionTable(digested(body))).not.toThrow();
   });
@@ -1721,7 +1782,7 @@ describe("the disposition table file", () => {
   it("refuses an unlinked disposition carrying a URL", () => {
     // The pairing runs both ways. A `plain-text` row with a URL is a curator's
     // decision being overruled by a link nobody assigned.
-    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv,${CPAP_MACHINES},plain-text\n`;
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv,${CPAP_MACHINES},plain-text,Machine\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /`plain-text` and its column 5 \(`url`\) is not empty/
@@ -1732,7 +1793,7 @@ describe("the disposition table file", () => {
     // Where the suffix would land if anyone appended it. A value that is not
     // the member's own text, with no Mapping behind it, is a string invented
     // for a member to hold that resolves for nobody.
-    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv (Discontinued),,plain-text\n`;
+    const body = `${HEADER}\nMachine,6240,Aircurve 11 asv,Aircurve 11 asv (Discontinued),,plain-text,Machine\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /carries no URL, so its column 4 \(`value`\) has to hold what/
@@ -1837,7 +1898,7 @@ describe("the disposition table file", () => {
     // `dataRowsOf` cannot see this one — it refuses an absent field, and this
     // field is present. Writer and reader share the check, so they share the
     // wording too.
-    const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title\n`;
+    const body = `${HEADER}\nMask,3006,"   ","   ",,blank-title,Mask\n`;
 
     expect(() => readDispositionTable(digested(body))).toThrow(
       /row 2, column 3 \(`legacy_text`\) holds only whitespace/
@@ -2018,8 +2079,9 @@ describe("the disposition table file", () => {
       // this is the case that holds them to it.
       const name = "Marjorie Fenwick-Abara";
       const short =
-        `${HEADER}\n` + `Machine,6240,${name},v,,plain-text,extra\n`;
-      const blank = `${HEADER}\n` + `Machine,6240,${name},,,plain-text\n`;
+        `${HEADER}\n` + `Machine,6240,${name},v,,plain-text,Machine,extra\n`;
+      const blank =
+        `${HEADER}\n` + `Machine,6240,${name},,,plain-text,Machine\n`;
 
       for (const body of [short, blank]) {
         expect(() =>
@@ -2127,8 +2189,8 @@ describe("the disposition table file", () => {
       // the gate that runs against a file someone edited.
       const body =
         `${HEADER}\n` +
-        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n` +
-        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text\n`;
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text,Machine\n` +
+        `Machine,6240,Aircurve 11 asv,Aircurve 11 asv,,plain-text,Machine\n`;
 
       expect(() =>
         readDispositionTable(`# sha256 ${digestOf(body)}\n${body}`)
@@ -2180,7 +2242,7 @@ describe("the disposition table file", () => {
 
       const body =
         `${HEADER}\nMachine,6240,Aircurve 11 asv,` +
-        `AirCurve 11 ASV (Discontinued),,collection\n`;
+        `AirCurve 11 ASV (Discontinued),,collection,Machine (Discontinued)\n`;
 
       try {
         readDispositionTable(digested(body));
@@ -2297,7 +2359,9 @@ describe("the disposition table file", () => {
         "a file that has lost its header row",
         () =>
           readDispositionTable(
-            digested(`"Machine","6240","${CANARY}","AirFit","","plain-text"\n`)
+            digested(
+              `"Machine","6240","${CANARY}","AirFit","","plain-text","Machine"\n`
+            )
           ),
       ],
       [
@@ -2305,7 +2369,7 @@ describe("the disposition table file", () => {
         () =>
           readDispositionTable(
             digested(
-              `${HEADER}\n"Machine","${CANARY}","","x","","plain-text"\n`
+              `${HEADER}\n"Machine","${CANARY}","","x","","plain-text","Machine"\n`
             )
           ),
       ],
@@ -2314,7 +2378,7 @@ describe("the disposition table file", () => {
         () =>
           readDispositionTable(
             digested(
-              `${HEADER}\n"Machine"," ${CANARY} ","x","x","","plain-text"\n`
+              `${HEADER}\n"Machine"," ${CANARY} ","x","x","","plain-text","Machine"\n`
             )
           ),
       ],
@@ -2469,7 +2533,7 @@ describe("the disposition table file", () => {
     });
 
     it("refuses to read one, on the same reasoning", () => {
-      const body = `${HEADER}\nMask,6377,AirFit F20,AirFit F20,,plain-text\n`;
+      const body = `${HEADER}\nMask,6377,AirFit F20,AirFit F20,,plain-text,Mask\n`;
 
       expect(() => readDispositionTable(digested(body))).toThrow(
         /none for Machine/
@@ -2546,7 +2610,7 @@ describe("the disposition table file", () => {
       // sees a fragment with no commas and calls it the first field of a row.
       const body =
         `${HEADER}\n` +
-        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text,Mask\n`;
 
       expect(() => readDispositionTable(digested(body))).toThrow(
         /line 4, column 3/
@@ -2561,7 +2625,8 @@ describe("the disposition table file", () => {
       // and spoke of a "response" for a file on disk. The guard's own message
       // never ran.
       const body =
-        `${HEADER}\n` + `Mask,6377,"AirFit\n${CANARY}",AirFit,,plain-text\n`;
+        `${HEADER}\n` +
+        `Mask,6377,"AirFit\n${CANARY}",AirFit,,plain-text,Mask\n`;
 
       expect(() => readDispositionTable(digested(body))).toThrow(
         CatalogueRefreshError
@@ -2576,7 +2641,8 @@ describe("the disposition table file", () => {
 
     it("counts the line the address is on, not the one its record starts on", () => {
       const body =
-        `${HEADER}\n` + `Mask,6377,"${CANARY}\nAirFit",AirFit,,plain-text\n`;
+        `${HEADER}\n` +
+        `Mask,6377,"${CANARY}\nAirFit",AirFit,,plain-text,Mask\n`;
 
       expect(() => readDispositionTable(digested(body))).toThrow(
         /line 3, column 3/
@@ -2586,7 +2652,7 @@ describe("the disposition table file", () => {
     it("quotes nothing when it refuses, as before", () => {
       const body =
         `${HEADER}\n` +
-        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text\n`;
+        `Mask,6377,"AirFit\n${CANARY}\nF20",AirFit,,plain-text,Mask\n`;
 
       expect(() => readDispositionTable(digested(body))).toThrow(
         /^(?!.*member@example\.com)/s
