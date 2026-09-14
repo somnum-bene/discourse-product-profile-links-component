@@ -478,6 +478,7 @@ describe("the settings.yml this repository ships", () => {
       links: [
         {
           fieldName: shipped[0].user_field_name,
+          valueFieldName: shipped[0].user_field_name,
           value: first.value,
           url: first.url,
         },
