@@ -726,6 +726,16 @@ export function planApply(
  * Mappings resolves nothing for the value. Stating the condition is the
  * difference between a claim the plan can support and one it cannot.
  *
+ * It carries a second condition for the same reason, and that one is about time
+ * rather than place. A retained value survives the option removal and then dies
+ * on the holder's next profile save that submits the field, because Discourse
+ * resolves an off-list `dropdown` value to nil on write (#58, measured in
+ * ADR-0024). The message used to promise the Profile Link outright, which is a
+ * claim this plan cannot support either: an operator who believes it reads a
+ * retention as permanent and under-reacts to the defect. Marking the field
+ * not-User-editable is what actually stops it, so the message names that too
+ * (ADR-0025).
+ *
  * Matching is exact, for the reason all matching here is exact — Discourse
  * stores the string the User picked, and a Mapping either equals it or resolves
  * nothing (ADR-0013). A squashed comparison would promise a Profile Link that
@@ -768,9 +778,12 @@ function retainedLinks(
           `"${removal.name}" and retained as a Mapping: the catalogue ships ` +
           `it as a Collection Link to ${link.url}, so on any instance ` +
           `carrying these Mappings a User already holding it keeps getting a ` +
-          `Profile Link, and nobody choosing one is offered equipment ` +
-          `cpap.com no longer sells (ADR-0021). Those are two halves of one ` +
-          `decision — do not re-add it as an option.`,
+          `Profile Link until their next profile save that submits ` +
+          `"${removal.name}", which clears an off-list value unless the ` +
+          `field is not User-editable (ADR-0024, #58) — and nobody choosing ` +
+          `one is offered equipment cpap.com no longer sells (ADR-0021). ` +
+          `Those are two halves of one decision — do not re-add it as an ` +
+          `option.`,
       });
     }
   }

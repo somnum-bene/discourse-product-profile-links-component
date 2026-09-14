@@ -476,6 +476,25 @@ describe("an option removed while its Mapping stays", () => {
     );
   });
 
+  // #61 measured what "retained" is actually worth against the instance. A
+  // retained value survives the option removal, and then dies on the User's
+  // next profile save that submits the field, because `clean_custom_field_values`
+  // resolves an off-list `dropdown` through `find_by_value` to nil. The message
+  // used to promise the Profile Link outright, which is the same overstatement
+  // ADR-0021 carried; an operator who believes it under-reacts to #58.
+  it("does not promise the Profile Link outlives a User's profile save", () => {
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+    const [machine] = plan.retained;
+
+    expect(machine.detail).toContain("until");
+    expect(machine.detail).toContain("profile save");
+    expect(machine.detail).toContain("not User-editable");
+    expect(machine.detail).not.toMatch(/keeps getting a Profile Link,/);
+  });
+
   it("names every catch-all the write takes away", () => {
     const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
       managedFields: TWO_FIELDS,
