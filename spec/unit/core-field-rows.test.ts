@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   coreRowsToHide,
@@ -236,4 +237,39 @@ describe("replacedFieldNames", () => {
       "machine-(discontinued)",
     ]);
   });
+});
+
+describe("both Link Surfaces answer this question the same way", () => {
+  // ADR-0004 keeps the user card and the user profile as separate components
+  // with separate wrappers, deliberately, and that duplication has a cost this
+  // pins: a change made to one surface and forgotten on the other. It is the
+  // exact failure mode the Shadow Field fallback invites, because the symptom
+  // is a duplicated value on one surface only — visible to a member, invisible
+  // to every test that does not render a page.
+  //
+  // Read as source rather than rendered, because a Glimmer component needs a
+  // running Discourse and these tests deliberately need nothing (ADR-0003).
+  // The precedent is `lint-gates.test.ts`, which reads the files that define
+  // the gates for the same reason.
+  const SURFACES = [
+    "javascripts/discourse/connectors/user-profile-primary/custom-profile-link.gts",
+    "javascripts/discourse/connectors/user-card-metadata/custom-profile-link.gts",
+  ];
+
+  for (const surface of SURFACES) {
+    const source = readFileSync(surface, "utf8");
+
+    it(`${surface} derives its replaced rows from the shared rule`, () => {
+      expect(source).toContain(
+        'import { replacedFieldNames } from "../../lib/core-field-rows"'
+      );
+      expect(source).toContain("return replacedFieldNames(this.links);");
+    });
+
+    it(`${surface} does not decide it from the link's label`, () => {
+      // The pre-fallback spelling. It reads as correct and is wrong for
+      // exactly one case, so it has to be named to stay gone.
+      expect(source).not.toContain("this.links.map((link) => link.fieldName)");
+    });
+  }
 });
