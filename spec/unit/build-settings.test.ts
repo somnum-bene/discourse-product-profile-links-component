@@ -11,6 +11,7 @@ import {
   dropdownOptionsFor,
   FieldMapping,
   renderFieldMappings,
+  shadowFieldNameFor,
 } from "../../scripts/lib/build-catalogue";
 import {
   BEGIN_MARKER,
@@ -435,14 +436,78 @@ describe("the settings.yml this repository ships", () => {
     name: tab.userFieldName,
   }));
 
+  // The Shadow Fields the same site has to define, derived from the allowlist
+  // for the same reason as the stubs above rather than read off the shipped
+  // file. A site without them is a real configuration and is covered below.
+  const siteWithShadows: SiteUserField[] = [
+    ...site,
+    ...SHEET_TABS.map((tab, index) => ({
+      id: SHEET_TABS.length + index + 1,
+      name: shadowFieldNameFor(tab.userFieldName),
+    })),
+  ];
+
   it("produces no Config Problems on a site defining its fields", () => {
     // Through the component's own reader, on the real shipped value. This is the
     // Config Problem class in full: a Field Mapping naming a Custom User Field
     // that does not exist, one with no Mappings, an incomplete Mapping, a value
     // mapped twice.
     expect(
-      readLinkConfig({ profile_link_fields: shipped }, site).problems
+      readLinkConfig({ profile_link_fields: shipped }, siteWithShadows).problems
     ).toEqual([]);
+  });
+
+  it("joins every shipped Field Mapping to its own Shadow Field", () => {
+    // One per Managed Field (ADR-0026), and each to the right one: a single
+    // shared Shadow Field, or two Field Mappings pointing at the same one,
+    // would resolve a mask value into a machine's slot.
+    const config = readLinkConfig(
+      { profile_link_fields: shipped },
+      siteWithShadows
+    );
+    const shadows = config.fieldMappings.map((field) => field.shadow?.name);
+
+    expect(shadows).toEqual(
+      SHEET_TABS.map((tab) => shadowFieldNameFor(tab.userFieldName))
+    );
+    expect(new Set(shadows).size).toBe(shadows.length);
+  });
+
+  it("reports the Shadow Fields on a site that has not created them yet", () => {
+    // Every existing install, on the update that ships this. The report is the
+    // point rather than a nuisance: a missing Shadow Field is invisible in
+    // every other way, and the one reader who would notice — an anonymous
+    // visitor to somebody else's profile — has no console to look at
+    // (ADR-0024). The Managed Fields keep resolving throughout.
+    const config = readLinkConfig({ profile_link_fields: shipped }, site);
+
+    expect(config.problems).toEqual(
+      SHEET_TABS.map((tab) => ({
+        kind: "unknown-shadow-user-field",
+        fieldName: tab.userFieldName,
+        shadowFieldName: shadowFieldNameFor(tab.userFieldName),
+      }))
+    );
+    expect(config.fieldMappings).toHaveLength(SHEET_TABS.length);
+  });
+
+  it("names a Shadow Field no Managed Field is called", () => {
+    // A Shadow Field is not a Managed Field (CONTEXT.md), and the Sheet Export
+    // allowlist is what says so. A name collision would put a Shadow Field
+    // inside the allowlist and make a Catalogue Apply push Dropdown Options to
+    // it, which is the one thing it must never carry.
+    const managed = new Set(SHEET_TABS.map((tab) => tab.userFieldName));
+
+    for (const field of shipped) {
+      // Present on every shipped Field Mapping, though the type leaves it
+      // optional: the setting's schema does not require one, and an instance
+      // running an older component reports its Mappings without one.
+      const shadow = field.shadow_user_field_name;
+
+      expect(shadow).toBeTypeOf("string");
+      expect(managed.has(shadow as string)).toBe(false);
+      expect(shadow).not.toBe(field.user_field_name);
+    }
   });
 
   it("would report a Field Mapping naming a field no instance defines", () => {

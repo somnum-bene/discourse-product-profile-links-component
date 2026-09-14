@@ -463,7 +463,38 @@ export interface CatalogueResult {
 /** One entry of the `profile_link_fields` setting value. */
 export interface FieldMapping {
   user_field_name: string;
+  /**
+   * The Shadow Field this Managed Field falls back to when it holds nothing.
+   *
+   * `renderFieldMappings` emits one for every field it renders — including a
+   * field carrying no Collection Links today, because it gets one the moment a
+   * product retires, and a setting that silently grew a property at that point
+   * would read as the component changing rather than the catalogue.
+   *
+   * Optional all the same, because this type is the shape of the *setting*
+   * rather than of what this repository generates. An instance running a
+   * component that predates the Shadow Field reports its Field Mappings
+   * without one, and an administrator's own value need not carry one either:
+   * `settings.yml` does not mark it `required`, and a Field Mapping with no
+   * fallback configured is a legitimate configuration rather than a fault.
+   */
+  shadow_user_field_name?: string;
   mappings: { value: string; url: string }[];
+}
+
+/**
+ * What a Managed Field's Shadow Field is called.
+ *
+ * Derived rather than listed, so that one per Managed Field (ADR-0026) is
+ * arithmetic instead of a second list to keep in step with `MANAGED_FIELDS`.
+ *
+ * The suffix describes the *field* — the population it exists for — and not
+ * any value in it, which is why a Shadow Field's stored strings end in the word
+ * twice for two unrelated reasons. `CONTEXT.md` keeps that ambiguity written
+ * down; this is the line that creates it.
+ */
+export function shadowFieldNameFor(userFieldName: string): string {
+  return `${userFieldName} (Discontinued)`;
 }
 
 /** The Dropdown Options one Custom User Field should offer. */
@@ -1705,6 +1736,7 @@ export function renderFieldMappings(
     )
     .map(({ group }) => ({
       user_field_name: group.userFieldName,
+      shadow_user_field_name: shadowFieldNameFor(group.userFieldName),
       mappings: group.entries.map((entry) => ({
         value: entry.value,
         url: entry.url,

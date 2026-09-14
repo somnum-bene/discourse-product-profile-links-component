@@ -7,6 +7,7 @@ profile_link_fields:
   # runs in CI and fails when this region disagrees with either of them.
   default:
     - user_field_name: Machine
+      shadow_user_field_name: Machine (Discontinued)
       mappings:
         - value: AirCurve 10 VAuto BiLevel Machine
           url: https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine
@@ -89,6 +90,7 @@ profile_link_fields:
         - value: Z2 Auto Travel CPAP Machine (Discontinued)
           url: https://www.cpap.com/collections/travel-cpap-machines
     - user_field_name: Mask
+      shadow_user_field_name: Mask (Discontinued)
       mappings:
         - value: AirFit F10 Full Face Mask
           url: https://www.cpap.com/products/resmed-airfit-f10-full-face-cpap-mask
@@ -293,6 +295,8 @@ profile_link_fields:
       user_field_name:
         type: string
         required: true
+      shadow_user_field_name:
+        type: string
       mappings:
         type: objects
         schema:
