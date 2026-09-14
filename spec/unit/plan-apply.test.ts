@@ -13,6 +13,7 @@ import {
   MANAGED_FIELDS,
   planApply,
   PlanApplyError,
+  retentionNotes,
   type UserFieldDefinition,
 } from "../../scripts/lib/plan-apply";
 import { SHEET_TABS } from "../../scripts/lib/sheet-export";
@@ -493,6 +494,35 @@ describe("an option removed while its Mapping stays", () => {
     expect(machine.detail).toContain("profile save");
     expect(machine.detail).toContain("not User-editable");
     expect(machine.detail).not.toMatch(/keeps getting a Profile Link,/);
+  });
+
+  // A Shadow Field moves the terminus again, and permanently rather than for
+  // the length of a migration window (ADR-0026). An operator told only about
+  // the freeze reads the standing answer as unavailable and reaches for the
+  // bounded one, which #61 adopted as a migration tool and not as a fix.
+  it("names the Shadow Field as what outlives the profile save", () => {
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+    const [machine] = plan.retained;
+
+    expect(machine.detail).toContain('"Machine (Discontinued)"');
+    expect(machine.detail).toContain("RETENTION");
+  });
+
+  it("does not claim this instance has either remedy", () => {
+    // The plan reads the checked-out catalogue and the instance's field list.
+    // What the catalogue guarantees and what this instance is configured for
+    // are different questions, and the RETENTION lines answer the second one.
+    const plan = planApply(legacyInstance(), CATALOGUE, CATCH_ALL_LINKS, {
+      managedFields: TWO_FIELDS,
+      replace: true,
+    });
+    const [machine] = plan.retained;
+
+    expect(machine.detail).not.toMatch(/is not User-editable on this instance/);
+    expect(machine.detail).toContain("say which of those");
   });
 
   it("names every catch-all the write takes away", () => {
@@ -1330,5 +1360,234 @@ describe("what the plan is allowed to do", () => {
 
   it("never writes when it refuses", () => {
     expect(source).toContain("refusals.length > 0 ? [] : writes");
+  });
+});
+
+describe("whether a stored Collection Link on this instance is protected", () => {
+  const MANAGED = ["Machine", "Mask"] as const;
+
+  function field(
+    name: string,
+    over: Partial<UserFieldDefinition> = {}
+  ): UserFieldDefinition {
+    return {
+      id: 1,
+      name,
+      field_type: "dropdown",
+      options: [],
+      editable: true,
+      show_on_profile: true,
+      show_on_user_card: true,
+      ...over,
+    };
+  }
+
+  /** A Shadow Field in exactly the configuration ADR-0024 forces. */
+  function shadow(name: string, over: Partial<UserFieldDefinition> = {}) {
+    return field(name, {
+      field_type: "text",
+      options: null,
+      editable: false,
+      show_on_profile: true,
+      show_on_user_card: true,
+      ...over,
+    });
+  }
+
+  const CORRECT = [
+    field("Machine"),
+    field("Mask"),
+    shadow("Machine (Discontinued)"),
+    shadow("Mask (Discontinued)"),
+  ];
+
+  function notesFor(fields: readonly UserFieldDefinition[]) {
+    return retentionNotes(fields, MANAGED);
+  }
+
+  it("says nothing when both Shadow Fields are as ADR-0024 forces them", () => {
+    expect(notesFor(CORRECT)).toEqual([]);
+  });
+
+  it("names a Managed Field that has no Shadow Field at all", () => {
+    // Every instance, until somebody creates them. The consequence is spelled
+    // out rather than left as "missing", because nothing here records what the
+    // lost value was.
+    const notes = notesFor([field("Machine"), field("Mask")]);
+
+    expect(notes.map((note) => note.user_field_name)).toEqual([
+      "Machine (Discontinued)",
+      "Mask (Discontinued)",
+    ]);
+    expect(notes[0].detail).toContain("no Custom User Field named");
+    expect(notes[0].detail).toContain("profile save");
+  });
+
+  it("names a Shadow Field that is not text-typed", () => {
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)", { field_type: "dropdown" }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].user_field_name).toBe("Machine (Discontinued)");
+    expect(notes[0].detail).toContain('"dropdown" rather than "text"');
+  });
+
+  it("names a Shadow Field a User can still edit", () => {
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)", { editable: true }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes[0].detail).toContain("User-editable");
+    expect(notes[0].detail).toContain("the defect it exists to stop");
+  });
+
+  it("names a Shadow Field hidden from every reader who matters", () => {
+    // ADR-0024's half that bites: hidden from profile and card means absent
+    // from an anonymous payload, while reading back normally for staff and for
+    // the profile's owner — so it tests clean for whoever built it.
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)", {
+        show_on_profile: false,
+        show_on_user_card: false,
+      }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes[0].detail).toContain("anonymous");
+    expect(notes[0].detail).toContain("test clean");
+  });
+
+  it("accepts a Shadow Field visible on only one surface", () => {
+    // "and/or", matched to the Link Surfaces it must feed (ADR-0024). One is a
+    // decision about which surfaces carry the fallback, not a fault.
+    expect(
+      notesFor([
+        field("Machine"),
+        field("Mask"),
+        shadow("Machine (Discontinued)", { show_on_user_card: false }),
+        shadow("Mask (Discontinued)", { show_on_profile: false }),
+      ])
+    ).toEqual([]);
+  });
+
+  it("names a Shadow Field carrying Dropdown Options", () => {
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)", { options: ["Anything"] }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes[0].detail).toContain("Dropdown Options");
+  });
+
+  it("reports every fault on one field in a single note", () => {
+    // Four notes about one field is four chances to fix one of them and stop
+    // reading. The forced configuration is one thing, so it is said once.
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)", {
+        field_type: "dropdown",
+        editable: true,
+        show_on_profile: false,
+        show_on_user_card: false,
+      }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].detail).toContain('rather than "text"');
+    expect(notes[0].detail).toContain("User-editable");
+    expect(notes[0].detail).toContain("anonymous");
+  });
+
+  it("treats a flag the API did not report as not the forced configuration", () => {
+    // Silence is not consent. A response that omits the flag has told us
+    // nothing, and staying quiet on nothing is how a misconfiguration passes
+    // the one check that would have caught it (ADR-0016's reasoning).
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      { id: 9, name: "Machine (Discontinued)", field_type: "text" },
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].detail).toContain("User-editable");
+  });
+
+  it("names two Custom User Fields sharing a Shadow Field's name", () => {
+    // The component finds a Shadow Field by name, so a duplicate is a broken
+    // instance rather than a missing field — the same three-outcome lookup the
+    // Managed Fields already get.
+    const notes = notesFor([
+      field("Machine"),
+      field("Mask"),
+      shadow("Machine (Discontinued)"),
+      shadow("Machine (Discontinued)", { id: 2 }),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].detail).toContain("more than one");
+  });
+
+  it("reports a frozen Managed Field without touching it", () => {
+    // ADR-0025 adopts a freeze as an operator step around a migration and
+    // leaves automating it undesigned. The failure it names is an apply that
+    // dies between the freeze and the thaw, so a later plan saying the
+    // instance is still frozen is the cheapest thing that catches it.
+    const notes = notesFor([
+      field("Machine", { editable: false }),
+      field("Mask"),
+      shadow("Machine (Discontinued)"),
+      shadow("Mask (Discontinued)"),
+    ]);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].user_field_name).toBe("Machine");
+    expect(notes[0].detail).toContain("migration-window freeze");
+    expect(notes[0].detail).toContain("neither set it nor will unset it");
+  });
+
+  it("does not mistake a Shadow Field's own editable: false for a freeze", () => {
+    // A Shadow Field is not User-editable by design, and a note saying the
+    // instance looks frozen every single run is a note people stop reading.
+    expect(
+      notesFor(CORRECT).filter((note) => note.detail.includes("freeze"))
+    ).toEqual([]);
+  });
+
+  it("says nothing about a Custom User Field outside the pipeline's scope", () => {
+    expect(
+      notesFor([
+        ...CORRECT,
+        field("Software", { editable: false }),
+        field("Sleep Position"),
+      ])
+    ).toEqual([]);
+  });
+
+  it("reaches the plan as its own disposition, never as a warning", () => {
+    // A warning is something true of this plan's writes, and none of this is.
+    // Folding them together is how the one an operator needed gets skimmed.
+    const plan = planApply([field("Machine"), field("Mask")], [], [], {
+      managedFields: MANAGED,
+    });
+
+    expect(plan.retention.length).toBeGreaterThan(0);
+    for (const warning of plan.warnings) {
+      expect(warning.detail).not.toContain("Shadow Field");
+    }
   });
 });

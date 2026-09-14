@@ -30,6 +30,7 @@ import {
   dropdownOptionsFor,
   type FieldOptions,
   type ResolvedProduct,
+  shadowFieldNameFor,
 } from "./build-catalogue.ts";
 import { SHEET_TABS } from "./sheet-export.ts";
 
@@ -54,6 +55,15 @@ export interface UserFieldDefinition {
   field_type: string;
   /** Absent or null for every field type that does not offer a choice. */
   options?: readonly string[] | null;
+  /**
+   * The three flags a Shadow Field's forced configuration is made of
+   * (ADR-0024). Optional because this type describes what the API reports and
+   * a response that omits one has not told us anything — which the check below
+   * treats as "not the configuration", deliberately, rather than as consent.
+   */
+  editable?: boolean;
+  show_on_profile?: boolean;
+  show_on_user_card?: boolean;
 }
 
 /**
@@ -148,6 +158,19 @@ export interface RetainedLink {
   detail: string;
 }
 
+/**
+ * One thing worth knowing about whether a stored Collection Link on this
+ * instance survives its holder's next profile save.
+ *
+ * `user_field_name` is the field the note is *about*, which is the Shadow
+ * Field for most of them and the Managed Field for a freeze — an operator
+ * reading it needs the name they would go and look at.
+ */
+export interface RetentionNote {
+  user_field_name: string;
+  detail: string;
+}
+
 export interface ApplyPlan {
   writes: FieldWrite[];
   refusals: ApplyRefusal[];
@@ -159,6 +182,11 @@ export interface ApplyPlan {
    * write's `removed`, which is every option going, harmless or not.
    */
   retained: RetainedLink[];
+  /**
+   * What protects — or fails to protect — a Collection Link already stored on
+   * this instance. Nothing here stops the plan or is written by it.
+   */
+  retention: RetentionNote[];
 }
 
 export interface ApplyOptions {
@@ -702,7 +730,143 @@ export function planApply(
     warnings,
     unchanged,
     retained: retainedLinks(reportedWrites, refusals, collectionLinks),
+    retention: retentionNotes(currentFields, managed),
   };
+}
+
+/**
+ * Whether a Collection Link already stored on this instance is actually
+ * protected, said out loud: the state of each Managed Field's Shadow Field,
+ * and whether the Managed Field itself is currently frozen.
+ *
+ * Its own disposition rather than an `ApplyWarning`, for the reason
+ * `RetainedLink` is one: a warning is something true of *this plan's writes*,
+ * and none of this is. It sits next to `retained` on purpose — that one says
+ * the Mapping survives a removal, this one says whether the value does.
+ *
+ * Notes and never refusals, because none of this touches the write this
+ * command makes. A Catalogue Apply pushes Dropdown Options to the Managed
+ * Fields; a Shadow Field takes none and is not written here at all. Refusing
+ * would also stop every apply on every instance that has not created the
+ * fields yet, which is all of them until somebody does.
+ *
+ * Said at all because ADR-0024 measured that each of these faults is invisible
+ * from where anyone would look. A Shadow Field hidden from profile and card is
+ * **absent** from an anonymous reader's payload rather than null, while
+ * reading back perfectly for staff and for the profile's owner — so it tests
+ * clean for whoever built it and renders for nobody the feature is for. This
+ * command already holds every field definition the instance has, so asking is
+ * free, and an apply is the one moment somebody is looking.
+ *
+ * Every check is a positive assertion, and anything that is not definitely the
+ * forced configuration is reported. A response that omits a flag has told us
+ * nothing, and silence on "nothing" is how a misconfiguration passes — the same
+ * reason the URL gate errs towards refusing (ADR-0016).
+ *
+ * It never proposes a fix. Creating or reconfiguring a Custom User Field on a
+ * live instance is a different kind of write from pushing options to one, and
+ * nothing has argued for it under ADR-0013.
+ */
+export function retentionNotes(
+  currentFields: readonly UserFieldDefinition[],
+  managed: readonly string[]
+): RetentionNote[] {
+  const warnings: RetentionNote[] = [];
+
+  for (const name of managed) {
+    // A Managed Field frozen for a migration window (ADR-0025) is reported
+    // rather than corrected. The failure that decision names is an apply that
+    // dies between the freeze and the thaw and leaves the instance frozen, and
+    // a later plan saying so is the cheapest thing that catches it. This
+    // command does not set the flag, either way.
+    const managedField = lookup(currentFields, name);
+    if (managedField.kind === "one" && managedField.field.editable === false) {
+      warnings.push({
+        user_field_name: name,
+        detail:
+          `"${name}" is not User-editable on this instance. If that is a ` +
+          `migration-window freeze it is working as intended and the Link ` +
+          `Surfaces keep rendering throughout, but Users cannot record their ` +
+          `equipment at all until it is set back — the control leaves ` +
+          `/my/preferences/profile rather than greying out (ADR-0025). This ` +
+          `command neither set it nor will unset it.`,
+      });
+    }
+
+    const shadowName = shadowFieldNameFor(name);
+    const found = lookup(currentFields, shadowName);
+
+    if (found.kind === "many") {
+      warnings.push({
+        user_field_name: shadowName,
+        detail:
+          `This instance has more than one Custom User Field named ` +
+          `"${shadowName}". The component finds a Shadow Field by name, so it ` +
+          `cannot tell which one "${name}" falls back to.`,
+      });
+      continue;
+    }
+
+    if (found.kind === "none") {
+      warnings.push({
+        user_field_name: shadowName,
+        detail:
+          `This instance has no Custom User Field named "${shadowName}", so ` +
+          `"${name}" has no Shadow Field to fall back to. A Collection Link ` +
+          `cleared from "${name}" by its holder's next profile save shows ` +
+          `nothing, and nothing here records what it was (#58, ADR-0026).`,
+      });
+      continue;
+    }
+
+    const field = found.field;
+    const faults: string[] = [];
+
+    if (field.field_type !== "text") {
+      faults.push(
+        `it is "${field.field_type}" rather than "text", and the text type is ` +
+          `the whole of the immunity — every other type resolves an off-list ` +
+          `value to nothing on the next profile save`
+      );
+    }
+
+    if (field.editable !== false) {
+      faults.push(
+        `it is User-editable, so a User's own profile save can clear it — ` +
+          `which is the defect it exists to stop`
+      );
+    }
+
+    if (field.show_on_profile !== true && field.show_on_user_card !== true) {
+      faults.push(
+        `it is shown on neither a profile nor a user card, so it is absent ` +
+          `from an anonymous reader's payload entirely while reading back ` +
+          `normally for staff and for the profile's owner — it would render ` +
+          `for nobody the feature is for, and test clean for whoever checked ` +
+          `it (ADR-0024)`
+      );
+    }
+
+    if ((field.options ?? []).length > 0) {
+      faults.push(
+        `it carries Dropdown Options, which a Shadow Field must never have: ` +
+          `the value it holds is one no User may choose (ADR-0021)`
+      );
+    }
+
+    if (faults.length > 0) {
+      warnings.push({
+        user_field_name: shadowName,
+        detail:
+          `"${shadowName}" is the Shadow Field for "${name}", and its ` +
+          `configuration is wrong: ${faults.join("; ")}. The forced ` +
+          `configuration is a text field, not User-editable, shown on a ` +
+          `profile and/or a user card (ADR-0024).`,
+      });
+    }
+  }
+
+  return warnings;
 }
 
 /**
@@ -732,9 +896,15 @@ export function planApply(
  * resolves an off-list `dropdown` value to nil on write (#58, measured in
  * ADR-0024). The message used to promise the Profile Link outright, which is a
  * claim this plan cannot support either: an operator who believes it reads a
- * retention as permanent and under-reacts to the defect. Marking the field
- * not-User-editable is what actually stops it, so the message names that too
- * (ADR-0025).
+ * retention as permanent and under-reacts to the defect.
+ *
+ * #61 corrected it to name the profile save as the terminus and a freeze as
+ * the thing that stops it. A Shadow Field moves the terminus again, and
+ * permanently rather than for a migration window, so the message now names
+ * both remedies and points at the `RETENTION` lines rather than implying the
+ * instance has either. It states what the catalogue guarantees; whether this
+ * instance is configured to collect on it is a different question, asked and
+ * answered separately (ADR-0026).
  *
  * Matching is exact, for the reason all matching here is exact — Discourse
  * stores the string the User picked, and a Mapping either equals it or resolves
@@ -779,11 +949,15 @@ function retainedLinks(
           `it as a Collection Link to ${link.url}, so on any instance ` +
           `carrying these Mappings a User already holding it keeps getting a ` +
           `Profile Link until their next profile save that submits ` +
-          `"${removal.name}", which clears an off-list value unless the ` +
-          `field is not User-editable (ADR-0024, #58) — and nobody choosing ` +
-          `one is offered equipment cpap.com no longer sells (ADR-0021). ` +
-          `Those are two halves of one decision — do not re-add it as an ` +
-          `option.`,
+          `"${removal.name}", which clears an off-list value (ADR-0024, #58). ` +
+          `Two things stop that: the value living in the Shadow Field ` +
+          `"${shadowFieldNameFor(removal.name)}", which a User's save cannot ` +
+          `reach and which the Link Surfaces fall back to (ADR-0026), or ` +
+          `"${removal.name}" being not User-editable for the duration of a ` +
+          `migration (ADR-0025). The RETENTION lines below say which of those ` +
+          `this instance actually has. Meanwhile nobody choosing one is ` +
+          `offered equipment cpap.com no longer sells (ADR-0021) — those are ` +
+          `two halves of one decision, so do not re-add it as an option.`,
       });
     }
   }
