@@ -503,14 +503,14 @@ describe("the settings.yml this repository ships", () => {
     // checks the handle and the status, never that the URL is a product page,
     // so provenance is checked here or nowhere.
     const collectionLinkKeys = new Set(
-      collectionLinks.map((link) => `${link.userFieldName} ${link.value}`)
+      collectionLinks.map((link) => `${link.userFieldName}\u0000${link.value}`)
     );
 
     for (const field of shipped) {
       for (const mapping of field.mappings) {
         const url = new URL(mapping.url);
         const fromLinksFile = collectionLinkKeys.has(
-          `${field.user_field_name} ${mapping.value}`
+          `${field.user_field_name}\u0000${mapping.value}`
         );
 
         expect(url.protocol).toBe("https:");
