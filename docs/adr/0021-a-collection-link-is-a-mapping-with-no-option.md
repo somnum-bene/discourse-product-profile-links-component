@@ -28,6 +28,14 @@ The paragraph above called the survival of a stored value across an option remov
 
 **This does not retire the previous paragraph's second half.** Whether the importer keeps re-adding these values on every run is still real and still open — it decides how often a Catalogue Apply has to clean the list back up, not whether it may.
 
+### What "retained" is actually worth (#58, #61)
+
+The section above is narrower than it reads, and the gap is the whole of #58. #29 and #41 both measured a stored value surviving an **option removal**, which it does. Neither measured what happens at the **next profile save**, which is where it dies: `clean_custom_field_values` sends a `dropdown` through `find_by_value(field_values)&.value`, so a value no longer on the option list resolves to `nil` and is written back empty. A Collection Link holder is off-list permanently and by construction — that is this ADR's entire design — so every one of them is exposed, and the preferences page submits every editable field, which means a User changing their avatar is enough to do it.
+
+The honest statement of a retained value's lifetime is therefore *until the next profile save that submits that field*, not indefinitely. The controller skips any field whose key is absent (`next unless params[:user_fields].has_key?(field_id)`), so this is a resave of a rendered-blank control and not a background sweep — but it is not a guarantee, and "removal is safe regardless" above is safe with respect to **the importer**, which is what that sentence was answering, and not with respect to the User.
+
+[ADR-0024](0024-a-shadow-text-field-must-be-visible-to-be-readable.md) measured the mechanism and [ADR-0025](0025-a-freeze-stops-the-wipe-so-it-covers-the-migration-not-the-feature.md) decides what to do about it. `planApply`'s `RETAINED` line inherited this same overstatement word for word and has been corrected alongside it.
+
 ## A retained removal cannot target anything this pipeline writes
 
 This is narrower than every removal `planApply` proposes. An ordinary `replace` can remove an option this pipeline wrote in an earlier run and has since dropped from the catalogue — a product that stopped resolving is exactly what a routine `replace` is for, and nothing stops that option from being one of this pipeline's own. What cannot happen is a _retained_ removal — one `planApply` reports as a `RetainedLink` — targeting such an option, because `dropdownOptionsFor` reads only Resolved Products, a Collection Link never reaches it (this ADR's whole point), and `readCollectionLinks` requires every value to carry the literal suffix `COLLECTION_LINK_SUFFIX` (` (Discontinued)`) that nothing on the catalogue path ever appends to a Resolved Product's value. So a Dropdown Option this pipeline derives and a Collection Link value can never be the same string — not "does not happen to collide today," but structurally cannot, for as long as this ADR holds.
