@@ -771,7 +771,7 @@ export function retentionNotes(
   currentFields: readonly UserFieldDefinition[],
   managed: readonly string[]
 ): RetentionNote[] {
-  const warnings: RetentionNote[] = [];
+  const notes: RetentionNote[] = [];
 
   for (const name of managed) {
     // A Managed Field frozen for a migration window (ADR-0025) is reported
@@ -781,7 +781,7 @@ export function retentionNotes(
     // command does not set the flag, either way.
     const managedField = lookup(currentFields, name);
     if (managedField.kind === "one" && managedField.field.editable === false) {
-      warnings.push({
+      notes.push({
         user_field_name: name,
         detail:
           `"${name}" is not User-editable on this instance. If that is a ` +
@@ -797,7 +797,7 @@ export function retentionNotes(
     const found = lookup(currentFields, shadowName);
 
     if (found.kind === "many") {
-      warnings.push({
+      notes.push({
         user_field_name: shadowName,
         detail:
           `This instance has more than one Custom User Field named ` +
@@ -808,7 +808,7 @@ export function retentionNotes(
     }
 
     if (found.kind === "none") {
-      warnings.push({
+      notes.push({
         user_field_name: shadowName,
         detail:
           `This instance has no Custom User Field named "${shadowName}", so ` +
@@ -855,7 +855,7 @@ export function retentionNotes(
     }
 
     if (faults.length > 0) {
-      warnings.push({
+      notes.push({
         user_field_name: shadowName,
         detail:
           `"${shadowName}" is the Shadow Field for "${name}", and its ` +
@@ -866,7 +866,7 @@ export function retentionNotes(
     }
   }
 
-  return warnings;
+  return notes;
 }
 
 /**

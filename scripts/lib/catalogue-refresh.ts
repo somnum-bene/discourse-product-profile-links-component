@@ -20,6 +20,7 @@ import {
   type CollectionLink,
   type CollectionLinkFault,
   type CollectionLinkProblem,
+  destinationFieldNameFor,
   DISPOSITION_OUTCOMES,
   type DispositionOutcome,
   type DispositionRow,
@@ -34,7 +35,6 @@ import {
   resolvesALink,
   resolvingValues,
   type SheetRow,
-  targetFieldNameFor,
   undeliveredValues,
 } from "./build-catalogue.ts";
 import {
@@ -232,7 +232,7 @@ export const DISPOSITION_COLUMNS = [
   // and the far side has been reading five of these columns for a while; a new
   // column at the end shifts nothing, where an inserted one silently moves
   // every cell after it.
-  "target_field_name",
+  "destination_field_name",
 ] as const;
 
 /**
@@ -958,7 +958,7 @@ export function dispositionTableCsv(
     entry.value,
     entry.url,
     entry.disposition,
-    targetFieldNameFor(entry.userFieldName, entry.disposition),
+    destinationFieldNameFor(entry.userFieldName, entry.disposition),
   ]);
 
   // A refusal rather than a floor in a test, because a test only guards the
@@ -1080,7 +1080,7 @@ function assertDispositionRow(
     value,
     url,
     disposition,
-    targetFieldName,
+    destinationFieldName,
   ] = row;
 
   // Reported by row and column and never by content: this is the tripwire that
@@ -1268,9 +1268,11 @@ function assertDispositionRow(
   // profile save weeks later (#58). Naming the Shadow Field on any other row
   // puts a value a User can still choose into a field they cannot edit, where
   // it is frozen and unreachable. Neither produces an error anywhere.
-  if (targetFieldName !== targetFieldNameFor(userFieldName, disposition)) {
+  if (
+    destinationFieldName !== destinationFieldNameFor(userFieldName, disposition)
+  ) {
     throw new CatalogueRefreshError(
-      `${where}, ${columnAt("target_field_name")} does not name the Custom ` +
+      `${where}, ${columnAt("destination_field_name")} does not name the Custom ` +
         `User Field a \`${disposition}\` row's value belongs in. A ` +
         `\`collection\` row names the Managed Field's Shadow Field, because ` +
         `a Collection Link has no Dropdown Option behind it and a dropdown ` +

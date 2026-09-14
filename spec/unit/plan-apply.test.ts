@@ -1467,8 +1467,12 @@ describe("whether a stored Collection Link on this instance is protected", () =>
   });
 
   it("accepts a Shadow Field visible on only one surface", () => {
-    // "and/or", matched to the Link Surfaces it must feed (ADR-0024). One is a
-    // decision about which surfaces carry the fallback, not a fault.
+    // "and/or" (ADR-0024), and one flag really is enough for both surfaces:
+    // `allowed_user_field_ids` selects on `show_on_profile OR
+    // show_on_user_card`, so a single flag puts the field in an anonymous
+    // reader's payload and every surface resolves from it. What the other flag
+    // changes is whether *core* renders its plain-text row there, which costs
+    // a duplicate at worst and never a missing link.
     expect(
       notesFor([
         field("Machine"),

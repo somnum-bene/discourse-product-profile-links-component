@@ -507,7 +507,7 @@ export function shadowFieldNameFor(userFieldName: string): string {
  * writing it into a `dropdown` puts it one profile save from `""`, which is the
  * whole of #58. Every other disposition carries a value the Managed Field can
  * keep: a `resolves-to-product` row's value is a live Dropdown Option, and an
- * unlinked row's value is text the member keeps as an Unmatched Value.
+ * unlinked row's value is text the User keeps as an Unmatched Value.
  *
  * Derived from two columns the table already carries rather than stored on a
  * `DispositionRow`, so there is one place that decides it and nothing to keep
@@ -516,7 +516,7 @@ export function shadowFieldNameFor(userFieldName: string): string {
  * (ADR-0023), and leaving the far side to apply a naming convention it cannot
  * see change here is how the two sides drift without either noticing.
  */
-export function targetFieldNameFor(
+export function destinationFieldNameFor(
   userFieldName: string,
   disposition: DispositionOutcome
 ): string {

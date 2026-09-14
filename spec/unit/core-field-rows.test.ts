@@ -239,12 +239,12 @@ describe("replacedFieldNames", () => {
   });
 });
 
-describe("both Link Surfaces answer this question the same way", () => {
+describe("the Link Surfaces answer this question the same way", () => {
   // ADR-0004 keeps the user card and the user profile as separate components
   // with separate wrappers, deliberately, and that duplication has a cost this
   // pins: a change made to one surface and forgotten on the other. It is the
   // exact failure mode the Shadow Field fallback invites, because the symptom
-  // is a duplicated value on one surface only — visible to a member, invisible
+  // is a duplicated value on one surface only — visible to a User, invisible
   // to every test that does not render a page.
   //
   // Read as source rather than rendered, because a Glimmer component needs a
@@ -255,6 +255,27 @@ describe("both Link Surfaces answer this question the same way", () => {
     "javascripts/discourse/connectors/user-profile-primary/custom-profile-link.gts",
     "javascripts/discourse/connectors/user-card-metadata/custom-profile-link.gts",
   ];
+
+  // The third Link Surface (ADR-0004). It needed no change, and that is the
+  // finding rather than an omission: a post carries no core Custom User Field
+  // rows, so there is no duplicate to hide and nothing for the rule above to
+  // do there. It still gets the fallback, through the same `profileLinksFor`
+  // the other two call, and labels it with the Managed Field's name like they
+  // do.
+  //
+  // Pinned because the obvious "make it consistent" change is to give it the
+  // hiding the other two have, and on a post that would search a whole topic
+  // for rows that do not exist and hide whatever it turned up.
+  const POST_SURFACE =
+    "javascripts/discourse/components/custom-profile-link-post.gts";
+
+  it(`${POST_SURFACE} inherits the fallback and hides no core row`, () => {
+    const source = readFileSync(POST_SURFACE, "utf8");
+
+    expect(source).toContain("profileLinksFor(this.site, userFields)");
+    expect(source).not.toContain("replacedFieldNames");
+    expect(source).not.toContain("hideCoreFieldRows");
+  });
 
   for (const surface of SURFACES) {
     const source = readFileSync(surface, "utf8");

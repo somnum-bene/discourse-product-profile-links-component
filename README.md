@@ -16,7 +16,7 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 | 🚫 **No duplicate rows**     | Where a Profile Link replaces a value, Discourse's own plain-text row for it is hidden. Rows without a link are left exactly as core renders them. |
 | 🩺 **Problems get reported** | A field name that doesn't exist, a Field Mapping with nothing in it, a value mapped twice — all logged to the console on page load, on every page. |
 | ♾️ **No ceiling**            | Map as many Custom User Fields as you like. The old ten-slot limit is gone.                                                                        |
-| 🧪 **Actually tested**       | 1,059 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance.                                  |
+| 🧪 **Actually tested**       | 1,059 unit tests over the pure modules and the catalogue pipeline, runnable in a second with no Discourse instance.                                |
 
 ---
 
@@ -27,11 +27,30 @@ Unlike [the tutorial this started from](https://meta.discourse.org/t/link-custom
 The Field Mappings, edited in Discourse's structured settings editor. Each **Field Mapping** names one Custom User Field and nests the **Mappings** that turn its values into Profile Links:
 
 - **`user_field_name`** — the field's name, exactly as it appears in `/admin/config/user_fields`. **Case-sensitive.**
+- **`shadow_user_field_name`** — optional. The **Shadow Field** this one falls back to when it is empty. Also case-sensitive, and also a field's name as `/admin/config/user_fields` spells it.
 - **`mappings`** — one or more value/URL pairs:
   - **`value`** — must match the member's field value exactly.
   - **`url`** — where the Profile Link points. Discourse validates it as you type.
 
 A value that matches no Mapping renders nothing. An empty configuration is valid — it just renders nothing at all.
+
+> ### ℹ️ About `shadow_user_field_name`
+>
+> A dropdown-backed field **loses its stored value on the member's next profile save** if that value is no longer one of its options — expected Discourse behaviour, not a bug. Every **Collection Link** is in exactly that state permanently and on purpose, because it is a Mapping with no Dropdown Option behind it ([ADR-0021](docs/adr/0021-a-collection-link-is-a-mapping-with-no-option.md)). So a discontinued machine is one profile save from blank, and nothing in this repository records what it was.
+>
+> A Shadow Field is a second, `text`-typed Custom User Field that holds that value instead, because a text field keeps whatever it is given. The shipped default names `Machine (Discontinued)` and `Mask (Discontinued)`; `pnpm apply:catalogue --plan` prints a `RETENTION` line for each one that is missing or misconfigured.
+>
+> **Create it with all three of these, or it does not work** ([ADR-0024](docs/adr/0024-a-shadow-text-field-must-be-visible-to-be-readable.md) measured each one):
+>
+> | Setting                          | Value               | Why                                                                                                                                                                                                              |
+> | -------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Type                             | **Text**            | The whole of the protection. Every other type drops an off-list value.                                                                                                                                           |
+> | Editable by user                 | **Off**             | Discourse refuses a member's own save against the field before it reads the request, so nothing they do can clear it. Your own admin writes still go through.                                                    |
+> | Show on profile and/or user card | **At least one on** | **The half that bites.** A field on neither is _absent_ from the payload for everyone except staff and the profile's owner — so it renders for nobody it exists for, while looking perfect to whoever set it up. |
+>
+> Leave **Required** as optional. Setting a field to required for all users forces every member on the instance to fill it in before they can do anything else.
+
+Naming a Shadow Field the site does not define is reported to the browser console and nothing else — the Field Mapping keeps working, it just has no fallback.
 
 > ### ⚠️ Don't edit this setting on a live site
 >

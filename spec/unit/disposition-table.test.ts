@@ -466,7 +466,7 @@ describe("the disposition table this repository commits", () => {
 });
 
 describe("where the committed table sends each value", () => {
-  // `target_field_name` is the column the non-public repository writes *into*,
+  // `destination_field_name` is the column the non-public repository writes *into*,
   // and it is the only place this repository states that routing rule where
   // that repository can see it. Deriving it there from a naming convention it
   // cannot watch change here is how the two sides drift (ADR-0026).
@@ -476,12 +476,12 @@ describe("where the committed table sends each value", () => {
     .filter((line) => line !== "")
     .map((line) => line.split(","));
 
-  const targetAt = new Map(
+  const destinationAt = new Map(
     dataRows.map((cells) => [`${cells[0]}\u0000${cells[1]}`, cells.at(-1)])
   );
 
-  function targetFor(row: DispositionRow): string | undefined {
-    return targetAt.get(`${row.userFieldName}\u0000${row.legacyValue}`);
+  function destinationFor(row: DispositionRow): string | undefined {
+    return destinationAt.get(`${row.userFieldName}\u0000${row.legacyValue}`);
   }
 
   it("sends every collection row to its Managed Field's Shadow Field", () => {
@@ -493,7 +493,7 @@ describe("where the committed table sends each value", () => {
     expect(collections.length).toBeGreaterThan(0);
 
     for (const row of collections) {
-      expect(targetFor(row)).toBe(`${row.userFieldName} (Discontinued)`);
+      expect(destinationFor(row)).toBe(`${row.userFieldName} (Discontinued)`);
     }
   });
 
@@ -503,11 +503,11 @@ describe("where the committed table sends each value", () => {
     // a field the User cannot edit would freeze equipment they can still
     // change.
     for (const row of rows.filter((r) => r.disposition !== "collection")) {
-      expect(targetFor(row)).toBe(row.userFieldName);
+      expect(destinationFor(row)).toBe(row.userFieldName);
     }
   });
 
-  it("names a target for every row, and nothing but the two fields", () => {
+  it("names a destination for every row, and nothing but the two fields", () => {
     const allowed = new Set(
       SHEET_TABS.flatMap((tab) => [
         tab.userFieldName,
@@ -518,7 +518,7 @@ describe("where the committed table sends each value", () => {
     expect(dataRows).toHaveLength(rows.length);
 
     for (const row of rows) {
-      expect(allowed.has(targetFor(row) ?? "")).toBe(true);
+      expect(allowed.has(destinationFor(row) ?? "")).toBe(true);
     }
   });
 
@@ -527,7 +527,7 @@ describe("where the committed table sends each value", () => {
     // artifact rather than off the transform that produced it.
     for (const row of rows) {
       if (row.disposition === "collection") {
-        expect(targetFor(row)).not.toBe(row.userFieldName);
+        expect(destinationFor(row)).not.toBe(row.userFieldName);
       }
     }
   });

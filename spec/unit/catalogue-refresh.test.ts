@@ -1581,7 +1581,7 @@ describe("the disposition table file", () => {
 
   const HEADER =
     "user_field_name,legacy_value,legacy_text,value,url,disposition," +
-    "target_field_name";
+    "destination_field_name";
 
   /**
    * The rows, plus a minimal row for any Managed Field they do not cover.
@@ -1623,10 +1623,10 @@ describe("the disposition table file", () => {
     // side has to emit the custom field name as one of its three columns. A
     // table without it would make the join guess at both.
     //
-    // `target_field_name` is a seventh rather than a replacement for the
+    // `destination_field_name` is a seventh rather than a replacement for the
     // first: `user_field_name` says which option table the legacy identifier
-    // came from, which is what makes the identifier unique, and the target
-    // says where the value is written. They differ on exactly the `collection`
+    // came from, which is what makes the identifier unique, and the
+    // destination says where the value is written. They differ on exactly the `collection`
     // rows, and collapsing them would lose the join key on those rows.
     expect(DISPOSITION_COLUMNS).toEqual([
       "user_field_name",
@@ -1635,7 +1635,7 @@ describe("the disposition table file", () => {
       "value",
       "url",
       "disposition",
-      "target_field_name",
+      "destination_field_name",
     ]);
   });
 
@@ -1651,7 +1651,7 @@ describe("the disposition table file", () => {
     expect(written[4]).toContain(",blank-title,Mask");
   });
 
-  it("refuses a row whose target field contradicts its disposition", () => {
+  it("refuses a row whose destination field contradicts its disposition", () => {
     // Silent on both sides if it got through. Naming the Managed Field on a
     // collection row puts the value in the field that cannot keep it, and the
     // loss arrives weeks later on a profile save.
@@ -1680,7 +1680,7 @@ describe("the disposition table file", () => {
     );
   });
 
-  it("quotes no cell when it refuses a contradictory target field", () => {
+  it("quotes no cell when it refuses a contradictory destination field", () => {
     const body =
       `${HEADER}\n` +
       `Machine,6240,Marjorie Fenwick-Abara,Aircurve 11 asv,,plain-text,` +
