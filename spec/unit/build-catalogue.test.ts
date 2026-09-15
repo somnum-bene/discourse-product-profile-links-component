@@ -14,6 +14,7 @@ import {
   type ProductRecord,
   renderFieldMappings,
   type ResolvedProduct,
+  shadowFieldNameFor,
   type SheetRow,
   undeliveredValues,
 } from "../../scripts/lib/build-catalogue";
@@ -1457,7 +1458,64 @@ describe("Collection Links that cannot be derived", () => {
   });
 });
 
+describe("shadowFieldNameFor", () => {
+  it("names a Managed Field's Shadow Field", () => {
+    expect(shadowFieldNameFor("Machine")).toBe("Machine (Discontinued)");
+    expect(shadowFieldNameFor("Mask")).toBe("Mask (Discontinued)");
+  });
+
+  it("gives every Managed Field a distinct Shadow Field", () => {
+    // One each (ADR-0026). Two Managed Fields sharing a Shadow Field would
+    // resolve a mask value into a machine's slot.
+    const names = MANAGED_FIELDS.map(shadowFieldNameFor);
+
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("names nothing that is already a Managed Field", () => {
+    // A Shadow Field is not a Managed Field (CONTEXT.md). A collision would
+    // put one inside the Sheet Export allowlist, and a Catalogue Apply would
+    // push Dropdown Options to the one field that must never carry any.
+    for (const name of MANAGED_FIELDS) {
+      expect(MANAGED_FIELDS).not.toContain(shadowFieldNameFor(name));
+    }
+  });
+
+  it("does not double the suffix on a name that already carries it", () => {
+    // Guarding the shape rather than a caller: the suffix is also what a
+    // Collection Link's *value* ends in, and the two are unrelated. If this
+    // ever grows a guard, it should be because a Managed Field was renamed,
+    // not because a value was passed in by mistake.
+    expect(shadowFieldNameFor("Machine (Discontinued)")).toBe(
+      "Machine (Discontinued) (Discontinued)"
+    );
+  });
+});
+
 describe("renderFieldMappings", () => {
+  it("gives every Field Mapping the Shadow Field it falls back to", () => {
+    const fields = renderFieldMappings(build().catalogue, [], MANAGED_FIELDS);
+
+    expect(fields.map((field) => field.shadow_user_field_name)).toEqual([
+      "Machine (Discontinued)",
+      "Mask (Discontinued)",
+    ]);
+  });
+
+  it("ships a Shadow Field for a Managed Field carrying no Collection Links", () => {
+    // Emitted unconditionally rather than only where a Collection Link exists.
+    // A field with none today gets one the moment a product retires, and a
+    // setting that grew the property at that point would read as the component
+    // changing rather than the catalogue.
+    const fields = renderFieldMappings(build().catalogue, [], MANAGED_FIELDS);
+
+    for (const field of fields) {
+      expect(field.shadow_user_field_name).toBe(
+        shadowFieldNameFor(field.user_field_name)
+      );
+    }
+  });
+
   it("produces the profile_link_fields structure the setting expects", () => {
     const fields = renderFieldMappings(build().catalogue, [], MANAGED_FIELDS);
 
@@ -2246,5 +2304,28 @@ describe("the module's isolation", () => {
     expect(source).not.toMatch(/\brequire\s*\(/);
     expect(source).not.toMatch(/\bfetch\s*\(/);
     expect(source).not.toMatch(/\bDate\b|\bprocess\b/);
+  });
+});
+
+describe("a Shadow Field can never become a Dropdown Option target", () => {
+  it("is absent from what dropdownOptionsFor returns", () => {
+    // The same structural guarantee ADR-0021 gives a Collection Link, for the
+    // same reason: `dropdownOptionsFor` is handed the Resolved Products and
+    // groups them by the Managed Field they came from, so it has no way to
+    // name a Shadow Field. Pinned rather than assumed, because the failure is
+    // a Catalogue Apply writing Dropdown Options onto the one field whose
+    // whole value is that it has none.
+    const options = dropdownOptionsFor(build().catalogue);
+    const shadows = MANAGED_FIELDS.map(shadowFieldNameFor);
+
+    for (const field of options) {
+      expect(shadows).not.toContain(field.user_field_name);
+    }
+  });
+
+  it("is not in the Managed Fields a Catalogue Apply works from", () => {
+    for (const name of MANAGED_FIELDS.map(shadowFieldNameFor)) {
+      expect(MANAGED_FIELDS).not.toContain(name);
+    }
   });
 });

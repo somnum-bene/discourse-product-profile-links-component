@@ -7,8 +7,35 @@
 // takes plain class-name lists, so the unit tests in spec/unit drive it with no
 // DOM. The modifier in ../modifiers/hide-core-field-rows.ts supplies the rows.
 
+import type { ProfileLink } from "./profile-links";
+
 /** Core's base class, on every public user field row on both Link Surfaces. */
 const ROW_CLASS = "public-user-field";
+
+/**
+ * The Custom User Fields whose plain-text row core should stop rendering,
+ * given the Profile Links a Link Surface is about to show.
+ *
+ * It is `valueFieldName` rather than `fieldName`, and the difference only shows
+ * up under a Shadow Field fallback. Core renders a row for the field that holds
+ * the value; a fallback's value sits in the Shadow Field, and the Managed Field
+ * it is labelled for is empty and has no row at all. Matching on the label
+ * would hide a row that does not exist and leave the duplicate standing.
+ *
+ * Only the field a link was actually read from is returned, so a Shadow Field
+ * whose value lost the tie-break to a populated Managed Field keeps its row.
+ * That row is a second, unlinked value, and this module's whole position is
+ * that showing a value twice is a blemish while silently deleting one is data
+ * loss — so the blemish is chosen, exactly as it is everywhere else here.
+ *
+ * Both Link Surfaces call this. They stay separate components with their own
+ * wrappers (ADR-0004), but neither should be deciding this question for itself:
+ * the duplication that ADR-0004 keeps is deliberate markup, not a licence for
+ * two surfaces to answer the same question differently.
+ */
+export function replacedFieldNames(links: readonly ProfileLink[]): string[] {
+  return links.map((link) => link.valueFieldName);
+}
 
 /** Anything with class names — in practice an element's `classList`. */
 export interface CoreFieldRow {

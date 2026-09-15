@@ -256,6 +256,7 @@ describe("resolveProfileLinks", () => {
     expect(links).toEqual([
       {
         fieldName: "Machine",
+        valueFieldName: "Machine",
         value: "AirSense 11",
         url: "https://example.com/airsense-11",
       },
@@ -302,7 +303,9 @@ describe("resolveProfileLinks", () => {
 
     const result = resolveProfileLinks(withCollectionLink, { 1: value });
 
-    expect(result.links).toEqual([{ fieldName: "Machine", value, url }]);
+    expect(result.links).toEqual([
+      { fieldName: "Machine", valueFieldName: "Machine", value, url },
+    ]);
     expect(result.unmatched).toEqual([]);
 
     // And the near misses are not the same value. Each of these is what a
@@ -386,6 +389,7 @@ describe("resolveProfileLinks", () => {
     expect(links).toEqual([
       {
         fieldName: "Machine",
+        valueFieldName: "Machine",
         value: "constructor",
         url: "https://example.com/constructor",
       },
@@ -406,6 +410,12 @@ describe("describeConfigProblem", () => {
     { kind: "no-mappings", fieldName: "Machine" },
     { kind: "duplicate-value", fieldName: "Machine", value: "AirSense 11" },
     { kind: "incomplete-mapping", fieldName: "Machine" },
+    {
+      kind: "unknown-shadow-user-field",
+      fieldName: "Machine",
+      shadowFieldName: "Machine (Discontinued)",
+    },
+    { kind: "shadow-field-is-its-own-field", fieldName: "Machine" },
   ];
 
   it("describes every kind of Config Problem", () => {
@@ -421,5 +431,361 @@ describe("describeConfigProblem", () => {
         fieldName: "Humidifier",
       })
     ).toContain("Humidifier");
+  });
+});
+
+describe("the Shadow Field fallback", () => {
+  // A Shadow Field is a `text`-typed Custom User Field holding a Collection
+  // Link value, because a `dropdown` cannot keep one: Discourse resolves an
+  // off-list `dropdown` value to nil on its holder's next profile save, and a
+  // Collection Link is off-list permanently and by construction (#58,
+  // ADR-0021, ADR-0024). It is never a Managed Field and never carries a
+  // Dropdown Option — see CONTEXT.md — so nothing here consults an option list
+  // any more than the rest of this module does.
+  //
+  // The ids are deliberately not adjacent to the Managed Fields'. A Shadow
+  // Field is created later than the field it shadows, so on a real instance it
+  // gets whatever id the sequence is on, and a fixture that numbered them 3 and
+  // 4 would let an off-by-one read as a pass.
+  const SITE_WITH_SHADOWS: SiteUserField[] = [
+    { id: 1, name: "Machine" },
+    { id: 2, name: "Mask" },
+    { id: 17, name: "Machine (Discontinued)" },
+    { id: 18, name: "Mask (Discontinued)" },
+  ];
+
+  // Exact bytes, for the reason every value in this file is exact: resolution
+  // is a trimmed string equality and a near miss resolves for nobody.
+  const COLLECTION_VALUE = "DreamStation Auto CPAP Machine (Discontinued)";
+  const COLLECTION_URL = "https://www.cpap.com/collections/cpap-machines";
+
+  const MACHINE_WITH_SHADOW = {
+    user_field_name: "Machine",
+    shadow_user_field_name: "Machine (Discontinued)",
+    mappings: [
+      ...MACHINE_FIELD.mappings,
+      { value: COLLECTION_VALUE, url: COLLECTION_URL },
+    ],
+  };
+
+  const shadowed = readLinkConfig(
+    settingsWith([MACHINE_WITH_SHADOW]),
+    SITE_WITH_SHADOWS
+  );
+
+  it("joins the Shadow Field to its own integer id", () => {
+    expect(shadowed.problems).toEqual([]);
+    expect(shadowed.fieldMappings[0].shadow).toEqual({
+      name: "Machine (Discontinued)",
+      id: 17,
+    });
+  });
+
+  it("carries no Shadow Field when the Field Mapping names none", () => {
+    const plain = readLinkConfig(
+      settingsWith([MACHINE_FIELD]),
+      SITE_WITH_SHADOWS
+    );
+
+    expect(plain.fieldMappings[0].shadow).toBeUndefined();
+  });
+
+  it("resolves a Collection Link from the Shadow Field when the Managed Field is empty", () => {
+    // This is the whole feature, in the state #58 actually leaves a holder in:
+    // the wipe writes "" rather than removing the key.
+    const { links, unmatched } = resolveProfileLinks(shadowed, {
+      1: "",
+      17: COLLECTION_VALUE,
+    });
+
+    expect(unmatched).toEqual([]);
+    expect(links).toEqual([
+      {
+        fieldName: "Machine",
+        valueFieldName: "Machine (Discontinued)",
+        value: COLLECTION_VALUE,
+        url: COLLECTION_URL,
+      },
+    ]);
+  });
+
+  it("labels the Profile Link with the Managed Field's name and not the Shadow Field's", () => {
+    // `ProfileLinkRow` renders `{{@link.fieldName}}:`, so getting this wrong
+    // puts "Machine (Discontinued): DreamStation Auto CPAP Machine
+    // (Discontinued)" on a public profile. A fallback changes where a value
+    // came from, never which link it is (ADR-0026).
+    const { links } = resolveProfileLinks(shadowed, { 17: COLLECTION_VALUE });
+
+    expect(links[0].fieldName).toBe("Machine");
+    expect(links[0].fieldName).not.toContain("(Discontinued)");
+  });
+
+  it("names the Custom User Field the value was actually read from", () => {
+    // The Link Surfaces hide core's plain-text row for the field a Profile
+    // Link replaced, and under a fallback that row belongs to the Shadow
+    // Field. Without this they would hide the Managed Field's row, which does
+    // not exist, and leave the duplicate they meant to remove.
+    const fromShadow = resolveProfileLinks(shadowed, { 17: COLLECTION_VALUE });
+    const fromField = resolveProfileLinks(shadowed, { 1: "AirSense 11" });
+
+    expect(fromShadow.links[0].valueFieldName).toBe("Machine (Discontinued)");
+    expect(fromField.links[0].valueFieldName).toBe("Machine");
+  });
+
+  it("falls back when the Managed Field is absent from the payload entirely", () => {
+    const { links } = resolveProfileLinks(shadowed, { 17: COLLECTION_VALUE });
+
+    expect(links).toHaveLength(1);
+    expect(links[0].value).toBe(COLLECTION_VALUE);
+  });
+
+  it("falls back over a whitespace-only Managed Field value", () => {
+    const { links } = resolveProfileLinks(shadowed, {
+      1: "   ",
+      17: COLLECTION_VALUE,
+    });
+
+    expect(links).toHaveLength(1);
+    expect(links[0].valueFieldName).toBe("Machine (Discontinued)");
+  });
+
+  it("falls back over a non-string Managed Field value", () => {
+    const { links } = resolveProfileLinks(shadowed, {
+      1: ["AirSense 11"],
+      17: COLLECTION_VALUE,
+    });
+
+    expect(links).toHaveLength(1);
+    expect(links[0].valueFieldName).toBe("Machine (Discontinued)");
+  });
+
+  it("lets the Managed Field win when both are populated and they disagree", () => {
+    // The Managed Field is the one a User can still edit and the Shadow Field
+    // is one they cannot, so a disagreement is the Shadow Field being out of
+    // date. Rendering it would show equipment the User has replaced, with a
+    // working link: absent is a Profile Link missing, stale is a Profile Link
+    // lying (ADR-0026).
+    const { links, unmatched } = resolveProfileLinks(shadowed, {
+      1: "AirSense 11",
+      17: COLLECTION_VALUE,
+    });
+
+    expect(unmatched).toEqual([]);
+    expect(links).toEqual([
+      {
+        fieldName: "Machine",
+        valueFieldName: "Machine",
+        value: "AirSense 11",
+        url: "https://example.com/airsense-11",
+      },
+    ]);
+  });
+
+  it("produces one Profile Link, not two, when both are populated", () => {
+    // Both sources feed one slot. Two links for one Field Mapping would put
+    // the same machine on a profile twice.
+    const { links } = resolveProfileLinks(shadowed, {
+      1: "AirSense 11",
+      17: COLLECTION_VALUE,
+    });
+
+    expect(links).toHaveLength(1);
+  });
+
+  it("lets the Managed Field win when both are populated and they agree", () => {
+    const { links } = resolveProfileLinks(shadowed, {
+      1: COLLECTION_VALUE,
+      17: COLLECTION_VALUE,
+    });
+
+    expect(links).toHaveLength(1);
+    expect(links[0].valueFieldName).toBe("Machine");
+  });
+
+  it("does not fall back over a Managed Field value that matches no Mapping", () => {
+    // An Unmatched Value is a value the User holds, not an empty field. Falling
+    // back here would replace what they hold now with what they held before.
+    const { links, unmatched } = resolveProfileLinks(shadowed, {
+      1: "Some Other Machine",
+      17: COLLECTION_VALUE,
+    });
+
+    expect(links).toEqual([]);
+    expect(unmatched).toEqual([
+      { fieldName: "Machine", value: "Some Other Machine" },
+    ]);
+  });
+
+  it("reports an unmatched Shadow Field value against the Managed Field's slot", () => {
+    const { links, unmatched } = resolveProfileLinks(shadowed, {
+      17: "Equipment No Mapping Covers",
+    });
+
+    expect(links).toEqual([]);
+    expect(unmatched).toEqual([
+      { fieldName: "Machine", value: "Equipment No Mapping Covers" },
+    ]);
+  });
+
+  it("ignores a blank or non-string Shadow Field value", () => {
+    for (const value of ["", "   ", 42, null, ["x"]]) {
+      const { links, unmatched } = resolveProfileLinks(shadowed, { 17: value });
+
+      expect(links).toEqual([]);
+      expect(unmatched).toEqual([]);
+    }
+  });
+
+  it("keeps each Managed Field to its own Shadow Field", () => {
+    // One Shadow Field per Managed Field (ADR-0026). A Machine value sitting in
+    // Machine's Shadow Field must not resolve into Mask's slot.
+    const both = readLinkConfig(
+      settingsWith([
+        MACHINE_WITH_SHADOW,
+        {
+          user_field_name: "Mask",
+          shadow_user_field_name: "Mask (Discontinued)",
+          mappings: [{ value: "F20", url: "https://example.com/f20" }],
+        },
+      ]),
+      SITE_WITH_SHADOWS
+    );
+
+    const { links } = resolveProfileLinks(both, { 17: COLLECTION_VALUE });
+
+    expect(links).toEqual([
+      {
+        fieldName: "Machine",
+        valueFieldName: "Machine (Discontinued)",
+        value: COLLECTION_VALUE,
+        url: COLLECTION_URL,
+      },
+    ]);
+  });
+
+  it("resolves both Managed Fields from their own Shadow Fields at once", () => {
+    // The case one shared Shadow Field could not represent, which is why there
+    // is one each (ADR-0026).
+    const maskValue = "Mirage Quattro Full Face Mask (Discontinued)";
+    const maskUrl = "https://www.cpap.com/collections/full-face-masks";
+    const both = readLinkConfig(
+      settingsWith([
+        MACHINE_WITH_SHADOW,
+        {
+          user_field_name: "Mask",
+          shadow_user_field_name: "Mask (Discontinued)",
+          mappings: [{ value: maskValue, url: maskUrl }],
+        },
+      ]),
+      SITE_WITH_SHADOWS
+    );
+
+    const { links } = resolveProfileLinks(both, {
+      17: COLLECTION_VALUE,
+      18: maskValue,
+    });
+
+    expect(links).toEqual([
+      {
+        fieldName: "Machine",
+        valueFieldName: "Machine (Discontinued)",
+        value: COLLECTION_VALUE,
+        url: COLLECTION_URL,
+      },
+      {
+        fieldName: "Mask",
+        valueFieldName: "Mask (Discontinued)",
+        value: maskValue,
+        url: maskUrl,
+      },
+    ]);
+  });
+
+  it("reports a Shadow Field the site does not define and keeps the Managed Field working", () => {
+    // The failure this guards is the expensive one. A Shadow Field is created
+    // by hand on the instance and named in a setting here, so the two can
+    // disagree — and dropping the whole Field Mapping over it would take every
+    // Profile Link off the site to protect the fallback.
+    const missing = readLinkConfig(
+      settingsWith([
+        {
+          user_field_name: "Machine",
+          shadow_user_field_name: "Machine (Retained)",
+          mappings: MACHINE_FIELD.mappings,
+        },
+      ]),
+      SITE_WITH_SHADOWS
+    );
+
+    expect(missing.problems).toEqual([
+      {
+        kind: "unknown-shadow-user-field",
+        fieldName: "Machine",
+        shadowFieldName: "Machine (Retained)",
+      },
+    ]);
+    expect(missing.fieldMappings).toHaveLength(1);
+    expect(missing.fieldMappings[0].shadow).toBeUndefined();
+    expect(
+      resolveProfileLinks(missing, { 1: "AirSense 11" }).links
+    ).toHaveLength(1);
+  });
+
+  it("reports a Field Mapping that names itself as its own Shadow Field", () => {
+    const itself = readLinkConfig(
+      settingsWith([
+        {
+          user_field_name: "Machine",
+          shadow_user_field_name: "Machine",
+          mappings: MACHINE_FIELD.mappings,
+        },
+      ]),
+      SITE_WITH_SHADOWS
+    );
+
+    expect(itself.problems).toEqual([
+      { kind: "shadow-field-is-its-own-field", fieldName: "Machine" },
+    ]);
+    expect(itself.fieldMappings[0].shadow).toBeUndefined();
+  });
+
+  it("ignores a blank Shadow Field name rather than reporting it", () => {
+    // Absent and empty are the same intention — no fallback configured — and
+    // the objects editor writes an empty string for a property left alone.
+    for (const shadow_user_field_name of ["", "   ", null, undefined]) {
+      const config = readLinkConfig(
+        settingsWith([{ ...MACHINE_FIELD, shadow_user_field_name }]),
+        SITE_WITH_SHADOWS
+      );
+
+      expect(config.problems).toEqual([]);
+      expect(config.fieldMappings[0].shadow).toBeUndefined();
+    }
+  });
+
+  it("trims a Shadow Field name before looking it up", () => {
+    const padded = readLinkConfig(
+      settingsWith([
+        {
+          ...MACHINE_FIELD,
+          shadow_user_field_name: "  Machine (Discontinued) ",
+        },
+      ]),
+      SITE_WITH_SHADOWS
+    );
+
+    expect(padded.problems).toEqual([]);
+    expect(padded.fieldMappings[0].shadow?.id).toBe(17);
+  });
+
+  it("names both fields when it describes an unknown Shadow Field", () => {
+    const sentence = describeConfigProblem({
+      kind: "unknown-shadow-user-field",
+      fieldName: "Machine",
+      shadowFieldName: "Machine (Retained)",
+    });
+
+    expect(sentence).toContain("Machine (Retained)");
+    expect(sentence).toContain("Machine");
   });
 });

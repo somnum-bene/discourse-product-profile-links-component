@@ -84,6 +84,7 @@ describe("profileLinksFor", () => {
     expect(profileLinksFor(SITE, { 1: "AirSense 11" })).toEqual([
       {
         fieldName: "Machine",
+        valueFieldName: "Machine",
         value: "AirSense 11",
         url: "https://example.com/airsense-11",
       },

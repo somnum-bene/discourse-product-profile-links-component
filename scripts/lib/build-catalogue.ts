@@ -463,7 +463,66 @@ export interface CatalogueResult {
 /** One entry of the `profile_link_fields` setting value. */
 export interface FieldMapping {
   user_field_name: string;
+  /**
+   * The Shadow Field this Managed Field falls back to when it holds nothing.
+   *
+   * `renderFieldMappings` emits one for every field it renders — including a
+   * field carrying no Collection Links today, because it gets one the moment a
+   * product retires, and a setting that silently grew a property at that point
+   * would read as the component changing rather than the catalogue.
+   *
+   * Optional all the same, because this type is the shape of the *setting*
+   * rather than of what this repository generates. An instance running a
+   * component that predates the Shadow Field reports its Field Mappings
+   * without one, and an administrator's own value need not carry one either:
+   * `settings.yml` does not mark it `required`, and a Field Mapping with no
+   * fallback configured is a legitimate configuration rather than a fault.
+   */
+  shadow_user_field_name?: string;
   mappings: { value: string; url: string }[];
+}
+
+/**
+ * What a Managed Field's Shadow Field is called.
+ *
+ * Derived rather than listed, so that one per Managed Field (ADR-0026) is
+ * arithmetic instead of a second list to keep in step with `MANAGED_FIELDS`.
+ *
+ * The suffix describes the *field* — the population it exists for — and not
+ * any value in it, which is why a Shadow Field's stored strings end in the word
+ * twice for two unrelated reasons. `CONTEXT.md` keeps that ambiguity written
+ * down; this is the line that creates it.
+ */
+export function shadowFieldNameFor(userFieldName: string): string {
+  return `${userFieldName} (Discontinued)`;
+}
+
+/**
+ * Which Custom User Field the repository joining against member data must
+ * write this row's value into.
+ *
+ * A `collection` row goes to the Shadow Field and every other row goes to the
+ * Managed Field (ADR-0026). A Collection Link is off-list the instant it lands
+ * — it is a Mapping with no Dropdown Option, by construction (ADR-0021) — so
+ * writing it into a `dropdown` puts it one profile save from `""`, which is the
+ * whole of #58. Every other disposition carries a value the Managed Field can
+ * keep: a `resolves-to-product` row's value is a live Dropdown Option, and an
+ * unlinked row's value is text the User keeps as an Unmatched Value.
+ *
+ * Derived from two columns the table already carries rather than stored on a
+ * `DispositionRow`, so there is one place that decides it and nothing to keep
+ * in step at the four sites a row is built. It is still written out as its own
+ * column: the disposition table is the *entire* interface to that repository
+ * (ADR-0023), and leaving the far side to apply a naming convention it cannot
+ * see change here is how the two sides drift without either noticing.
+ */
+export function destinationFieldNameFor(
+  userFieldName: string,
+  disposition: DispositionOutcome
+): string {
+  return disposition === "collection"
+    ? shadowFieldNameFor(userFieldName)
+    : userFieldName;
 }
 
 /** The Dropdown Options one Custom User Field should offer. */
@@ -1705,6 +1764,7 @@ export function renderFieldMappings(
     )
     .map(({ group }) => ({
       user_field_name: group.userFieldName,
+      shadow_user_field_name: shadowFieldNameFor(group.userFieldName),
       mappings: group.entries.map((entry) => ({
         value: entry.value,
         url: entry.url,

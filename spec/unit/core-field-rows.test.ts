@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   coreRowsToHide,
+  replacedFieldNames,
   usableDasherizedNames,
 } from "../../javascripts/discourse/lib/core-field-rows";
 
@@ -142,4 +144,153 @@ describe("usableDasherizedNames", () => {
 
     expect(coreRowsToHide(rows, safe)).toEqual([]);
   });
+});
+
+describe("replacedFieldNames", () => {
+  function link(fieldName: string, valueFieldName: string) {
+    return {
+      fieldName,
+      valueFieldName,
+      value: "AirSense 11",
+      url: "https://example.com/airsense-11",
+    };
+  }
+
+  it("names the Managed Field when the value came from it", () => {
+    expect(replacedFieldNames([link("Machine", "Machine")])).toEqual([
+      "Machine",
+    ]);
+  });
+
+  it("names the Shadow Field when the fallback fired", () => {
+    // The row core rendered belongs to the field holding the value. Under a
+    // fallback the Managed Field is empty, so it has no row to hide, and
+    // matching on the link's label would leave the Shadow Field's plain text
+    // sitting under the Profile Link that replaced it.
+    expect(
+      replacedFieldNames([link("Machine", "Machine (Discontinued)")])
+    ).toEqual(["Machine (Discontinued)"]);
+  });
+
+  it("never names the Managed Field and its Shadow Field for one link", () => {
+    // One link replaces one row. Naming both would hide a row belonging to a
+    // field whose value is not on screen.
+    expect(
+      replacedFieldNames([link("Machine", "Machine (Discontinued)")])
+    ).not.toContain("Machine");
+  });
+
+  it("leaves a Shadow Field's row alone when the Managed Field won", () => {
+    // Both populated and disagreeing: the Managed Field wins the link, and the
+    // Shadow Field's row is a second value with no link behind it. Hiding it
+    // would take a value off the profile, which this module refuses to do.
+    expect(replacedFieldNames([link("Machine", "Machine")])).not.toContain(
+      "Machine (Discontinued)"
+    );
+  });
+
+  it("names one field per link, in the order the links render", () => {
+    expect(
+      replacedFieldNames([
+        link("Machine", "Machine (Discontinued)"),
+        link("Mask", "Mask"),
+      ])
+    ).toEqual(["Machine (Discontinued)", "Mask"]);
+  });
+
+  it("returns an empty list when nothing resolved", () => {
+    expect(replacedFieldNames([])).toEqual([]);
+  });
+
+  it("hands names the row matcher can use unchanged", () => {
+    // The end-to-end shape, because the two halves are only useful together:
+    // a Shadow Field's name carries spaces and parentheses, and it has to
+    // survive dasherizing into a class core actually emits. `dasherize` maps
+    // " " to "-" and leaves the parentheses, on both surfaces' spellings.
+    const names = replacedFieldNames([
+      link("Machine", "Machine (Discontinued)"),
+    ]);
+    const dasherized = names.map((name) =>
+      name.toLowerCase().replace(/[ _]/g, "-")
+    );
+
+    expect(dasherized).toEqual(["machine-(discontinued)"]);
+
+    const profile = profileRow("machine-(discontinued)");
+    const card = cardRow("machine-(discontinued)");
+
+    expect(coreRowsToHide([profile, card], dasherized)).toEqual([
+      profile,
+      card,
+    ]);
+  });
+
+  it("keeps a Shadow Field name distinguishable from the field it shadows", () => {
+    // `usableDasherizedNames` drops a name two Custom User Fields share after
+    // dasherizing. "Machine" and "Machine (Discontinued)" must not collide, or
+    // the fallback's duplicate could never be hidden on any site running both.
+    const site = ["Machine", "Mask", "Machine (Discontinued)"].map((name) =>
+      name.toLowerCase().replace(/[ _]/g, "-")
+    );
+
+    expect(usableDasherizedNames(["machine-(discontinued)"], site)).toEqual([
+      "machine-(discontinued)",
+    ]);
+  });
+});
+
+describe("the Link Surfaces answer this question the same way", () => {
+  // ADR-0004 keeps the user card and the user profile as separate components
+  // with separate wrappers, deliberately, and that duplication has a cost this
+  // pins: a change made to one surface and forgotten on the other. It is the
+  // exact failure mode the Shadow Field fallback invites, because the symptom
+  // is a duplicated value on one surface only — visible to a User, invisible
+  // to every test that does not render a page.
+  //
+  // Read as source rather than rendered, because a Glimmer component needs a
+  // running Discourse and these tests deliberately need nothing (ADR-0003).
+  // The precedent is `lint-gates.test.ts`, which reads the files that define
+  // the gates for the same reason.
+  const SURFACES = [
+    "javascripts/discourse/connectors/user-profile-primary/custom-profile-link.gts",
+    "javascripts/discourse/connectors/user-card-metadata/custom-profile-link.gts",
+  ];
+
+  // The third Link Surface (ADR-0004). It needed no change, and that is the
+  // finding rather than an omission: a post carries no core Custom User Field
+  // rows, so there is no duplicate to hide and nothing for the rule above to
+  // do there. It still gets the fallback, through the same `profileLinksFor`
+  // the other two call, and labels it with the Managed Field's name like they
+  // do.
+  //
+  // Pinned because the obvious "make it consistent" change is to give it the
+  // hiding the other two have, and on a post that would search a whole topic
+  // for rows that do not exist and hide whatever it turned up.
+  const POST_SURFACE =
+    "javascripts/discourse/components/custom-profile-link-post.gts";
+
+  it(`${POST_SURFACE} inherits the fallback and hides no core row`, () => {
+    const source = readFileSync(POST_SURFACE, "utf8");
+
+    expect(source).toContain("profileLinksFor(this.site, userFields)");
+    expect(source).not.toContain("replacedFieldNames");
+    expect(source).not.toContain("hideCoreFieldRows");
+  });
+
+  for (const surface of SURFACES) {
+    const source = readFileSync(surface, "utf8");
+
+    it(`${surface} derives its replaced rows from the shared rule`, () => {
+      expect(source).toContain(
+        'import { replacedFieldNames } from "../../lib/core-field-rows"'
+      );
+      expect(source).toContain("return replacedFieldNames(this.links);");
+    });
+
+    it(`${surface} does not decide it from the link's label`, () => {
+      // The pre-fallback spelling. It reads as correct and is wrong for
+      // exactly one case, so it has to be named to stay gone.
+      expect(source).not.toContain("this.links.map((link) => link.fieldName)");
+    });
+  }
 });
