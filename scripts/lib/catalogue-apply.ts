@@ -772,6 +772,14 @@ export function renderPlan(plan: ApplyPlan): string {
     lines.push(`  ${warning.detail}`);
   }
 
+  // After the warnings rather than among them: these are about whether a value
+  // already stored on the instance survives, not about the options this plan
+  // is writing, and folding them in would make an operator read past them.
+  for (const note of plan.retention) {
+    lines.push(`RETENTION ${note.user_field_name}`);
+    lines.push(`  ${note.detail}`);
+  }
+
   for (const name of plan.unchanged) {
     lines.push(`UNCHANGED ${name} — already holds exactly the right options`);
   }

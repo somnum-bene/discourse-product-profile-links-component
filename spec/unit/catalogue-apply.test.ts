@@ -445,6 +445,7 @@ describe("whether a plan gets sent at all", () => {
         warnings: [],
         unchanged: [],
         retained: [],
+        retention: [],
       })
     ).toEqual({ kind: "proceed" });
   });
@@ -913,6 +914,7 @@ describe("what a person is shown before authorising anything", () => {
         warnings: [],
         unchanged: [],
         retained: [],
+        retention: [],
       })
     ).toBe("");
   });

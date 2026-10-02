@@ -7,6 +7,7 @@ profile_link_fields:
   # runs in CI and fails when this region disagrees with either of them.
   default:
     - user_field_name: Machine
+      shadow_user_field_name: Machine (Discontinued)
       mappings:
         - value: AirCurve 10 VAuto BiLevel Machine
           url: https://www.cpap.com/products/aircurve-10-vauto-bilevel-machine
@@ -89,6 +90,7 @@ profile_link_fields:
         - value: Z2 Auto Travel CPAP Machine (Discontinued)
           url: https://www.cpap.com/collections/travel-cpap-machines
     - user_field_name: Mask
+      shadow_user_field_name: Mask (Discontinued)
       mappings:
         - value: AirFit F10 Full Face Mask
           url: https://www.cpap.com/products/resmed-airfit-f10-full-face-cpap-mask
@@ -285,7 +287,7 @@ profile_link_fields:
         - value: Wisp Pediatric Nasal CPAP Mask (Discontinued)
           url: https://www.cpap.com/collections/nasal-cpap-masks
   # END GENERATED profile_link_fields default
-  description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/config/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value. WARNING: editing this setting here overrides it for this site, and an overridden setting never receives a shipped default again — this site's catalogue would freeze at the moment you save, silently and permanently, while the component carried on updating everywhere else. Change the product catalogue in the component's repository instead."
+  description: "Each Field Mapping names one Custom User Field, exactly as it appears in /admin/config/user_fields, and nests the Mappings that turn its values into Profile Links. A Mapping's value must exactly match the user's field value. shadow_user_field_name is optional and names a second, text-typed Custom User Field to fall back to when the first is empty: a dropdown loses a stored value the option list no longer offers, which is every discontinued-equipment value, so that value is held in a text field instead. It only works if that field is Text, not user-editable, and shown on a profile and/or a user card — a field shown on neither is invisible to everyone except staff and the profile's owner. See the component's README. WARNING: editing this setting here overrides it for this site, and an overridden setting never receives a shipped default again — this site's catalogue would freeze at the moment you save, silently and permanently, while the component carried on updating everywhere else. Change the product catalogue in the component's repository instead."
   schema:
     name: field
     identifier: user_field_name
@@ -293,6 +295,8 @@ profile_link_fields:
       user_field_name:
         type: string
         required: true
+      shadow_user_field_name:
+        type: string
       mappings:
         type: objects
         schema:

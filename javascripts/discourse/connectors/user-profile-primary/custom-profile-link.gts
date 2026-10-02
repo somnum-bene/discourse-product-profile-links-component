@@ -1,6 +1,7 @@
 import Component from "@glimmer/component";
 import { service } from "@ember/service";
 import ProfileLinkRow from "../../components/profile-link-row";
+import { replacedFieldNames } from "../../lib/core-field-rows";
 import type { UserFieldValues } from "../../lib/profile-links";
 import { profileLinksFor, type SiteLike } from "../../lib/profile-links-config";
 import hideCoreFieldRows from "../../modifiers/hide-core-field-rows";
@@ -25,9 +26,12 @@ export default class CustomProfileLink extends Component<Signature> {
   }
 
   // The fields whose plain-text row core should stop rendering, because a
-  // Profile Link on this surface now shows the same value as a link.
+  // Profile Link on this surface now shows the same value as a link. Under a
+  // Shadow Field fallback that is the Shadow Field rather than the Managed
+  // Field the link is labelled for, which is why the rule lives in
+  // `core-field-rows` rather than being spelled out here.
   get replacedFieldNames() {
-    return this.links.map((link) => link.fieldName);
+    return replacedFieldNames(this.links);
   }
 
   // Every Custom User Field on the site, so the modifier can tell whether a
